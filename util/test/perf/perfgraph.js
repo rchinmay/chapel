@@ -130,9 +130,60 @@ var branchInfo = [
                   { "release" : "1.25.1",
                     "releaseDate": "2021-12-09",
                     "branchDate" : "2021-12-06",
-                    "revision" : -1}
+                    "revision" : -1},
+                  { "release": "1.26.0",
+                    "releaseDate": "2022-03-31",
+                    "branchDate" : "2022-03-22",
+                    "revision" : -1},
+                  { "release": "1.27.0",
+                    "releaseDate": "2022-06-30",
+                    "branchDate" : "2022-06-24",
+                    "revision" : -1},
+                  { "release": "1.28.0",
+                    "releaseDate": "2022-09-15",
+                    "branchDate" : "2022-09-09",
+                    "revision" : -1},
+                  { "release": "1.29.0",
+                    "releaseDate": "2022-12-15",
+                    "branchDate" : "2022-12-09",
+                    "revision" : -1},
+                  { "release": "1.30.0",
+                    "releaseDate": "2023-03-23",
+                    "branchDate" : "2023-03-17",
+                    "revision" : -1},
+                  { "release": "1.31.0",
+                    "releaseDate": "2023-06-22",
+                    "branchDate" : "2023-06-16",
+                    "revision" : -1},
+                  { "release": "1.32.0",
+                    "releaseDate": "2023-09-28",
+                    "branchDate" : "2023-09-22",
+                    "revision" : -1},
+                  { "release": "1.33.0",
+                    "releaseDate": "2023-12-14",
+                    "branchDate" : "2023-12-08",
+                    "revision": -1},
+                  { "release": "2.0.0",
+                    "releaseDate": "2024-03-21",
+                    "branchDate" : "2024-03-15",
+                    "revision": -1},
+                  { "release": "2.1.0",
+                    "releaseDate": "2024-06-27",
+                    "branchDate" : "2024-06-24",
+                    "revision": -1},
+                  { "release": "2.2.0",
+                    "releaseDate": "2024-09-26",
+                    "branchDate" : "2024-09-20",
+                    "revision": -1},
+                  { "release": "2.3.0",
+                    "releaseDate": "2024-12-12",
+                    "branchDate" : "2024-12-06",
+                    "revision": -1},
+                  { "release": "2.4.0",
+                    "releaseDate": "2025-03-20",
+                    "branchDate" : "2025-03-14",
+                    "revision": -1},
                   ];
-
 
 var indexMap = {};
 
@@ -528,9 +579,15 @@ function computeGitHubLinks(text) {
     return "<a target='_blank' href='" + url + "'>" + m + "</a>";
   });
 
-  var ak_re = /\(mhmerrill\/arkouda#([0-9]+)\)/gi;
+  var private_re = /\(Cray\/chapel-private#([0-9]+)\)/gi;
+  text = text.replace(private_re, function(m, num) {
+    var url = "https://github.com/Cray/chapel-private/issues/" + num;
+    return "<a target='_blank' href='" + url + "'>" + m + "</a>";
+  });
+
+  var ak_re = /\(Bears-R-Us\/arkouda#([0-9]+)\)/gi;
   text = text.replace(ak_re, function(m, num) {
-    var url = "https://github.com/mhmerrill/arkouda/pull/" + num;
+    var url = "https://github.com/Bears-R-Us/arkouda/pull/" + num;
     return "<a target='_blank' href='" + url + "'>" + m + "</a>";
   });
 

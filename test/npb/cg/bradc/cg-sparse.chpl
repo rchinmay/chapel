@@ -2,7 +2,7 @@
 //   618.233 with default arguments, linear search for sparse domain this()
 //    62.169 with --cflags=-O3, linear search
 //    25.4556 with --cflags=-O3, binary search
-use LayoutCS, CGMakeA, Time;
+use CompressedSparseLayout, CGMakeA, Time;
 
 type elemType = real(64);
 
@@ -35,7 +35,7 @@ config const numTrials = 1,
 
 proc main() {
   const DenseSpace = {1..n, 1..n};
-  const MatrixSpace: sparse subdomain(DenseSpace) dmapped(new dmap(new CS()))
+  const MatrixSpace: sparse subdomain(DenseSpace) dmapped new csrLayout()
                    = genAIndsSorted(elemType, n, nonzer, shift);
   var A: [MatrixSpace] elemType;
 
@@ -50,7 +50,7 @@ proc main() {
   for trial in 1..numTrials {
     X = 1.0;
 
-    const startTime = getCurrentTime();
+    const startTime = timeSinceEpoch().totalSeconds();
 
     for it in 1..niter {
       const (Z, rnorm) = conjGrad(A, X);
@@ -62,7 +62,7 @@ proc main() {
       X = (1.0 / sqrt(+ reduce(Z*Z))) * Z;
     }
 
-    const runtime = getCurrentTime() - startTime;
+    const runtime = timeSinceEpoch().totalSeconds() - startTime;
 
     if printTiming then writeln("Execution time = ", runtime);
 
@@ -97,7 +97,7 @@ proc conjGrad(A: [?MatDom], X: [?VectDom]) {
     //    const Q = + reduce(dim=2) [(i,j) in MatDom] (A(i,j) * P(j));
     // INSTEAD OF:
     var Q: [VectDom] elemType;
-    [i in MatDom.dim(0)] Q(i) = + reduce [j in MatDom.dimIter(1,i)] (A(i,j) * P(j));
+    [i in MatDom.dim(0) with (ref Q)] Q(i) = + reduce [j in MatDom.dimIter(1,i)] (A(i,j) * P(j));
     //
 
     const alpha = rho / + reduce (P*Q);
@@ -112,7 +112,7 @@ proc conjGrad(A: [?MatDom], X: [?VectDom]) {
   // WANT (a partial reduction):
   //      R = + reduce(dim=2) [(i,j) in MatDom] (A(i,j) * Z(j));
   // INSTEAD OF:
-  [i in MatDom.dim(0)] R(i) = + reduce [j in MatDom.dimIter(1,i)] (A(i,j) * Z(j));
+  [i in MatDom.dim(0) with (ref R)] R(i) = + reduce [j in MatDom.dimIter(1,i)] (A(i,j) * Z(j));
   //
 
   const rnorm = sqrt(+ reduce ((X-R)**2));

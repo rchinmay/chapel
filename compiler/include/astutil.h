@@ -1,5 +1,5 @@
 /*
- * Copyright 2020-2022 Hewlett Packard Enterprise Development LP
+ * Copyright 2020-2025 Hewlett Packard Enterprise Development LP
  * Copyright 2004-2019 Cray Inc.
  * Other additional copyright holders may be indicated within.
  *
@@ -23,6 +23,8 @@
 
 #include "baseAST.h"
 #include "alist.h"
+#include "llvm/ADT/SmallPtrSet.h"
+#include "llvm/ADT/SmallVector.h"
 
 #include <vector>
 #include <set>
@@ -36,6 +38,14 @@ class CallExpr;
 class SymExpr;
 class Expr;
 
+// NOTE: historically, `collect_asts` has been used in call sites for both an
+// iteration of the preorder asts and an arbitrary order. As we begin
+// refactoring more of the compiler, this type of knowledge will be very useful.
+// In randomized testing, (by modifying each call site of collect_asts), all but
+// 1 call sites rely on the preorder, so I've broken these apart
+// The other functions have a similar ambiguity and should enjoy the
+// same treatment in due time
+
 // return vec of CallExprs of FnSymbols (no primitives)
 void collectFnCalls(BaseAST* ast, std::vector<CallExpr*>& calls);
 // same as above but also allows for virtual function calls
@@ -46,20 +56,34 @@ void collectTreeBoundGotosAndIteratorBreakBlocks(BaseAST* ast,
                                                  std::vector<CondStmt*>& IBBs);
 void computeHasToplevelYields(BaseAST* ast, bool& result);
 
-// collect Stmts and Exprs in the AST and return them in vectors
+// Given a detupled tuple 'sym', collect all its components.
+std::set<Symbol*> findAllDetupledComponents(Symbol* sym);
+
+// collect children asts in _an_ order. Today this is preorder
+// but callsites should transition to using collect_asts_{pre,post,un}order
 void collect_asts(BaseAST* ast, std::vector<BaseAST*>& asts);
+
+void collect_asts_unorder(BaseAST*, std::vector<BaseAST*>& asts);
+void collect_asts_preorder(BaseAST*, std::vector<BaseAST*>& asts);
 void collect_asts_postorder(BaseAST*, std::vector<BaseAST*>& asts);
+
 void collect_top_asts(BaseAST* ast, std::vector<BaseAST*>& asts);
 void collectExprs(BaseAST* ast, std::vector<Expr*>& exprs);
 void collect_stmts(BaseAST* ast, std::vector<Expr*>& stmts);
 void collectDefExprs(BaseAST* ast, std::vector<DefExpr*>& defExprs);
+void collectDefExprs(BaseAST* ast, llvm::SmallVectorImpl<DefExpr*>& defExprs);
 void collectForallStmts(BaseAST* ast, std::vector<ForallStmt*>& forallStmts);
+void collectCForLoopStmtsPreorder(BaseAST* ast, std::vector<CForLoop*>& cforloopStmts);
 void collectCallExprs(BaseAST* ast, std::vector<CallExpr*>& callExprs);
+void collectCallExprsForGpuEligibilityAnalysis(BaseAST* ast, std::vector<CallExpr*>& callExprs);
+void collectBlockStmts(BaseAST* ast, std::vector<BlockStmt*>& blockStmts);
+void collectForLoops(BaseAST* ast, std::vector<ForLoop*>& forLoops);
 void collectMyCallExprs(BaseAST* ast,
                         std::vector<CallExpr*>& callExprs,
                         FnSymbol* fn);
 void collectGotoStmts(BaseAST* ast, std::vector<GotoStmt*>& gotoStmts);
 void collectSymExprs(BaseAST* ast, std::vector<SymExpr*>& symExprs);
+void collectSymExprs(BaseAST* ast, llvm::SmallVectorImpl<SymExpr*>& symExprs);
 void collectSymExprsFor(BaseAST* ast, Symbol* sym, std::vector<SymExpr*>& symExprs);
 void collectSymExprsFor(BaseAST* ast, const Symbol* sym1, const Symbol* sym2,
                         std::vector<SymExpr*>& symExprs);
@@ -78,6 +102,14 @@ void compute_call_sites();
 void computeNonvirtualCallSites(FnSymbol* fn);
 void computeAllCallSites(FnSymbol* fn);
 
+// The type of a function that takes a type and produces a type.
+using AdjustTypeFn = Type*(*)(Type* t);
+
+// Given 'adjustTypeFn', walk all symbols and re-assign the type of symbol if
+// the type produced by 'adjustTypeFn' differs from the symbol's current type.
+void adjustAllSymbolTypes(AdjustTypeFn adjustTypeFn,
+                          bool preserveRefLevels=true);
+
 //
 // collect set of symbols and vector of SymExpr; can be used to
 // compute defMaps and useMaps below (these are computed when
@@ -93,6 +125,7 @@ void collectSymbolSetSymExprVec(BaseAST* ast,
 //
 void collectSymbolSet(BaseAST* ast, Vec<Symbol*>& symSet);
 void collectSymbolSet(BaseAST* ast, std::set<Symbol*>& symSet);
+void collectSymbolSet(BaseAST* ast, llvm::SmallPtrSetImpl<Symbol*>& symSet);
 
 
 //
@@ -105,6 +138,8 @@ bool isOpEqualPrim(CallExpr* call);
 bool isMoveOrAssign(CallExpr* call);
 
 bool isDerefMove(CallExpr* call);
+
+bool isNewLike(CallExpr* call);
 
 //
 // Checks if a callExpr is a relational operator (<, <=, >, >=, ==, !=)
@@ -195,8 +230,14 @@ void insert_help(BaseAST* ast, Expr* parentExpr, Symbol* parentSymbol);
 ArgSymbol* actual_to_formal( Expr *a);
 Expr* formal_to_actual(CallExpr* call, Symbol* formal);
 
+bool isExternType(Type* t);
+bool isExportableType(Type* t);
+
 bool isTypeExpr(Expr* expr);
 bool givesType(Symbol* sym);
+
+// Only useful if called before type constructors are folded away.
+bool isTypeConstructorWithRuntimeTypeActual(CallExpr* call);
 
 Symbol* getSvecSymbol(CallExpr* call);
 void collectUsedFnSymbols(BaseAST* ast, std::set<FnSymbol*>& fnSymbols);
@@ -204,5 +245,12 @@ void collectUsedFnSymbols(BaseAST* ast, std::set<FnSymbol*>& fnSymbols);
 void cleanupAfterTypeRemoval();
 
 void convertToQualifiedRefs();
+
+bool shouldWarnUnstableFor(BaseAST* ast);
+
+bool symExprIsUsedAsRef(
+  SymExpr* use,
+  bool constRef,
+  std::function<bool(SymExpr*, CallExpr*)> checkForMove);
 
 #endif

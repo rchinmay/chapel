@@ -37,13 +37,26 @@ use Random;
 
 {
   var D = {2..8 by -2},
-        A : [D] int;
+        A : [D] int;     // neg-stride
 
   for i in D {
     A[i] = i;
   }
 
   shuffle(A, seed=20);
+
+  writeln(A);
+}
+
+{
+  var D = {1..3, 0..6 by 2},
+        A : [D] real;
+
+  for (i, j) in D {
+    A[i, j] = i + j / 10.0;
+  }
+
+  shuffle(A, seed=21);
 
   writeln(A);
 }

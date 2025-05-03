@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+
+if [[ "$CHPL_GPU" == "cpu" ]]; then
+  echo "--memTrack # diags.cpu.good"
+else
+  echo "--memTrack"
+fi

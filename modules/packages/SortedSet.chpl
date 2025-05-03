@@ -1,5 +1,5 @@
 /*
- * Copyright 2020-2022 Hewlett Packard Enterprise Development LP
+ * Copyright 2020-2025 Hewlett Packard Enterprise Development LP
  * Other additional copyright holders may be indicated within.
  *
  * The entirety of this work is licensed under the Apache License,
@@ -18,7 +18,7 @@
  */
 
 /*
-  This module contains the implementation of the ``sortedSet`` type.
+  Provides the 'sortedSet' type for storing sorted unique elements.
 
   An ``sortedSet`` is a collection of unique and sorted elements. The
   ``sortedSet`` accepts a :ref:`comparator <comparators>` to determine how
@@ -26,7 +26,7 @@
   case, elements are stored and considered in ascending order. For example,
   ``these`` will yield elements in ascending order.
 
-  All references to ``sortedSet`` elements are invalidated when the ``sortedSet`` is 
+  All references to ``sortedSet`` elements are invalidated when the ``sortedSet`` is
   cleared or deinitialized.
 
   ``sortedSet`` is not parallel safe by default, but can be made parallel safe
@@ -34,7 +34,6 @@
   constructor. When constructed from another ``sortedSet``, the new
   ``sortedSet`` will inherit the parallel safety mode of its originating
   ``sortedSet``.
-
 */
 module SortedSet {
   include module Treap;
@@ -43,16 +42,35 @@ module SortedSet {
   private use IO;
   public use Sort only defaultComparator;
 
-  record sortedSet {
+  record sortedSet : writeSerializable {
     /* The type of the elements contained in this sortedSet. */
     type eltType;
 
     /* If `true`, this sortedSet will perform parallel safe operations. */
     param parSafe = false;
 
+    type comparatorType = defaultComparator;
+
     /* The underlying implementation */
-    pragma "no doc"
-    var instance: treap(eltType, parSafe, ?);
+    @chpldoc.nodoc
+    var instance: treap(eltType, parSafe, comparatorType);
+
+    /*
+      Initializes an empty sortedSet containing elements of the given type.
+
+      :arg eltType: The type of the elements of this sortedSet.
+      :arg parSafe: If `true`, this sortedSet will use parallel safe operations.
+      :arg comparatorType: The comparator type
+    */
+    proc init(type eltType, param parSafe = false,
+              type comparatorType = defaultComparator) {
+      this.eltType = eltType;
+      this.parSafe = parSafe;
+      this.comparatorType = comparatorType;
+
+      var comparator: comparatorType;
+      this.instance = new treap(eltType, parSafe, comparator);
+    }
 
     /*
       Initializes an empty sortedSet containing elements of the given type.
@@ -61,10 +79,10 @@ module SortedSet {
       :arg parSafe: If `true`, this sortedSet will use parallel safe operations.
       :arg comparator: The comparator used to compare elements.
     */
-    proc init(type eltType, param parSafe = false,
-              comparator: record = defaultComparator) {
+    proc init(type eltType, param parSafe = false, comparator: record) {
       this.eltType = eltType;
       this.parSafe = parSafe;
+      this.comparatorType = comparator.type;
 
       this.instance = new treap(eltType, parSafe, comparator);
     }
@@ -75,22 +93,24 @@ module SortedSet {
       sortedSet, it will not be added again. The formal `iterable` must be a type
       with an iterator named "these" defined for it.
 
+      :arg eltType: The type of the elements of this sortedSet.
       :arg iterable: A collection of elements to add to this sortedSet.
       :arg parSafe: If `true`, this sortedSet will use parallel safe operations.
       :arg comparator: The comparator used to compare elements.
     */
     proc init(type eltType, iterable, param parSafe=false,
-              comparator: record = defaultComparator)
+              comparator: record = new defaultComparator())
     where canResolveMethod(iterable, "these") lifetime this < iterable {
       this.eltType = eltType;
       this.parSafe = parSafe;
+      this.comparatorType = comparator.type;
 
       this.instance = new treap(eltType, iterable, parSafe, comparator);
     }
 
     /*
       Initialize this sortedSet with a copy of each of the elements contained in
-      the sortedSet `other`. This sortedSet will inherit the `parSafe` value of 
+      the sortedSet `other`. This sortedSet will inherit the `parSafe` value of
       the sortedSet `other`.
 
       :arg other: An sortedSet to initialize this sortedSet with.
@@ -98,10 +118,11 @@ module SortedSet {
     proc init=(const ref other: sortedSet(?t)) lifetime this < other {
       this.eltType = t;
       this.parSafe = other.parSafe;
+      this.comparatorType = other.comparatorType;
       this.instance = new treap(this.eltType, this.parSafe,
-                                            other.instance.comparator); 
+                                            other.instance.comparator);
 
-      this.complete();
+      init this;
 
 
       if !isCopyableType(eltType) then
@@ -113,12 +134,10 @@ module SortedSet {
     }
 
     /*
-      Write the contents of this sortedSet to a channel.
-
-      :arg ch: A channel to write to.
+      Write the contents of this sortedSet to a fileWriter.
     */
-    inline proc const writeThis(ch: channel) throws {
-      instance.writeThis(ch);
+    inline proc const serialize(writer, ref serializer) throws {
+      instance.serialize(writer, serializer);
     }
 
     /*
@@ -265,7 +284,7 @@ module SortedSet {
         Modifying this sortedSet while iterating over it may invalidate the
         references returned by an iterator and is considered undefined
         behavior.
-      
+
       :yields: A constant reference to an element in this sortedSet.
     */
     iter const these() {
@@ -323,7 +342,7 @@ module SortedSet {
   */
 
   /*
-    Clear the contents of this sortedSet, then extend this now empty sortedSet 
+    Clear the contents of this sortedSet, then extend this now empty sortedSet
     with the elements contained in another sortedSet.
 
     .. warning::
@@ -332,7 +351,7 @@ module SortedSet {
       `lhs`.
 
     :arg lhs: The sortedSet to assign to.
-    :arg rhs: The sortedSet to assign from. 
+    :arg rhs: The sortedSet to assign from.
   */
   operator sortedSet.=(ref lhs: sortedSet(?t), rhs: sortedSet(t)) {
     lhs.clear();
@@ -468,7 +487,7 @@ module SortedSet {
   }
 
   /*
-    Assign to the sortedSet `lhs` the sortedSet that is the intersection of `lhs` 
+    Assign to the sortedSet `lhs` the sortedSet that is the intersection of `lhs`
     and `rhs`.
 
     .. warning::
@@ -483,7 +502,7 @@ module SortedSet {
                          const ref rhs: sortedSet(t, ?)) {
 
     // We can't remove things from lhs while iterating over it, so
-    // use a temporary. 
+    // use a temporary.
     var result = new sortedSet(t, (lhs.parSafe || rhs.parSafe),
                                 lhs.instance.comparator);
 

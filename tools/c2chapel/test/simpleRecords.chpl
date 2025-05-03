@@ -5,9 +5,7 @@ require "simpleRecords.h";
 
 // Note: Generated with fake std headers
 
-use CPtr;
-use SysCTypes;
-use SysBasic;
+use CTypes;
 extern "struct allInts" record allInts {
   var a : c_int;
   var b : c_uint;
@@ -16,8 +14,8 @@ extern "struct allInts" record allInts {
 
 extern "struct misc" record misc {
   var a : c_char;
-  var b : c_string;
-  var c : c_void_ptr;
+  var b : c_ptr(c_char);
+  var c : c_ptr(void);
   var d : c_ptr(c_int);
 }
 

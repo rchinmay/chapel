@@ -1,5 +1,5 @@
 /*
- * Copyright 2020-2022 Hewlett Packard Enterprise Development LP
+ * Copyright 2020-2025 Hewlett Packard Enterprise Development LP
  * Copyright 2004-2019 Cray Inc.
  * Other additional copyright holders may be indicated within.
  *
@@ -31,6 +31,9 @@
 #include "stlUtil.h"
 #include "stmt.h"
 #include "view.h"
+#include "llvm/ADT/SmallPtrSet.h"
+
+#include "global-ast-vecs.h"
 
 //#############################################################################
 //# COPY PROPAGATION
@@ -190,13 +193,12 @@ static bool needsKilling(SymExpr* se, std::set<Symbol*>& liveRefs)
 
   CallExpr* call = toCallExpr(se->parentExpr);
 
+  // Skip the "base" symbol.
+  if (call && se == call->baseExpr) return false;
+
   if (FnSymbol* fn = call->resolvedFunction())
   {
-    // Skip the "base" symbol.
-    if (se->symbol() == fn)
-    {
-      return false;
-    }
+    INT_ASSERT(se->symbol() != fn);
 
     ArgSymbol* arg = actual_to_formal(se);
 
@@ -362,9 +364,8 @@ static bool isUse(SymExpr* se)
     if (arg->intent == INTENT_OUT ||
         (arg->intent & INTENT_FLAG_REF))
       return false;
-
   }
-  else
+  else if (call->primitive)
   {
     INT_ASSERT(call->primitive);
     const bool isFirstActual = call->get(1) == se;
@@ -386,6 +387,8 @@ static bool isUse(SymExpr* se)
      case PRIM_AND_ASSIGN:
      case PRIM_OR_ASSIGN:
      case PRIM_XOR_ASSIGN:
+     case PRIM_LOGICALAND_ASSIGN:
+     case PRIM_LOGICALOR_ASSIGN:
       if (isFirstActual)
       {
         return false;
@@ -463,6 +466,26 @@ static bool isUse(SymExpr* se)
       return true;
     }
   }
+  else if (auto ft = toFunctionType(call->baseExpr->qualType().type()))
+  {
+
+    // Not a use according to note #2.
+    if (se == call->baseExpr) return false;
+
+    // Mimick the implementation of 'formal_to_actual'.
+    int idx = 0;
+    for_actuals(actual, call) {
+      if (actual == se) break;
+      idx++;
+    }
+
+    INT_ASSERT(0 <= idx && idx < ft->numFormals());
+    auto intent = ft->formal(idx)->intent();
+    if (intent == INTENT_OUT || (intent & INTENT_FLAG_REF)) return false;
+
+  } else {
+    INT_FATAL(se, "unhandled");
+  }
 
   return true;
 }
@@ -475,6 +498,17 @@ static void propagateCopies(std::vector<SymExpr*>& symExprs,
   for_vector(SymExpr, se, symExprs)
   {
     if (se->isRef()) continue;
+
+    // We want to carry information about `in` intent variables lowered from
+    // iterators on `foreach` loops to gpuTransforms so we wrap a variable
+    // representing the "captured" version of the `in` intent variable in a
+    // special primitive. We don't want copy propagation modifying this
+    // variable.
+    if (CallExpr *call = toCallExpr(se->parentExpr)) {
+      if (call->isPrimitive(PRIM_TASK_PRIVATE_SVAR_CAPTURE)) {
+        continue;
+      }
+    }
 
     // Replace an alias with its definition, using the current set of
     // available pairs.
@@ -578,7 +612,7 @@ static bool maybeVolatile(SymExpr* se)
   // See Note #1.
 
   // The function containing the SymExpr referencing the variable.
-  Symbol* fn = se->parentSymbol; 
+  Symbol* fn = se->parentSymbol;
   // Where the variable is defined.
   Symbol* defScope = se->symbol()->defPoint->parentSymbol;
   if (defScope != fn)
@@ -654,14 +688,14 @@ localCopyPropagationCore(BasicBlock*          bb,
                          ReverseAvailableMap& ravailable,
                          std::set<Symbol*>& liveRefs)
 {
-  for_vector(Expr, expr, bb->exprs)
-  {
+  std::vector<SymExpr*> symExprs;
+  symExprs.reserve(16);
+  for_vector(Expr, expr, bb->exprs) {
 #if DEBUG_CP
     if (debug > 0)
       nprint_view(expr);
 #endif
-
-    std::vector<SymExpr*> symExprs;
+    symExprs.clear();
 
     // TODO: do not collect references or symbols that are not LcnSymbols
     collectSymExprs(expr, symExprs);
@@ -723,7 +757,7 @@ static void destroyPairSet(std::vector<BitVec*> set)
 // one long vector: availablePairs.
 // The ending index for each block is stored in ends[i].
 static void extractAvailablePairs(FnSymbol* fn,
-                                  std::vector<AvailablePair>& availablePairs, 
+                                  std::vector<AvailablePair>& availablePairs,
                                   std::vector<size_t>& ends)
 {
   std::set<Symbol*> liveRefs;
@@ -758,16 +792,19 @@ static void computeKillSets(FnSymbol* fn,
                             std::vector<BitVec*>& KILL,
                             std::set<Symbol*>& liveRefs)
 {
+  std::vector<SymExpr*> symExprs;
+  llvm::SmallPtrSet<Symbol*, 32> killSet;
+
   size_t nbbs = fn->basicBlocks->size();
   for (size_t i = 0; i < nbbs; ++i)
   {
     BasicBlock* bb2 = (*fn->basicBlocks)[i];
 
     // Collect up the set of symbols killed in this block in killSet.
-    std::set<Symbol*> killSet;
+    killSet.clear();
     for_vector(Expr, expr, bb2->exprs)
     {
-      std::vector<SymExpr*> symExprs;
+      symExprs.clear();
       collectSymExprs(expr, symExprs);
 
       for_vector(SymExpr, se, symExprs)
@@ -800,7 +837,7 @@ static void initCopySets(std::vector<BitVec*>& COPY, std::vector<size_t>& ends,
                          size_t nbbs)
 {
   size_t j = 0;
-  for(size_t i = 0; i < nbbs; ++i) 
+  for(size_t i = 0; i < nbbs; ++i)
   {
     // Initialize each copy set: Just set the string of bits corresponding to
     // the pairs generated in block i.
@@ -944,7 +981,7 @@ size_t globalCopyPropagation(FnSymbol* fn) {
         // Two available pairs at the start of a basic block should not have
         // the same LHS, because one should kill the other.
         // Also, this makes arbitrary the choice of which one survives.
-        INT_ASSERT(available.find(ap.first) == available.end());
+        INT_ASSERT(fn, available.find(ap.first) == available.end());
         available.insert(ap);
         ravailable[ap.second].push_back(ap.first);
       }
@@ -1003,7 +1040,7 @@ void copyPropagation(void) {
 //# pessimistic to prevent copy propagation merely because a variable is
 //# shared.  Copy propagation assumes that the value has not changed, which is
 //# tantamount to delaying recognition of an external change.  In many
-//# routines, this delay is acceptable and may result in simpler code.  
+//# routines, this delay is acceptable and may result in simpler code.
 //# One place where the delay would not be acceptable is in a tight loop that
 //# is waiting for the named variable to change.  In that case, CP might
 //# replace the variable with a constant, and execution will get stuck in an
@@ -1020,4 +1057,3 @@ void copyPropagation(void) {
 //# to be changed.  Allowing the substitution collapses the two variables onto
 //# one.
 //#
-

@@ -1,3 +1,4 @@
+import Sort;
 use HashedDist;
 
 config const verbose = false;
@@ -11,7 +12,7 @@ record MyMapper {
 }
 
 var myMapper = new MyMapper();
-var newDist = new dmap(new unmanaged Hashed(idxType=real, mapper=myMapper));
+var newDist = new hashedDist(idxType=real, mapper=myMapper);
 
 var D: domain(real) dmapped newDist;
 
@@ -20,7 +21,7 @@ D += 2.4;
 D += 3.5;
 
 writeln("D is:");
-for d in D.sorted() {
+for d in Sort.sorted(D) {
   writeln(d);
 }
 
@@ -31,7 +32,7 @@ A(2.4) = "two point four";
 A(3.5) = "three point five";
 
 writeln("A is:");
-for d in D.sorted() {
+for d in Sort.sorted(D) {
   writeln(A[d]);
   if verbose then
     writeln(A[d], " on locale ", A[d].locale);

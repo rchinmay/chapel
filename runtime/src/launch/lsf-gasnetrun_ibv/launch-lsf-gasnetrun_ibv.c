@@ -1,5 +1,5 @@
 /*
- * Copyright 2021-2022 Hewlett Packard Enterprise Development LP
+ * Copyright 2021-2025 Hewlett Packard Enterprise Development LP
  * Other additional copyright holders may be indicated within.
  *
  * The entirety of this work is licensed under the Apache License,
@@ -46,12 +46,13 @@ static char** chpl_launch_create_argv(int argc, char* argv[],
                                       int32_t numLocales) {
   int len = strlen(CHPL_THIRD_PARTY) + strlen(WRAP_TO_STR(LAUNCH_PATH)) + strlen("gasnetrun_ibv") + 2;
   char *cmd = chpl_mem_allocMany(len, sizeof(char), CHPL_RT_MD_COMMAND_BUFFER, -1, 0);
-  sprintf(cmd, "%s/%sgasnetrun_ibv", CHPL_THIRD_PARTY, WRAP_TO_STR(LAUNCH_PATH));
+  snprintf(cmd, len * sizeof(char), "%s/%sgasnetrun_ibv", CHPL_THIRD_PARTY,
+           WRAP_TO_STR(LAUNCH_PATH));
 
-  const int maxlargc = 15 + chpl_get_charset_env_nargs();
+  const int maxlargc = 15;
   char *largv[maxlargc];
-  
-  sprintf(_nlbuf, "%d", numLocales);
+
+  snprintf(_nlbuf, sizeof(_nlbuf), "%d", numLocales);
 
   int largc = 15;
   largv[0] = (char *)"bsub";
@@ -69,16 +70,20 @@ static char** chpl_launch_create_argv(int argc, char* argv[],
   largv[12] = (char *)"0";
   largv[13] = (char*)"-E";
   largv[14] = chpl_get_enviro_keys(',');
-  largc += chpl_get_charset_env_args(&largv[largc]);
 
   return chpl_bundle_exec_args(argc, argv, largc, largv);
 }
 
 
-int chpl_launch(int argc, char* argv[], int32_t numLocales) {
+int chpl_launch(int argc, char* argv[], int32_t numLocales,
+                int32_t numLocalesPerNode) {
+  if (numLocalesPerNode > 1) {
+    chpl_launcher_no_colocales_error(NULL);
+  }
   chpl_env_set("BSUB_QUIET", "1", 0);
   return chpl_launch_using_exec("bsub",
-                                chpl_launch_create_argv(argc, argv, numLocales),
+                                chpl_launch_create_argv(argc, argv, numLocales,
+                                                        numLocalesPerNode),
                                 argv[0]);
 }
 
@@ -89,5 +94,6 @@ int chpl_launch_handle_arg(int argc, char* argv[], int argNum,
 }
 
 
-void chpl_launch_print_help(void) {
+const argDescTuple_t* chpl_launch_get_help(void) {
+  return NULL;
 }

@@ -3,13 +3,13 @@ set(LLVM_LINK_COMPONENTS
   Core
   Vectorize
   AsmParser
+  TargetParser
   )
 
 add_llvm_unittest(VectorizeTests
-  VPlanDominatorTreeTest.cpp
-  VPlanLoopInfoTest.cpp
-  VPlanPredicatorTest.cpp
   VPlanTest.cpp
+  VPDomTreeTest.cpp
   VPlanHCFGTest.cpp
   VPlanSlpTest.cpp
+  VPlanVerifierTest.cpp
   )

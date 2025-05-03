@@ -1,16 +1,16 @@
 /*
- * Copyright 2020-2022 Hewlett Packard Enterprise Development LP
+ * Copyright 2020-2025 Hewlett Packard Enterprise Development LP
  * Copyright 2004-2019 Cray Inc.
  * Other additional copyright holders may be indicated within.
- * 
+ *
  * The entirety of this work is licensed under the Apache License,
  * Version 2.0 (the "License"); you may not use this file except
  * in compliance with the License.
- * 
+ *
  * You may obtain a copy of the License at
- * 
+ *
  *     http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -37,7 +37,7 @@ void chpl_mem_layerInit(void) {
 
   chpl_comm_regMemHeapInfo(&start, &size);
   if (start || size) {
-    chpl_error("Your CHPL_MEM setting doesn't support the registered heap "
+    chpl_error("Your CHPL_TARGET_MEM setting doesn't support the registered heap "
                "required by your CHPL_COMM setting. You'll need to change one "
                "of these configurations.", 0, 0);
   }

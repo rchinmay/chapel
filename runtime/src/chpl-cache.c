@@ -1,5 +1,5 @@
 /*
- * Copyright 2020-2022 Hewlett Packard Enterprise Development LP
+ * Copyright 2020-2025 Hewlett Packard Enterprise Development LP
  * Copyright 2004-2019 Cray Inc.
  * Other additional copyright holders may be indicated within.
  *
@@ -146,7 +146,7 @@ semantics (meaning that they imply an acquire and a release barrier). So in a
 real Chapel program, the required barriers would probably be hidden in whatever
 technique was used to 'notify' or 'wait'. Atomic operations on atomic-type
 variables can specify the required memory semantics (e.g., you could do
-myatomic.fetchAdd(1, memory_order_acquire) but without the order= argument
+myatomic.fetchAdd(1, chpl_memory_order_acquire) but without the order= argument
 you get a full barrier ).
 
 == Implementation Notes ==
@@ -172,7 +172,7 @@ There is a tradeoff in the cache line size and in the cache page size:
   - larger cache lines might mean fewer gets/more cache hits
   - smaller cache pages mean less wasted space (imagine putting 1 byte per page)
   - larger cache pages mean larger aggregated operations
-    (since read ahead/write behind will only ever get a single cache page
+    (since readahead/write behind will only ever get a single cache page
      in one operation).
 
 We chose 64 bytes for the cache line size because on our Infiniband network, 64
@@ -542,12 +542,23 @@ raddr_t raddr_min(raddr_t a, raddr_t b)
     return (a<b)?a:b;
 }
 
+// Used to distinguish between a cache page that was
+// prefetched or read ahead.
+enum {
+  ENTRY_FLAGS_PREFETCHED = 1,
+  ENTRY_FLAGS_READAHEADED = 2
+};
+
 // This entry stores the main information for the cache.
 // ~88 bytes. TODO: can we shrink it to 64 bytes?
 struct cache_entry_s {
   struct cache_list_entry_s base; // contains raddr, node, next offset
   // Queue information. This entry could be in Ain, Aout, or Am queues.
   int queue;
+
+  // indicates whether the page was prefetched (ENTRY_FLAGS_PREFETCHED)
+  // or read-ahead (ENTRY_FLAGS_READAHEAD) or neither (0)
+  int prefetch_diags_flags;
 
   // Since e.g. with ugni, a comm event can cause the implementation
   // to switch tasks, only allow one task at a time to manipulate
@@ -580,6 +591,7 @@ struct cache_entry_s {
   // If we try to read data from this cache entry, we need to make sure that
   // we have completed all pending prefetches before the lines are considered valid.
   cache_seqn_t max_prefetch_sequence_number;
+
 };
 
 // Note skip/len are in line numbers, NOT byte offsets!
@@ -950,6 +962,23 @@ struct rdcache_s* cache_create(void) {
   return c;
 }
 
+// utility function to increment the counters for
+// unused prefetches and readaheads. By "unused", we
+// mean that the entry was prefetched or read ahead but
+// never accessed before being evicted. We zero out the
+// prefetch_diags_flags at the end so we don't double count this event.
+static
+void count_unused_prefetches(struct cache_entry_s* z)
+{
+  if((z->prefetch_diags_flags & ENTRY_FLAGS_PREFETCHED) != 0) {
+    chpl_comm_diags_incr(cache_prefetch_unused);
+  }
+  if((z->prefetch_diags_flags & ENTRY_FLAGS_READAHEADED) != 0) {
+    chpl_comm_diags_incr(cache_readahead_unused);
+  }
+  z->prefetch_diags_flags = 0;
+}
+
 static
 void cache_destroy(struct rdcache_s *cache) {
   chpl_free(cache);
@@ -1213,7 +1242,7 @@ void tree_remove(struct rdcache_s* tree, struct cache_entry_s* element)
   struct cache_entry_s* next;
 
   DEBUG_PRINT(("%d: Removing %p element %p\n", chpl_nodeID,
-               (void*) element->raddr, element));
+               (void*) element->base.raddr, element));
 
   raddr = element->base.raddr;
   node = element->base.node;
@@ -1325,6 +1354,10 @@ void aout_evict(struct rdcache_s* cache)
 
   z->queue = QUEUE_FREE;
 
+  // reset the prefetch/readahead flags so we won't
+  // increment the counters for this entry.
+  z->prefetch_diags_flags = 0;
+
   // and store it on the free list.
   entry = &z->base;
   SINGLE_PUSH_HEAD(cache, entry, free_entries);
@@ -1362,12 +1395,13 @@ void ain_evict(struct rdcache_s* cache,
 
     // "lock"ed entry y
 
+    INFO_PRINT(("%i ain_evict %p\n", (int) chpl_nodeID, (void*) y->base.raddr));
+
 #ifdef DEBUG
-    DEBUG_PRINT(("Ain is evicting entry for raddr %p\n", (void*) y->raddr));
-    cache_entry_print( y, " ain evict ", 1);
+    DEBUG_PRINT(("Ain is evicting entry for raddr %p\n", (void*) y->base.raddr));
+    cache_entry_print( cache, y, " ain evict ", 1);
     rdcache_print(cache);
 #endif
-
     // If the entry in Ain has any pending/dirty requests, we must
     // immediately wait for them to complete, before we modify the contents
     // of Ain in any way (or reuse the associated page).
@@ -1589,14 +1623,14 @@ static void use_dirty(struct rdcache_s* cache, struct dirty_entry_s* dirty)
 
 
 static
-void do_wait_for(struct rdcache_s* cache, cache_seqn_t sn);
+chpl_bool do_wait_for(struct rdcache_s* cache, cache_seqn_t sn);
 
 static inline
-void wait_for(struct rdcache_s* cache, cache_seqn_t sn)
+chpl_bool wait_for(struct rdcache_s* cache, cache_seqn_t sn)
 {
   // Do nothing if we have already completed sn.
-  if( sn <= cache->completed_request_number ) return;
-  do_wait_for(cache, sn);
+  if( sn <= cache->completed_request_number ) return false;
+  return do_wait_for(cache, sn);
 }
 
 static
@@ -1865,9 +1899,12 @@ void validate_cache(struct rdcache_s* tree,
 #endif
 }
 
+// returns true if we actually had to wait. We use that info
+// for the "waited" prefetch/readahead counters
 static
-void do_wait_for(struct rdcache_s* cache, cache_seqn_t sn)
+chpl_bool do_wait_for(struct rdcache_s* cache, cache_seqn_t sn)
 {
+  chpl_bool waited = false;
 
   TRACE_NB_PRINT(("%d: task %d wait_for(%i) completed=%i\n",
                   chpl_nodeID, (int)chpl_task_getId(),
@@ -1875,17 +1912,17 @@ void do_wait_for(struct rdcache_s* cache, cache_seqn_t sn)
 
   // Do nothing if there are no pending entries.
   if (cache->pending_first_entry < 0 || cache->pending_last_entry < 0) {
-    return;
+    return false;
   }
 
   // Do nothing if we don't have a valid sequence number to wait for.
   if (sn == NO_SEQUENCE_NUMBER) {
-    return;
+    return false;
   }
 
   // Do nothing if we have already completed sn.
   if (sn <= cache->completed_request_number) {
-    return;
+    return false;
   }
 
 #if VERIFY
@@ -1913,6 +1950,12 @@ void do_wait_for(struct rdcache_s* cache, cache_seqn_t sn)
       // (this could cause a different task body to run)
       chpl_comm_wait_nb_some(&cache->pending[index], last - index + 1);
 
+      // TODO: set 'waited=true' only if the time elapsed is sufficiently
+      // long. The comms layer might need wait_nb_some to be called in order
+      // to realize anything is completed, even though the network part is
+      // already done.
+      waited = true;
+
       if (EXTRA_YIELDS) {
         TRACE_YIELD_PRINT(("%d: task %d cache %p yielding in do_wait_for "
                            "for chpl_comm_wait_nb_some\n",
@@ -1930,6 +1973,7 @@ void do_wait_for(struct rdcache_s* cache, cache_seqn_t sn)
     // Whether we waited above or not, if the first entry's event
     // is already complete, then remove it from the queue.
     if (chpl_comm_test_nb_complete(cache->pending[index])) {
+      chpl_comm_free_nb_handle(cache->pending[index]);
       fifo_circleb_pop(&cache->pending_first_entry,
                        &cache->pending_last_entry,
                        cache->pending_len);
@@ -1949,6 +1993,7 @@ void do_wait_for(struct rdcache_s* cache, cache_seqn_t sn)
       break;
     }
   }
+  return waited;
 }
 
 
@@ -1986,6 +2031,25 @@ void unreserve_entry(struct rdcache_s* cache,
   entry->entryReservedByTask = NULL;
 }
 
+
+// Utility function to increment the waited counters.
+// We call this when we had to wait for an inflight prefetch
+// or readahead to complete when we tried to do a get. We zero
+// out the prefetch_diags_flags at the end so we don't double count the event.
+static
+void count_waited_prefetch(struct cache_entry_s* entry,
+                           chpl_bool waited)
+{
+  if (waited && entry->prefetch_diags_flags != 0) {
+    if (entry->prefetch_diags_flags & ENTRY_FLAGS_PREFETCHED) {
+      chpl_comm_diags_incr(cache_prefetch_waited);
+    }
+    if (entry->prefetch_diags_flags & ENTRY_FLAGS_READAHEADED) {
+      chpl_comm_diags_incr(cache_readahead_waited);
+    }
+    entry->prefetch_diags_flags = 0;
+  }
+}
 
 // For the region of this page in raddr,len, we complete any pending/not
 // started operations that possibly overlap with that region.
@@ -2048,7 +2112,7 @@ void flush_entry(struct rdcache_s* cache,
           start = got_skip;
           // Start a put for len bytes starting at page + start
           DEBUG_PRINT(("chpl_comm_start_put(%p, %i, %p, %i)\n",
-                 page+start, entry->base.node, (void*) (entry->raddr+start),
+                 page+start, entry->base.node, (void*) (entry->base.raddr+start),
                  (int) got_len));
 
           // Note: chpl_comm_put_nb, pending_push can yield
@@ -2090,19 +2154,22 @@ void flush_entry(struct rdcache_s* cache,
   // If there are pending ops on this page that possibly overlap
   // with the write in question, wait for them now.
   if( op & FLUSH_DO_PENDING ) {
+    chpl_bool waited = false;
     // If there is a pending put sequence number not completed, we must
     // wait for it now (since we don't know which region it corresponded to).
-    wait_for(cache, entry->max_put_sequence_number);
+    waited |= wait_for(cache, entry->max_put_sequence_number);
 
     // If the previously valid cache lines overlap with the
     // request, we must wait for them now.
     if( any_valid_lines(entry->valid_lines, skip_lines, num_lines) ) {
-      wait_for(cache, entry->max_prefetch_sequence_number);
+      waited |= wait_for(cache, entry->max_prefetch_sequence_number);
     }
+    count_waited_prefetch(entry, waited);
   }
 
   // If invalidating, clear valid bits.
   if( op & FLUSH_DO_INVALIDATE ) {
+    count_unused_prefetches(entry);
     if( len == CACHEPAGE_SIZE ) {
       entry->readahead_skip = 0;
       entry->readahead_len = 0;
@@ -2117,6 +2184,7 @@ void flush_entry(struct rdcache_s* cache,
 
   // If evicting, remove the page from the cache and put it on a free list.
   if( op & FLUSH_DO_EVICT ) {
+    count_unused_prefetches(entry);
     // But, our entry no longer can have a page associated with it.
     page = entry->page;
     entry->page = NULL;
@@ -2198,6 +2266,7 @@ struct cache_entry_s* make_entry(struct rdcache_s* tree,
     tree->am_current++;
 
     bottom_match->queue = QUEUE_AM;
+    bottom_match->prefetch_diags_flags = 0;
     bottom_match->entryReservedByTask = NULL;
     bottom_match->readahead_skip = 0;
     bottom_match->readahead_len = 0;
@@ -2226,6 +2295,7 @@ struct cache_entry_s* make_entry(struct rdcache_s* tree,
     bottom_tmp->base.next = NULL;
 
     bottom_tmp->queue = QUEUE_AIN;
+    bottom_tmp->prefetch_diags_flags = 0;
     bottom_tmp->entryReservedByTask = NULL;
     bottom_tmp->readahead_skip = 0;
     bottom_tmp->readahead_len = 0;
@@ -2617,11 +2687,11 @@ void cache_get_trigger_readahead(struct rdcache_s* cache,
 
   if( len == 0 ) return;
 
-  INFO_PRINT(("%i trigger readahead(%i, %p, %p, %i, %i, %i, %i)\n",
+  INFO_PRINT(("%i trigger readahead(%i, %p, %p, %i, %i, %i)\n",
               (int) chpl_nodeID, (int) node,
               (void*) page_raddr, (void*) request_raddr,
               (int) request_size,
-              (int) skip, (int) len, (int) last_acquire));
+              (int) skip, (int) len));
 
   // If we are accessing a page that has a readahead condition,
   // trigger that readahead.
@@ -2800,6 +2870,8 @@ void cache_get_compute_readahead_extend(struct rdcache_s* cache,
 // If addr == NULL, this will prefetch.
 // This call handles only accesses within a page.
 // returns 1 if the request was a "hit"
+// sequential_readahead_length is non-zero when doing
+// a readahead.
 static
 int cache_get_in_page(struct rdcache_s* cache,
                       chpl_cache_taskPrvData_t* task_local,
@@ -2816,11 +2888,13 @@ int cache_get_in_page(struct rdcache_s* cache,
   int has_data;
   cache_seqn_t sn = NO_SEQUENCE_NUMBER;
   int isprefetch;
+  int isreadahead;
   int entry_after_acquire;
   chpl_comm_nb_handle_t handle;
   uintptr_t readahead_len, readahead_skip;
 
   isprefetch = (addr == NULL);
+  isreadahead = (sequential_readahead_length != 0 && isprefetch);
 
   TRACE_PRINT(("%d: task %d in get_in_page %s:%d get %d bytes from "
                "%d:%p to %p\n",
@@ -2902,13 +2976,16 @@ int cache_get_in_page(struct rdcache_s* cache,
     if (!isprefetch) {
       if (entry->max_prefetch_sequence_number >
           cache->completed_request_number) {
-        wait_for(cache, entry->max_prefetch_sequence_number);
+        chpl_bool waited = wait_for(cache, entry->max_prefetch_sequence_number);
+        count_waited_prefetch(entry, waited);
         // note: wait_for can yield, but entry is locked
         // no chance of deadlock since wait_for just processes comm events
         assert(entry->page && entry->entryReservedByTask == task_local);
         assert(entry->base.raddr == ra_page && entry->base.node == node);
       }
 
+      // Clear the prefetch flags to indicate that the data was used
+      entry->prefetch_diags_flags = 0;
       // Copy the data out.
       chpl_memcpy(addr, entry->page + (raddr-ra_page), size);
 
@@ -2985,7 +3062,8 @@ int cache_get_in_page(struct rdcache_s* cache,
   // Now we need to start a get into page.
   // We'll get within ra_page from ra_line to ra_line_end.
   INFO_PRINT(("%i chpl_comm_start_get(%p, %i, %p, %i)\n",
-               (int) chpl_nodeID, page+(ra_line-ra_page), node, (void*) ra_line,
+               (int) chpl_nodeID,
+               entry->page+(ra_line-ra_page), node, (void*) ra_line,
                (int) (ra_line_end - ra_line)));
 
   // Note: chpl_comm_get_nb could cause a different task body to run.
@@ -3032,6 +3110,16 @@ int cache_get_in_page(struct rdcache_s* cache,
   // Set the minimum sequence number
   entry->min_sequence_number = seqn_min(entry->min_sequence_number, sn);
 
+  // Set the flag to indicate whether it was prefetched or readahead-ed
+  if (isreadahead && !(entry->prefetch_diags_flags & ENTRY_FLAGS_READAHEADED)) {
+    entry->prefetch_diags_flags |= ENTRY_FLAGS_READAHEADED;
+    chpl_comm_diags_incr(cache_num_page_readaheads);
+  }
+  if (isprefetch && !isreadahead && !(entry->prefetch_diags_flags & ENTRY_FLAGS_PREFETCHED)) {
+    entry->prefetch_diags_flags |= ENTRY_FLAGS_PREFETCHED;
+    chpl_comm_diags_incr(cache_num_prefetches);
+  }
+
   // Decide what to store in the readahead trigger for this page
   // if we are currently doing a readahead.
   if( ENABLE_READAHEAD ) {
@@ -3053,7 +3141,7 @@ int cache_get_in_page(struct rdcache_s* cache,
   if( ENABLE_READAHEAD && readahead_len ) {
 
     INFO_PRINT(("%i saving for %i:%p skip %i len %i\n",
-                 (int) chpl_nodeID, (int) node, (void*) entry->raddr,
+                 (int) chpl_nodeID, (int) node, (void*) entry->base.raddr,
                  (int) readahead_skip, (int) readahead_len));
 
     entry->readahead_skip = readahead_skip;
@@ -3136,6 +3224,8 @@ int cache_get_in_page(struct rdcache_s* cache,
 
 // If addr == NULL, this will prefetch.
 // Returns 1 if all of the data was in the cache.
+// sequential_readahead_length is only non-zero when doing
+// readaheads.
 static
 int cache_get(struct rdcache_s* cache,
               chpl_cache_taskPrvData_t* task_local,
@@ -3247,8 +3337,8 @@ int mock_get(struct rdcache_s* cache,
 #endif
   int all_in_cache;
 
-  INFO_PRINT(("%i mock_get addr %p from %i:%p len %i ra_len %i\n",
-               (int) chpl_nodeID, addr, (int) node, (void*) raddr, (int) size, sequential_readahead_length));
+  INFO_PRINT(("%i mock_get from %i:%p len %i ra_len %i\n",
+               (int) chpl_nodeID, (int) node, (void*) raddr, (int) size, sequential_readahead_length));
 
   if (chpl_nodeID == node)
     return 1;
@@ -3475,7 +3565,7 @@ void cache_invalidate(struct rdcache_s* cache,
   raddr_t requested_start, requested_end, requested_size;
 
   DEBUG_PRINT(("invalidate from %i:%p len %i\n",
-               (int) node, raddr, (int) size));
+               (int) node, (void*) raddr, (int) size));
 
   if (chpl_nodeID == node) {
     // Do nothing if we're on the same node.
@@ -3676,7 +3766,8 @@ void chpl_cache_fence(int acquire, int release, int ln, int32_t fn)
 
   if( acquire == 0 && release == 0 ) return;
 
-  INFO_PRINT(("%i fence acquire %i release %i %s:%i\n", chpl_nodeID, acquire, release, fn, ln));
+  INFO_PRINT(("%i fence acquire %i release %i %s:%i\n",
+              chpl_nodeID, acquire, release, chpl_lookupFilename(fn), ln));
 
   TRACE_FENCE_PRINT(("%d: task %d in chpl_cache_fence(acquire=%i,release=%i)"
                      " on cache %p from %s:%d\n",
@@ -3845,7 +3936,6 @@ void chpl_cache_comm_prefetch(c_nodeid_t node, void* raddr,
             /* sequential_readahead_length */ 0,
             CHPL_COMM_UNKNOWN_ID, ln, fn);
 
-  // TODO: record prefetches somewhere in diagnostic counters
 }
 
 struct cache_strd_callback_ctx {
@@ -4047,6 +4137,11 @@ void chpl_cache_comm_getput_unordered(c_nodeid_t dstnode, void* dstaddr,
 void chpl_cache_comm_getput_unordered_task_fence(void)
 {
   chpl_comm_getput_unordered_task_fence();
+}
+
+int chpl_cache_pagesize(void)
+{
+  return CACHEPAGE_SIZE;
 }
 
 // This is for debugging.

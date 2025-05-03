@@ -1,5 +1,5 @@
 /*
- * Copyright 2020-2022 Hewlett Packard Enterprise Development LP
+ * Copyright 2020-2025 Hewlett Packard Enterprise Development LP
  * Copyright 2004-2019 Cray Inc.
  * Other additional copyright holders may be indicated within.
  *
@@ -20,7 +20,7 @@
 
 /*
 
-Low-level support for many network protocols with libcurl
+Low-level support for many network protocols with 'libcurl'.
 
 This module provides support for libcurl, enabling Chapel programs
 to work with many network protocols. This module is a low-level C
@@ -46,7 +46,8 @@ Using Curl Support in Chapel
 ----------------------------
 
 Simple uses of Curl work through the generic :mod:`URL` module. This module
-allows a URL to be opened as a :record:`IO.channel`.
+allows a URL to be opened as a :record:`IO.fileReader` or
+`:record:`IO.fileWriter`.
 
 .. code-block:: chapel
 
@@ -54,7 +55,7 @@ allows a URL to be opened as a :record:`IO.channel`.
   var urlreader = openUrlReader("http://example.com");
   var str:bytes;
   // Output each line read from the URL to stdout
-  while(urlreader.readline(str)) {
+  while(urlreader.readLine(str)) {
     write(str);
   }
 
@@ -104,7 +105,7 @@ Here is a full program enabling verbose output from Curl while downloading:
   Curl.setopt(reader, CURLOPT_VERBOSE, true);
 
   // now read into the bytes
-  reader.readbytes(str);
+  reader.readAll(str);
   writeln(str);
   reader.close();
 
@@ -116,7 +117,7 @@ issue a POST request:
 
     // This example uses the curl_easy_ interface from libcurl
     // to POST some json data.
-    use SysCTypes, CPtr;
+    use CTypes;
     import Curl;
 
     extern const CURLOPT_CUSTOMREQUEST: Curl.CURLoption;
@@ -127,7 +128,7 @@ issue a POST request:
 
     // Called with the contents of the server's response; does nothing with it.
     // Else libcurl writes it to stdout.
-    proc null_write_callback(ptr: c_ptr(c_char), size: size_t, nmemb: size_t, userdata: c_void_ptr) {
+    proc null_write_callback(ptr: c_ptr(c_char), size: c_size_t, nmemb: c_size_t, userdata: c_ptr(void)) {
       return size * nmemb;
     }
 
@@ -143,7 +144,7 @@ issue a POST request:
 
     Curl.curl_easy_setopt(curl, CURLOPT_URL, 'http://localhost:3000/posts');
     Curl.curl_easy_setopt(curl, CURLOPT_CUSTOMREQUEST, 'POST');
-    Curl.curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, c_ptrTo(null_write_callback):c_void_ptr);
+    Curl.curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, c_ptrTo(null_write_callback):c_ptr(void));
 
     var ret = Curl.curl_easy_perform(curl);
 
@@ -156,26 +157,33 @@ Curl Support Types and Functions
 
  */
 module Curl {
-  public use IO, SysCTypes, CPtr;
-  use Sys;
+  public use IO, CTypes;
+  use OS.POSIX;
+  import OS.{errorCode};
 
   require "curl/curl.h";
   require "-lcurl";
 
 
+  /*
+   Local copy of IO.EEOF as it is being phased out and is private in IO
+   */
+  private extern proc chpl_macro_int_EEOF():c_int;
+
   /* Returns the ``CURL`` handle connected to a channel opened with
      :proc:`URL.openUrlReader` or :proc:`URL.openUrlWriter`.
    */
-  proc getCurlHandle(ch:channel):c_ptr(CURL) throws {
+  proc getCurlHandle(ch):c_ptr(CURL) throws
+  where isSubtype(ch.type, fileReader) || isSubtype(ch.type, fileWriter) {
     use CurlQioIntegration;
 
-    if ch.home != here {
-      throw SystemError.fromSyserr(EINVAL, "getCurlHandle only functions with local channels");
+    if ch._home != here {
+      throw createSystemError(EINVAL, "getCurlHandle only functions with local channels");
     }
 
     var plugin = ch.channelPlugin():CurlChannel?;
     if plugin == nil then
-      throw SystemError.fromSyserr(EINVAL, "getCurlHandle called on a non-curl channel");
+      throw createSystemError(EINVAL, "getCurlHandle called on a non-curl channel");
 
     var curl = plugin!.curl;
     return curl;
@@ -191,19 +199,20 @@ module Curl {
      :arg arg: the value to set the curl option specified by opt.
      :type arg: `int`, `string`, `bool`, or `slist`
   */
-  proc setopt(ch:channel, opt:c_int, arg):bool throws {
+  proc setopt(ch, opt:c_int, arg):bool throws
+  where isSubtype(ch.type, fileReader) || isSubtype(ch.type, fileWriter) {
     use CurlQioIntegration;
 
     var err:CURLcode = CURLE_OK;
 
-    if (arg.type == slist) && (arg.home != ch.home) {
-      throw SystemError.fromSyserr(EINVAL, "in channel.setopt(): slist, and curl handle do not reside on the same locale");
+    if (arg.type == slist) && (arg._home != ch._home) {
+      throw createSystemError(EINVAL, "in channel.setopt(): slist, and curl handle do not reside on the same locale");
     }
 
-    on ch.home {
+    on ch._home {
       var plugin = ch.channelPlugin():CurlChannel?;
       if plugin == nil then
-        throw SystemError.fromSyserr(EINVAL, "in channel.setopt(): not a curl channel");
+        throw createSystemError(EINVAL, "in channel.setopt(): not a curl channel");
 
       var curl = plugin!.curl;
       err = setopt(curl, opt, arg);
@@ -250,14 +259,14 @@ module Curl {
       // slist, or a char*, or a void* (CBPOINT).
       // CURLOPTTYPE_FUNCTIONPOINT is also in this range.
       if isAnyCPtr(arg.type) {
-        var tmp:c_void_ptr = arg:c_void_ptr;
+        var tmp:c_ptr(void) = arg:c_ptr(void);
         err = curl_easy_setopt_ptr(curl, opt:CURLoption, tmp);
       } else if arg.type == slist {
-        var tmp:c_void_ptr = arg.list:c_void_ptr;
+        var tmp:c_ptr(void) = arg.list:c_ptr(void);
         err = curl_easy_setopt_ptr(curl, opt:CURLoption, tmp);
       } else if arg.type == string || arg.type == bytes {
-        var tmp = arg.localize().c_str():c_void_ptr;
-        err = curl_easy_setopt_ptr(curl, opt:CURLoption, tmp);
+        err = curl_easy_setopt_ptr(curl, opt:CURLoption,
+                                   arg.localize().c_str():c_ptr(void));
       }
     } else {
       // Must be CURLOPTTYPE_OFF_T or CURLOPTTYPE_BLOB
@@ -281,10 +290,12 @@ module Curl {
        setopt(curlfile, (CURLOPT_USERNAME, username),
                         (CURLOPT_PASSWORD, password));
 
+     :arg ch: a :record:`IO.fileReader` or :record:`IO.fileWriter`
      :arg args: any number of tuples of the form (curl_option, value).
                 This function will call ``setopt`` on each pair in turn.
    */
-  proc setopt(ch:channel, args ...?k) throws {
+  proc setopt(ch, args ...?k) throws
+  where isSubtype(ch.type, fileReader) || isSubtype(ch.type, fileWriter) {
     for param i in 0..k-1 {
       setopt(ch, args(i)(0), args(i)(1));
     }
@@ -301,11 +312,11 @@ module Curl {
 
   */
   record slist {
-    pragma "no doc"
+    @chpldoc.nodoc
     var home: locale = here;
     // Note: If we do not set the default value of this to NULL, we can get
     // non-deterministic segfaults from libcurl.
-    pragma "no doc"
+    @chpldoc.nodoc
     var list: c_ptr(curl_slist) = nil;
   }
 
@@ -318,8 +329,8 @@ module Curl {
 
      :arg str: a string argument to append
     */
-  proc slist.append(str:string) throws {
-    var err: syserr = ENOERR;
+  proc ref slist.append(str:string) throws {
+    var err: errorCode = 0;
     on this.home {
       this.list = curl_slist_append(this.list, str.localize().c_str());
       if this.list == nil then
@@ -344,13 +355,13 @@ module Curl {
 
   // extern QIO functions
   private extern proc sys_iov_total_bytes(iov:c_ptr(qiovec_t), iovcnt:c_int):int(64);
-  private extern proc qio_strdup(s: c_string): c_string;
-  private extern proc qio_mkerror_errno():syserr;
-  private extern proc qio_int_to_err(a:int(32)):syserr;
+  private extern proc qio_strdup(s: c_ptrConst(c_char)): c_ptrConst(c_char);
+  private extern proc qio_mkerror_errno():errorCode;
+  private extern proc qio_int_to_err(a:int(32)):errorCode;
   private extern proc qio_channel_nbytes_available_unlocked(ch:qio_channel_ptr_t):int(64);
-  private extern proc qio_channel_copy_to_available_unlocked(ch:qio_channel_ptr_t, ptr:c_void_ptr, len:ssize_t):syserr;
+  private extern proc qio_channel_copy_to_available_unlocked(ch:qio_channel_ptr_t, ptr:c_ptr(void), len:c_ssize_t):errorCode;
   private extern proc qio_channel_nbytes_write_behind_unlocked(ch:qio_channel_ptr_t):int(64);
-  private extern proc qio_channel_copy_from_buffered_unlocked(ch:qio_channel_ptr_t, ptr:c_void_ptr, len:ssize_t, ref n_written_out:ssize_t):syserr;
+  private extern proc qio_channel_copy_from_buffered_unlocked(ch:qio_channel_ptr_t, ptr:c_ptr(void), len:c_ssize_t, ref n_written_out:c_ssize_t):errorCode;
   private extern proc qio_channel_end_offset_unlocked(ch:qio_channel_ptr_t):int(64);
   private extern proc qio_channel_offset_unlocked(ch:qio_channel_ptr_t):int(64);
   private extern proc qio_channel_writable(ch:qio_channel_ptr_t):bool;
@@ -379,11 +390,11 @@ module Curl {
   private extern const CURLOPT_READDATA: CURLoption;
 
   // Other Curl constants
-  private extern const CURLINFO_CONTENT_LENGTH_DOWNLOAD: c_int;
+  private extern const CURLINFO_CONTENT_LENGTH_DOWNLOAD_T: CURLINFO;
 
-  private extern const CURL_READFUNC_PAUSE:size_t;
-  private extern const CURL_READFUNC_ABORT:size_t;
-  private extern const CURL_WRITEFUNC_PAUSE:size_t;
+  private extern const CURL_READFUNC_PAUSE:c_size_t;
+  private extern const CURL_READFUNC_ABORT:c_size_t;
+  private extern const CURL_WRITEFUNC_PAUSE:c_size_t;
   private extern const CURLPAUSE_ALL: c_int;
   private extern const CURLPAUSE_CONT: c_int;
 
@@ -429,13 +440,13 @@ module Curl {
     Handles Chapel arg types appropriate to each option:
       For options accepting a C long, accepts integral and boolean types.
 
-      For options accepting a C pointer, accepts c_ptr and c_void_ptr.
+      For options accepting a C pointer, accepts c_ptr and c_ptr(void).
 
       For options accepting a C string, accepts string and bytes and c_ptr(char).
 
       For options accepting a libcurl slist, accepts Curl.slist and c_ptr(slist).
 
-      For options accepting a callback function, accepts c_void_ptr.
+      For options accepting a callback function, accepts c_ptr(void).
 
       For options accepting an offset, accepts integral types.
 
@@ -453,7 +464,7 @@ module Curl {
 
   /* Helper function for ``curl_easy_setopt`` when passing a pointer argument */
   proc curl_easy_setopt_ptr(curl:c_ptr(CURL), option:CURLoption,
-      arg:c_void_ptr):CURLcode {
+      arg:c_ptr(void)):CURLcode {
     return c_curl_easy_setopt(curl, option, arg);
   }
 
@@ -465,7 +476,7 @@ module Curl {
 
   /* Helper function for ``curl_easy_getinfo`` when passing a pointer argument.
      Generally this is a pointer to the value to be set. */
-  proc curl_easy_getinfo_ptr(curl:c_ptr(CURL), info:CURLINFO, arg:c_void_ptr):CURLcode {
+  proc curl_easy_getinfo_ptr(curl:c_ptr(CURL), info:CURLINFO, arg:c_ptr(void)):CURLcode {
     return curl_easy_getinfo(curl, info, arg);
   }
 
@@ -492,31 +503,35 @@ module Curl {
   extern proc curl_multi_cleanup(curlm:c_ptr(CURLM)):CURLcode;
 
   /* See https://curl.haxx.se/libcurl/c/curl_slist_append.html */
-  extern proc curl_slist_append(csl: c_ptr(curl_slist), char: c_string)
+  extern proc curl_slist_append(csl: c_ptr(curl_slist), char: c_ptrConst(c_char))
     : c_ptr(curl_slist);
   /* See https://curl.haxx.se/libcurl/c/curl_slist_free_all.html */
   extern proc curl_slist_free_all(csl: c_ptr(curl_slist));
 
-  pragma "no doc"
+  @chpldoc.nodoc
   module CurlQioIntegration {
 
     import Time;
     use IO;
     use Curl;
-    use Sys;
-    use CPtr;
+    use CTypes;
+    use OS.POSIX;
+    import OS.{errorCode};
+
+    @chpldoc.nodoc
+    extern proc sys_select(nfds:c_int, readfds:c_ptr(fd_set), writefds:c_ptr(fd_set), exceptfds:c_ptr(fd_set), timeout:c_ptr(struct_timeval), ref nset:c_int):c_int;
 
     class CurlFile : QioPluginFile {
 
-      var url_c: c_string;     // Path/URL
-      var length: ssize_t;    // length of what we are reading, -1 if we can't get
+      var url_c: c_ptrConst(c_char);     // Path/URL
+      var length: c_ssize_t;    // length of what we are reading, -1 if we can't get
 
       var seekable: bool;
 
       override proc setupChannel(out pluginChannel:unmanaged QioPluginChannel?,
                           start:int(64),
                           end:int(64),
-                          qioChannelPtr:qio_channel_ptr_t):syserr {
+                          qioChannelPtr:qio_channel_ptr_t):errorCode {
         var curlch = new unmanaged CurlChannel();
         curlch.curlf = this:unmanaged;
         curlch.qio_ch = qioChannelPtr;
@@ -524,35 +539,35 @@ module Curl {
         return start_channel(curlch, start, end);
       }
 
-      override proc filelength(out length:int(64)):syserr {
+      override proc filelength(out length:int(64)):errorCode {
         if this.length == -1 then {
           return ENOTSUP;
         }
 
         length = this.length;
-        return ENOERR;
+        return 0;
       }
-      override proc getpath(out path:c_string, out len:int(64)):syserr {
-        path = qio_strdup(this.url_c);
-        len = url_c.size;
-        return ENOERR;
+      override proc getpath(out path:c_ptr(uint(8)), out len:int(64)):errorCode {
+        path = qio_strdup(this.url_c):c_ptr(uint(8));
+        len = strLen(url_c):int(64);
+        return 0;
       }
 
-      override proc fsync():syserr {
+      override proc fsync():errorCode {
         return ENOSYS;
       }
-      override proc getChunk(out length:int(64)):syserr {
+      override proc getChunk(out length:int(64)):errorCode {
         return ENOSYS;
       }
       override proc getLocalesForRegion(start:int(64), end:int(64), out
-          localeNames:c_ptr(c_string), ref nLocales:int(64)):syserr {
+          localeNames:c_ptr(c_ptrConst(c_char)), ref nLocales:int(64)):errorCode {
         return ENOSYS;
       }
 
-      override proc close():syserr {
-        c_free(url_c:c_void_ptr);
+      override proc close():errorCode {
+        deallocate(url_c:c_ptr(void));
         url_c = nil;
-        return ENOERR;
+        return 0;
       }
     }
 
@@ -563,20 +578,20 @@ module Curl {
       var curlm: c_ptr(CURLM);  // Curl multi handle
       var running_handles: c_int;
       var have_channel_lock:bool;
-      var saved_error:syserr = ENOERR;
+      var saved_error:errorCode = 0;
 
-      override proc readAtLeast(amt:int(64)):syserr {
+      override proc readAtLeast(amt:int(64)):errorCode {
         return read_atleast(this, amt);
       }
-      override proc write(amt:int(64)):syserr {
+      override proc write(amt:int(64)):errorCode {
         return write_amount(this, amt);
       }
 
-      override proc close():syserr {
+      override proc close():errorCode {
         curl_multi_remove_handle(curlm, curl);
         curl_easy_cleanup(curl);
         curl_multi_cleanup(curlm);
-        return ENOERR;
+        return 0;
       }
     }
 
@@ -590,36 +605,36 @@ module Curl {
     record curl_iovec_t {
       var vec:c_ptr(qiovec_t); // iovec to read into --
                                // (the iovec passed in curl_readv/curl_preadv)
-      var total_read:size_t;   // total amount read
-      var amt_read:size_t;     // amount read into the current iovec buffer
+      var total_read:c_size_t;   // total amount read
+      var amt_read:c_size_t;     // amount read into the current iovec buffer
       var count:c_int;         // number of buffers in the iovec
-      var offset:size_t;       // offset that we want to skip to
+      var offset:c_size_t;       // offset that we want to skip to
                                // (in the case where we cannot request byteranges)
       var curr:c_int;          // the index of the current buffer
-    };
+    }
 
     // userdata, is a curl_iovec_t. This is set to be passed into this function,
     // when we
     // call CURLOPT_WRITEDATA in curl_preadv and curl_readv.
     // FUTURE: If we have filled the iovec, but have not finished reading from the curl
     // handle, pause it (i.e., return CURL_WRITE_PAUSE).
-    private proc pause_writer(ptr:c_void_ptr, size:size_t, nmemb:size_t, userdata:c_void_ptr):size_t
+    private proc pause_writer(ptr:c_ptr(void), size:c_size_t, nmemb:c_size_t, userdata:c_ptr(void)):c_size_t
     {
       //writeln("in pause_writer");
       return CURL_WRITEFUNC_PAUSE;
     }
-    private proc pause_reader(ptr:c_void_ptr, size:size_t, nmemb:size_t, userdata:c_void_ptr):size_t
+    private proc pause_reader(ptr:c_ptr(void), size:c_size_t, nmemb:c_size_t, userdata:c_ptr(void)):c_size_t
     {
       //writeln("in pause_reader");
       return CURL_READFUNC_PAUSE;
     }
 
 
-    private proc buf_writer(ptr:c_void_ptr, size:size_t, nmemb:size_t, userdata:c_void_ptr):size_t
+    private proc buf_writer(ptr:c_ptr(void), size:c_size_t, nmemb:c_size_t, userdata:c_ptr(void)):c_size_t
     {
       var ptr_data = ptr:c_ptr(uint(8));
-      var realsize:size_t = size*nmemb;
-      var real_realsize:size_t = realsize;
+      var realsize:c_size_t = size*nmemb;
+      var real_realsize:c_size_t = realsize;
       var retptr = userdata:c_ptr(curl_iovec_t);
       ref ret = retptr.deref();
 
@@ -650,7 +665,7 @@ module Curl {
         var curbase = (ret.vec[ret.curr].iov_base):c_ptr(uint(8));
         var dst = curbase + ret.amt_read;
         var amt = ret.vec[ret.curr].iov_len - ret.amt_read;
-        c_memcpy(dst, ptr_data, amt);
+        memcpy(dst, ptr_data, amt.safeCast(c_size_t));
         ret.total_read += amt;
         realsize -= amt;
         ptr_data = ptr_data + amt;
@@ -670,7 +685,7 @@ module Curl {
         var curbase = (ret.vec[ret.curr].iov_base):c_ptr(uint(8));
         var dst = curbase + ret.amt_read;
         var amt = realsize;
-        c_memcpy(dst, ptr_data, amt);
+        memcpy(dst, ptr_data, amt);
         ret.total_read += realsize;
         ret.amt_read += realsize;
         // We have fully populated this iovbuf
@@ -689,19 +704,19 @@ module Curl {
 
     record curl_str_buf {
       var mem:c_ptr(uint(8));
-      var len: size_t;
-      var alloced: size_t;
+      var len: c_size_t;
+      var alloced: c_size_t;
     }
 
 
-    private proc startsWith(haystack:c_string, needle:c_string) {
-      extern proc strncmp(s1:c_string, s2:c_string, n:size_t):c_int;
-
-      return strncmp(haystack, needle, needle.size:size_t) == 0;
+    private proc startsWith(haystack:c_ptrConst(c_char), needle:c_ptrConst(c_char)) {
+      extern proc strncmp(s1: c_ptrConst(c_char), s2: c_ptrConst(c_char), n:c_size_t):c_int;
+      const len = strLen(needle):c_size_t;
+      return strncmp(haystack, needle, len) == 0;
     }
 
-    private proc curl_write_string(contents: c_void_ptr, size:size_t, nmemb:size_t, userp: c_void_ptr) {
-      var realsize:size_t = size * nmemb;
+    private proc curl_write_string(contents: c_ptr(void), size:c_size_t, nmemb:c_size_t, userp: c_ptr(void)) {
+      var realsize:c_size_t = size * nmemb;
       var bufptr = userp:c_ptr(curl_str_buf);
       ref buf = bufptr.deref();
 
@@ -711,15 +726,15 @@ module Curl {
         var newsize = 2 * buf.alloced + realsize;
         var oldsize = buf.len;
         var newbuf:c_ptr(uint(8));
-        newbuf = c_calloc(uint(8), newsize);
+        newbuf = allocate(uint(8), newsize, clear=true);
         if newbuf == nil then
           return 0;
-        c_memcpy(newbuf, buf.mem, oldsize);
-        c_free(buf.mem);
+        memcpy(newbuf, buf.mem, oldsize.safeCast(c_size_t));
+        deallocate(buf.mem);
         buf.mem = newbuf;
       }
 
-      c_memcpy(c_ptrTo(buf.mem[buf.len]), contents, realsize);
+      memcpy(c_ptrTo(buf.mem[buf.len]), contents, realsize);
       buf.len += realsize;
       buf.mem[buf.len] = 0;
 
@@ -740,35 +755,32 @@ module Curl {
         // Headers tend to be ~800, although they can grow much larger than this. If
         // it is larger than this, we'll take care of it in curl_write_string.
 
-        buf.mem = c_calloc(uint(8), 800);
+        buf.mem = allocate(uint(8), 800, clear=true);
         buf.len = 0;
         buf.alloced = 800;
 
         var curl:c_ptr(CURL);
 
         curl = curl_easy_init();
-        curl_easy_setopt_ptr(curl, CURLOPT_URL, fl.url_c:c_void_ptr);
-        curl_easy_setopt_ptr(curl, CURLOPT_WRITEFUNCTION, c_ptrTo(curl_write_string):c_void_ptr);
+        curl_easy_setopt_ptr(curl, CURLOPT_URL, fl.url_c:c_ptr(void));
+        curl_easy_setopt_ptr(curl, CURLOPT_WRITEFUNCTION, c_ptrTo(curl_write_string):c_ptr(void));
         curl_easy_setopt_ptr(curl, CURLOPT_HEADERDATA, c_ptrTo(buf));
         curl_easy_setopt_long(curl, CURLOPT_NOBODY, 1);
 
         curl_easy_perform(curl);
 
-        extern proc strstr(haystack:c_string, needle:c_string):c_string;
+        extern proc strstr(haystack:c_ptrConst(c_char), needle:c_ptrConst(c_char)):c_ptrConst(c_char);
         // Does this URL accept range requests?
-        if strstr(buf.mem:c_string, c"Accept-Ranges: bytes"):c_void_ptr == nil:c_void_ptr {
+        if strstr(buf.mem:c_ptrConst(c_char), "Accept-Ranges: bytes"):c_ptr(void) == nil:c_ptr(void) {
           ret = false;
         } else {
           ret = true;
         }
 
-        c_free(buf.mem);
+        deallocate(buf.mem);
 
-        var lengthDouble: real(64);
         // Get the content length (for HTTP only)
-        curl_easy_getinfo_ptr(curl, CURLINFO_CONTENT_LENGTH_DOWNLOAD, c_ptrTo(lengthDouble));
-        length = lengthDouble: int(64);
-        // One day, use CURLINFO_CONTENT_LENGTH_DOWNLOAD_T
+        curl_easy_getinfo_ptr(curl, CURLINFO_CONTENT_LENGTH_DOWNLOAD_T, c_ptrTo(length));
 
         curl_easy_cleanup(curl);
       }
@@ -783,7 +795,7 @@ module Curl {
 
     private proc start_channel(cc:CurlChannel,
                                start:int(64),
-                               end:int(64)): syserr {
+                               end:int(64)): errorCode {
 
       //writeln("start_channel");
 
@@ -804,7 +816,7 @@ module Curl {
         return ENOMEM;
 
       // Setopt with the url
-      curl_easy_setopt_ptr(curl, CURLOPT_URL, cc.curlf!.url_c:c_void_ptr);
+      curl_easy_setopt_ptr(curl, CURLOPT_URL, cc.curlf!.url_c:c_ptr(void));
 
       var writer = qio_channel_writable(cc.qio_ch);
 
@@ -813,9 +825,10 @@ module Curl {
         // Set the function to get the data to send
         err = curl_easy_setopt_long(curl, CURLOPT_UPLOAD, 1);
         if err then return EINVAL;
-        err =curl_easy_setopt_ptr(curl, CURLOPT_READFUNCTION, c_ptrTo(curl_read_buffered):c_void_ptr);
+        err =curl_easy_setopt_ptr(curl, CURLOPT_READFUNCTION,
+            c_ptrTo(curl_read_buffered):c_ptr(void));
         if err then return EINVAL;
-        err = curl_easy_setopt_ptr(curl, CURLOPT_READDATA, cc:c_void_ptr);
+        err = curl_easy_setopt_ptr(curl, CURLOPT_READDATA, c_ptrToConst(cc));
         if err then return EINVAL;
 
         // TODO -- is this necessary?
@@ -824,9 +837,10 @@ module Curl {
       } else {
         //writeln("Setting up download");
         // Set the function to process the received data
-        err = curl_easy_setopt_ptr(curl, CURLOPT_WRITEFUNCTION, c_ptrTo(curl_write_received):c_void_ptr);
+        err = curl_easy_setopt_ptr(curl, CURLOPT_WRITEFUNCTION, c_ptrTo(curl_write_received):c_ptr(void));
         if err then return EINVAL;
-        err = curl_easy_setopt_ptr(curl, CURLOPT_WRITEDATA, cc:c_void_ptr);
+        err = curl_easy_setopt_ptr(curl, CURLOPT_WRITEDATA,
+            c_ptrToConst(cc));
         if err then return EINVAL;
       }
       // If it's seekable, start at the right offset
@@ -843,18 +857,18 @@ module Curl {
 
       //writeln("finished start_channel");
 
-      return ENOERR;
+      return 0;
     }
 
-    private proc curl_write_received(contents: c_void_ptr, size:size_t, nmemb:size_t, userp: c_void_ptr):size_t {
-      var realsize:size_t = size * nmemb;
+    private proc curl_write_received(contents: c_ptr(void), size:c_size_t, nmemb:c_size_t, userp: c_ptr(void)):c_size_t {
+      var realsize:c_size_t = size * nmemb;
       var cc = userp:unmanaged CurlChannel?;
-      var err:syserr = ENOERR;
+      var err:errorCode = 0;
 
       // lock the channel if it's not already locked
       assert(cc!.have_channel_lock);
 
-      var amt = realsize.safeCast(ssize_t);
+      var amt = realsize.safeCast(c_ssize_t);
 
       //writeln("curl_write_received offset=", qio_channel_offset_unlocked(cc!.qio_ch), " len=", amt);
 
@@ -864,7 +878,7 @@ module Curl {
 
       // unlock the channel if we locked it
 
-      if err != ENOERR {
+      if err != 0 {
         cc!.saved_error = err;
         return 0;
       }
@@ -873,7 +887,7 @@ module Curl {
     }
 
 
-    private proc read_atleast(cc:CurlChannel, requestedAmount:int(64)):syserr {
+    private proc read_atleast(cc:CurlChannel, requestedAmount:int(64)):errorCode {
       // mark the channel as already locked
       cc.have_channel_lock = true;
       defer {
@@ -885,7 +899,7 @@ module Curl {
       var curl = cc.curl;
       var curlm = cc.curlm;
       var mcode: CURLMcode;
-      var serr:syserr = ENOERR;
+      var serr:errorCode = 0;
       var fdread: fd_set;
       var fdwrite: fd_set;
       var fdexcept: fd_set;
@@ -915,9 +929,9 @@ module Curl {
       while cc.running_handles > 0 {
         // check for activity on something
         maxfd = -1;
-        sys_fd_zero(fdread);
-        sys_fd_zero(fdwrite);
-        sys_fd_zero(fdexcept);
+        FD_ZERO(c_ptrTo(fdread));
+        FD_ZERO(c_ptrTo(fdwrite));
+        FD_ZERO(c_ptrTo(fdexcept));
 
         // Compute the timeout curl recommends
         var timeoutMillis:c_long = 1;
@@ -927,9 +941,9 @@ module Curl {
         if timeoutMillis < 0 then
           timeoutMillis = 0;
 
-        var timeout:timeval;
-        timeout.tv_sec = timeoutMillis / 1000;
-        timeout.tv_usec = (timeoutMillis % 1000) * 1000;
+        var timeout:struct_timeval;
+        timeout.tv_sec = (timeoutMillis / 1000):time_t;
+        timeout.tv_usec = ((timeoutMillis % 1000) * 1000):suseconds_t;
 
         mcode = curl_multi_fdset(curlm, c_ptrTo(fdread), c_ptrTo(fdwrite), c_ptrTo(fdexcept), maxfd);
         if mcode != CURLM_OK then
@@ -946,8 +960,8 @@ module Curl {
           Time.sleep(waitSeconds);
         } else {
           //writeln("selecting ", timeoutMillis);
-          var nset:c_int;
-          serr = Sys.sys_select(maxfd+1, c_ptrTo(fdread), c_ptrTo(fdwrite), c_ptrTo(fdexcept), c_ptrTo(timeout), nset);
+          var nset: c_int;
+          serr = sys_select(maxfd+1, c_ptrTo(fdread), c_ptrTo(fdwrite), c_ptrTo(fdexcept), c_ptrTo(timeout), nset);
           if serr != 0 then
             return serr;
         }
@@ -963,42 +977,42 @@ module Curl {
           break;
 
         // stop if there was an error saving the data to the buffer
-        if cc.saved_error != ENOERR then
+        if cc.saved_error != 0 then
           return cc.saved_error;
       }
 
       // Return EEOF if the connection is no longer running
       space = qio_channel_nbytes_available_unlocked(ch);
       if cc.running_handles == 0 && space < amt then
-        return EEOF;
+        return chpl_macro_int_EEOF():errorCode;
 
-      return ENOERR;
+      return 0;
     }
 
     // Send some data somewhere with curl
     // Returning 0 will signal end-of-file to the curl library
     // and cause it to stop the transfer.
-    private proc curl_read_buffered(contents: c_void_ptr, size:size_t, nmemb:size_t, userp: c_void_ptr):size_t {
-      var realsize:size_t = size * nmemb;
+    private proc curl_read_buffered(contents: c_ptr(void), size:c_size_t, nmemb:c_size_t, userp: c_ptr(void)):c_size_t {
+      var realsize:c_size_t = size * nmemb;
       var cc = userp:unmanaged CurlChannel?;
-      var err:syserr = ENOERR;
+      var err:errorCode = 0;
 
       // lock the channel if it's not already locked
       assert(cc!.have_channel_lock);
 
-      var amt = realsize.safeCast(ssize_t);
+      var amt = realsize.safeCast(c_ssize_t);
 
       // Write from the buffer's start position up until the start
       // of the user-visible data.
 
-      var gotamt: ssize_t = 0;
+      var gotamt: c_ssize_t = 0;
       // copy the data from the channel's buffer
       err = qio_channel_copy_from_buffered_unlocked(cc!.qio_ch, contents, amt, gotamt);
 
       // unlock the channel if we locked it
 
       // If there was an error from the channel, abort the connection
-      if err != ENOERR {
+      if err != 0 {
         cc!.saved_error = err;
         return CURL_READFUNC_ABORT;
       }
@@ -1009,10 +1023,10 @@ module Curl {
         return CURL_READFUNC_PAUSE;
       }
 
-      return gotamt:size_t;
+      return gotamt:c_size_t;
     }
 
-    private proc write_amount(cc:CurlChannel, requestedAmount:int(64)):syserr {
+    private proc write_amount(cc:CurlChannel, requestedAmount:int(64)):errorCode {
       // mark the channel as already locked
       cc.have_channel_lock = true;
       defer {
@@ -1027,7 +1041,7 @@ module Curl {
       var curlm = cc.curlm;
       var ccode: CURLcode;
       var mcode: CURLMcode;
-      var serr:syserr = ENOERR;
+      var serr:errorCode = 0;
       var fdread: fd_set;
       var fdwrite: fd_set;
       var fdexcept: fd_set;
@@ -1053,9 +1067,9 @@ module Curl {
       while cc.running_handles > 0 {
         // check for activity on something
         maxfd = -1;
-        sys_fd_zero(fdread);
-        sys_fd_zero(fdwrite);
-        sys_fd_zero(fdexcept);
+        FD_ZERO(c_ptrTo(fdread));
+        FD_ZERO(c_ptrTo(fdwrite));
+        FD_ZERO(c_ptrTo(fdexcept));
 
         // Continue anything that is paused
         ccode = curl_easy_pause(cc.curl, CURLPAUSE_CONT);
@@ -1070,9 +1084,9 @@ module Curl {
         if timeoutMillis < 0 then
           timeoutMillis = 0;
 
-        var timeout:timeval;
-        timeout.tv_sec = timeoutMillis / 1000;
-        timeout.tv_usec = (timeoutMillis % 1000) * 1000;
+        var timeout:struct_timeval;
+        timeout.tv_sec = (timeoutMillis / 1000):time_t;
+        timeout.tv_usec = ((timeoutMillis % 1000) * 1000):suseconds_t;
 
         mcode = curl_multi_fdset(curlm, c_ptrTo(fdread), c_ptrTo(fdwrite), c_ptrTo(fdexcept), maxfd);
         if mcode != CURLM_OK then
@@ -1089,8 +1103,8 @@ module Curl {
           Time.sleep(waitSeconds);
         } else {
           //writeln("selecting ", timeoutMillis);
-          var nset:c_int;
-          serr = Sys.sys_select(maxfd+1, c_ptrTo(fdread), c_ptrTo(fdwrite), c_ptrTo(fdexcept), c_ptrTo(timeout), nset);
+          var nset : c_int;
+          serr = sys_select(maxfd+1, c_ptrTo(fdread), c_ptrTo(fdwrite), c_ptrTo(fdexcept), c_ptrTo(timeout), nset);
           if serr != 0 then
             return serr;
         }
@@ -1105,25 +1119,24 @@ module Curl {
           break;
 
         // stop if there was an error saving the data to the buffer
-        if cc.saved_error != ENOERR then
+        if cc.saved_error != 0 then
           return cc.saved_error;
       }
 
       // Return EEOF if the connection is no longer running
       space = qio_channel_nbytes_write_behind_unlocked(ch);
       if cc.running_handles == 0 && space > target_space {
-        writeln("RETURNING EOF");
-        return EEOF;
+        writeln("RETURNING EEOF");
+        return chpl_macro_int_EEOF():errorCode;
       }
 
-      return ENOERR;
+      return 0;
     }
 
     proc openCurlFile(url:string,
-                     mode:iomode = iomode.r,
-                     style:iostyle = defaultIOStyle()) throws {
+                     mode:ioMode = ioMode.r) throws {
 
-      var err_out: syserr = ENOERR;
+      var err_out: errorCode = 0;
       var rc = 0;
       var filelength: int(64);
 
@@ -1136,20 +1149,20 @@ module Curl {
       // curl_easy_setopt(curl, CURLOPT_POSTFIELDS, "name=daniel&project=curl");
 
       // Save the url requested
-      var url_c = c_calloc(uint(8), url.size+1);
-      c_memcpy(url_c:c_void_ptr, url.localize().c_str():c_void_ptr, url.size);
+      var url_c = allocate(uint(8), url.size:c_size_t+1, clear=true);
+      memcpy(url_c:c_ptr(void), url.localize().c_str():c_ptr(void), url.size.safeCast(c_size_t));
 
-      fl.url_c = url_c:c_string;
+      fl.url_c = url_c:c_ptrConst(c_char);
 
       // Read the header in order to get the length of the thing we are reading
       // If we are writing, we can't really get this information (even if we try
       // to do a 0 length read).
-      if (mode == iomode.cw || mode == iomode.cwr) {
+      if (mode == ioMode.cw || mode == ioMode.cwr) {
         fl.length = -1;
         fl.seekable = false;
       } else {
         fl.seekable = seekable(fl, filelength);
-        fl.length = filelength:ssize_t;
+        fl.length = filelength:c_ssize_t;
       }
 
       var err: CURLcode = 0;
@@ -1157,7 +1170,7 @@ module Curl {
       var ret: file;
 
       try {
-        ret = openplugin(fl, mode, fl.seekable, style);
+        ret = openplugin(fl, mode, fl.seekable, defaultIOStyleInternal());
       } catch e {
         fl.close();
         delete fl;

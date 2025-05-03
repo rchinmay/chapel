@@ -13,15 +13,15 @@ module test_fully_blocked_elemental_cholesky {
 
   use cholesky_execution_config_consts;
 
-  public use elemental_cholesky_fully_blocked;
+  use elemental_cholesky_fully_blocked;
 
   proc main {
 
-    var Rand = new borrowed RandomStream ( real, seed = 314159) ;
+    var Rand = new randomStream ( real, seed = 314159);
 
     const MatIdx = { index_base .. #n, index_base .. #n };
 
-    const mat_dom : domain (2) dmapped Cyclic ( startIdx = MatIdx.low )
+    const mat_dom : domain (2) dmapped new cyclicDist ( startIdx = MatIdx.low )
       = MatIdx;
 
     const distribution_type = "cyclic";
@@ -51,7 +51,7 @@ module test_fully_blocked_elemental_cholesky {
     // create a test problem, starting with a random general matrix B.
     // ---------------------------------------------------------------
 
-    Rand.fillRandom (B);
+    Rand.fill (B);
 
     // -------------------------------------------------------------
     // create a positive definite matrix A by setting A equal to the
@@ -79,7 +79,7 @@ module test_fully_blocked_elemental_cholesky {
     writeln ("elemental cholesky factorization symmetric index range code\n "
 	     +	"on symmetric index range");
 
-    var clock : Timer;
+    var clock : stopwatch;
           
     clock.clear ();
     clock.start ();

@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+
+FLAGS=""
+
+# read extra arguments from a $1.chplcheckopts file
+# currently only supports 1 line with nothing but flags
+if [ -e CHPLCHECKOPTS ]; then
+  FLAGS="$FLAGS $(cat CHPLCHECKOPTS)"
+fi
+if [ -e $1.chplcheckopts ]; then
+  FLAGS="$FLAGS $(cat $1.chplcheckopts)"
+fi
+
+
+$CHPL_HOME/tools/chplcheck/chplcheck $FLAGS $1.chpl >>$2 2>&1
+
+dirpath=$(cd $(dirname $1.chpl) && pwd)
+if sed "s#$dirpath/##" $2 >$2.tmp; then
+  mv $2.tmp $2
+fi
+
+# if there is a good-fixit file, try and run chplcheck with fixit
+if [ -e $1.good-fixit ]; then
+
+  $CHPL_HOME/tools/chplcheck/chplcheck \
+    $FLAGS --fixit --fixit-suffix .fixed $1.chpl >/dev/null
+
+  if diff $1.good-fixit $1.chpl.fixed; then
+    echo "[Success matching fixit for $1]" >> $2
+    rm $1.chpl.fixed
+  else
+    echo "[Error matching fixit for $1]" >> $2
+  fi
+fi

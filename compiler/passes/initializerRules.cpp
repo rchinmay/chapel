@@ -1,5 +1,5 @@
 /*
- * Copyright 2020-2022 Hewlett Packard Enterprise Development LP
+ * Copyright 2020-2025 Hewlett Packard Enterprise Development LP
  * Copyright 2004-2019 Cray Inc.
  * Other additional copyright holders may be indicated within.
  *
@@ -80,6 +80,7 @@ static DefExpr* toLocalField(AggregateType* at, CallExpr* expr);
 
 static Type*          typeForExpr(Expr* expr);
 static AggregateType* typeForNewExpr(CallExpr* newExpr);
+static AggregateType* typeForNewWithAllocatorExpr(CallExpr* newExpr);
 
 void preNormalizeFields(AggregateType* at) {
   for_alist(field, at->fields) {
@@ -144,16 +145,18 @@ static Type* typeForExpr(Expr* expr) {
   } else if (CallExpr* initCall = toCallExpr(expr)) {
     if (initCall->isPrimitive(PRIM_NEW) == true) {
       retval = typeForNewExpr(initCall);
+    } else if (initCall->isPrimitive(PRIM_NEW_WITH_ALLOCATOR) == true) {
+      retval = typeForNewWithAllocatorExpr(initCall);
     }
   }
 
   return retval;
 }
 
-static AggregateType* typeForNewExpr(CallExpr* newExpr) {
+static AggregateType* typeForNewExprHelper(CallExpr* newExpr, int type_idx) {
   AggregateType* retval = NULL;
 
-  if (CallExpr* constructor = toCallExpr(newExpr->get(1))) {
+  if (CallExpr* constructor = toCallExpr(newExpr->get(type_idx))) {
     if (SymExpr* baseExpr = toSymExpr(constructor->baseExpr)) {
       if (TypeSymbol* sym = toTypeSymbol(baseExpr->symbol())) {
         if (AggregateType* type = toAggregateType(sym->type)) {
@@ -166,6 +169,12 @@ static AggregateType* typeForNewExpr(CallExpr* newExpr) {
   }
 
   return retval;
+}
+static AggregateType* typeForNewExpr(CallExpr* newExpr) {
+  return typeForNewExprHelper(newExpr, 1);
+}
+static AggregateType* typeForNewWithAllocatorExpr(CallExpr* newExpr) {
+  return typeForNewExprHelper(newExpr, 2);
 }
 
 /************************************* | **************************************
@@ -282,10 +291,7 @@ static InitNormalize preNormalize(AggregateType* at,
 static void preNormalizeInit(FnSymbol* fn) {
   AggregateType* at = toAggregateType(fn->_this->type);
 
-  if (fn->throwsError() == true) {
-    USR_FATAL(fn, "initializers are not yet allowed to throw errors");
-
-  } else if (at->isRecord() == true || at->isUnion()) {
+  if (at->isRecord() == true || at->isUnion()) {
     preNormalizeInitRecordUnion(fn);
 
   } else if (at->isClass()  == true) {
@@ -420,14 +426,22 @@ static void checkLocalPhaseOneErrors(const InitNormalize& state,
   }
 }
 
+static const char* getInitDoneStyle(CallExpr* callExpr);
+
 static void checkInvalidInit(InitNormalize& state, CallExpr* callExpr) {
   const char* initName = NULL;
+  const char* initStyle = NULL;
+
   if (isSuperInit(callExpr) == true) {
     initName = "super.init()";
   } else if (isThisInit(callExpr) == true) {
     initName = "this.init()";
-  } else if (isInitDone(callExpr) == true) {
-    initName = "this.complete()";
+  } else if ((initStyle = getInitDoneStyle(callExpr))) {
+    initName = "init this";
+  }
+
+  if (initStyle && strcmp(initStyle, "complete") == 0) {
+    USR_WARN(callExpr, "'this.complete()' is deprecated; please use 'init this' instead");
   }
 
   if (initName == NULL) {
@@ -435,26 +449,26 @@ static void checkInvalidInit(InitNormalize& state, CallExpr* callExpr) {
   }
 
   if (state.isPhase2() == true) {
-    USR_FATAL(callExpr, "use of %s call in phase 2", initName);
+    USR_FATAL(callExpr, "use of '%s' call in phase 2", initName);
 
   } else if (state.inLoopBody() == true) {
-    USR_FATAL(callExpr, "use of %s call in loop body", initName);
+    USR_FATAL(callExpr, "use of '%s' call in loop body", initName);
 
   } else if (state.inParallelStmt() == true) {
     USR_FATAL(callExpr,
-              "use of %s call in a parallel statement", initName);
+              "use of '%s' call in a parallel statement", initName);
 
   } else if (state.inCoforall() == true) {
     USR_FATAL(callExpr,
-              "use of %s call in a coforall loop body", initName);
+              "use of '%s' call in a coforall loop body", initName);
 
   } else if (state.inForall() == true) {
     USR_FATAL(callExpr,
-              "use of %s call in a forall loop body", initName);
+              "use of '%s' call in a forall loop body", initName);
 
   } else if (state.inOn() == true) {
     USR_FATAL(callExpr,
-              "use of %s call in an on block", initName);
+              "use of '%s' call in an on block", initName);
   }
 }
 
@@ -499,7 +513,10 @@ static InitNormalize preNormalize(AggregateType* at,
         } else if (isSuperInit(callExpr) == true) {
           Expr* next = callExpr->next;
 
-          INT_ASSERT(state.isPhase0() == true);
+          if (state.isPhase0() != true) {
+            USR_FATAL(callExpr,
+                       "duplicate use of 'super.init()' in initializer, this should only be called once");
+          }
           state.completePhase0(callExpr);
 
           if (at->isRecord() == true) {
@@ -526,7 +543,7 @@ static InitNormalize preNormalize(AggregateType* at,
         checkInvalidInit(state, callExpr);
         state.completePhase1(callExpr);
 
-        stmt->remove();
+        stmt->replace(new CallExpr(PRIM_INIT_DONE));
 
         stmt = next;
 
@@ -673,8 +690,8 @@ static InitNormalize preNormalize(AggregateType* at,
           // Only one branch contained an init
           if (stateThen.isPhase2() != stateElse.isPhase2()) {
             USR_FATAL(cond,
-                      "Both arms of a conditional must use this.init() "
-                      "or this.complete() in phase 1");
+                      "Both arms of a conditional must use 'this.init()' "
+                      "or 'init this' in phase 1");
 
           } else if (stateThen.currField() != stateElse.currField()) {
             unifyConditionalBranchLastField(at, cond, &stateThen, &stateElse);
@@ -704,6 +721,9 @@ static InitNormalize preNormalize(AggregateType* at,
       state.merge(preNormalize(at,
                                block,
                                InitNormalize(block, state)));
+      stmt = stmt->next;
+    } else if (TryStmt* tryStmt = toTryStmt(stmt)) {
+      state.merge(preNormalize(at, tryStmt->body(), InitNormalize(tryStmt->body(), state)));
       stmt = stmt->next;
 
     } else {
@@ -842,28 +862,45 @@ static bool isUnresolvedSymbol(Expr* expr, const char* name) {
   return retval;
 }
 
-bool isInitDone(CallExpr* callExpr) {
-  bool retval = false;
+static const char* getInitDoneStyleLiteral(Expr* expr) {
+  if (isStringLiteral(expr, "chpl__initThisType")) {
+    return "chpl__initThisType";
+  } else if (isStringLiteral(expr, "complete")) {
+    return "complete";
+  }
+
+  return nullptr;
+}
+
+// If the call is 'this.complete()' or 'init this', return the string that
+// represents the call. Otherwise, returns nullptr.
+static const char* getInitDoneStyle(CallExpr* callExpr) {
+  const char* retval = nullptr;
 
   if (callExpr->numActuals() == 0) {
     if (UnresolvedSymExpr* usym = toUnresolvedSymExpr(callExpr->baseExpr)) {
-      if (strcmp(usym->unresolved, "complete") == 0) {
-        retval = true;
+      if (strcmp(usym->unresolved, "chpl__initThisType") == 0 ||
+          strcmp(usym->unresolved, "complete") == 0) {
+        retval = usym->unresolved;
       }
 
     } else if (CallExpr* subCall = toCallExpr(callExpr->baseExpr)) {
       if (subCall->numActuals()                        ==    2 &&
-          subCall->isNamedAstr(astrSdot)               == true &&
-          isStringLiteral(subCall->get(2), "complete") == true) {
-
-        if (isSymbolThis(subCall->get(1)) == true) {
-          retval = true;
+          subCall->isNamedAstr(astrSdot)               == true) {
+        if (auto litValue = getInitDoneStyleLiteral(subCall->get(2))) {
+          if (isSymbolThis(subCall->get(1)) == true) {
+            retval = litValue;
+          }
         }
       }
     }
   }
 
   return retval;
+}
+
+bool isInitDone(CallExpr* callExpr) {
+  return getInitDoneStyle(callExpr) != nullptr;
 }
 
 /************************************* | **************************************
@@ -876,7 +913,14 @@ static bool isUnacceptableTry(Expr* stmt) {
   bool retval = false;
 
   if (TryStmt* ts = toTryStmt(stmt)) {
-    if (ts->tryBang() == false) {
+    if (ts->isSyncTry()) {
+      // Ignore compiler-inserted sync-try statements for now since they
+      // are invisible to the user and sync statements on their own seem to
+      // be fine.
+      //
+      // TODO: What *should* we be doing here?
+      retval = false;
+    } else if (ts->tryBang() == false) {
       // Only allow try! statements in initializers at the moment
       retval = true;
 
@@ -1145,8 +1189,13 @@ static bool findPostinitAndMark(AggregateType* at) {
     int size = at->methods.n;
 
     for (int i = 0; i < size && retval == false; i++) {
-      if (at->methods.v[i] != NULL)
-        retval = at->methods.v[i]->isPostInitializer();
+      FnSymbol* methodi = at->methods.v[i];
+      if (methodi != nullptr && methodi->isPostInitializer()) {
+        // capture the post-initializer upon finding it
+        at->postinit = methodi;
+        retval = true;
+        break;
+      }
     }
 
   } else {
@@ -1402,10 +1451,23 @@ static void buildPostInit(AggregateType* at) {
   fn->addFlag(FLAG_METHOD_PRIMARY);
 
   if (at->isClass()) {
+    // If our parent class's postinit() is throwing, ours needs to be as well
+    forv_Vec(AggregateType, pt, at->dispatchParents) {
+      if (pt->hasPostInitializer()) {
+        if (pt->postinit->throwsError()) {
+          fn->throwsErrorInit();
+          break;
+        }
+      }
+    }
+
+    // Insert call to parent class postinit()
     insertSuperPostInit(fn);
   }
 
   at->methods.add(fn);
+
+  at->postinit = fn;
 }
 
 //
@@ -1420,9 +1482,13 @@ static int insertPostInit(AggregateType* at, bool insertSuper) {
   bool found = false;
 
   forv_Vec(FnSymbol, method, at->methods) {
+    // Happens because we can set slots to 'nullptr' in 'cleanAst'...
+    if (method == nullptr) continue;
+
     if (method->isPostInitializer()) {
       if (method->where == NULL) {
         found = true;
+        at->postinit = method;
       }
       if (method->formals.length > 2) {
         // Only accept method token and 'this'

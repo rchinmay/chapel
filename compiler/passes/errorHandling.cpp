@@ -1,5 +1,5 @@
 /*
- * Copyright 2020-2022 Hewlett Packard Enterprise Development LP
+ * Copyright 2020-2025 Hewlett Packard Enterprise Development LP
  * Copyright 2004-2019 Cray Inc.
  * Other additional copyright holders may be indicated within.
  *
@@ -26,6 +26,7 @@
 #include "DeferStmt.h"
 #include "ForallStmt.h"
 #include "ForLoop.h"
+#include "InitErrorHandling.h"
 #include "driver.h"
 #include "resolution.h"
 #include "stmt.h"
@@ -33,6 +34,8 @@
 #include "symbol.h"
 #include "TryStmt.h"
 #include "wellknown.h"
+
+#include "global-ast-vecs.h"
 
 #include <stack>
 
@@ -151,10 +154,10 @@ static void markImplicitThrows(FnSymbol* fn, std::set<FnSymbol*>* visited, impli
 static bool canBlockStmtThrow(BlockStmt* block);
 static void checkErrorHandling(FnSymbol* fn, implicitThrowsReasons_t * reasons);
 static bool isCompilerGeneratedFunction(FnSymbol* fn);
-static bool isUncheckedThrowsFunction(FnSymbol* fn);
 
 static Type* dtErrorNilable() {
-  return getDecoratedClass(dtError, ClassTypeDecorator::UNMANAGED_NILABLE);
+  auto details = FunctionType::constructErrorHandlingFormal();
+  return details.type();
 }
 
 namespace {
@@ -168,7 +171,10 @@ static AList castToErrorNilable(Symbol* error, SymExpr* &castedError);
 class ErrorHandlingVisitor final : public AstVisitorTraverse {
 
 public:
-  ErrorHandlingVisitor       (ArgSymbol* _outFormal, LabelSymbol* _epilogue);
+  InitErrorHandling*  state;
+
+  ErrorHandlingVisitor       (ArgSymbol* _outFormal, LabelSymbol* _epilogue,
+                              InitErrorHandling* _state);
 
   bool enterTryStmt  (TryStmt*   node) override;
   void exitTryStmt   (TryStmt*   node) override;
@@ -180,6 +186,9 @@ public:
   void exitForallStmt (ForallStmt* node) override;
   bool enterDeferStmt(DeferStmt* node) override;
   void exitDeferStmt (DeferStmt* node) override;
+
+  // Specifically for ensuring we track initializer state appropriately
+  bool enterCondStmt(CondStmt* node) override;
 
 private:
   struct TryInfo {
@@ -209,14 +218,18 @@ private:
                             BlockStmt* body);
   void exitForallLoop(Stmt* node);
 
+  void checkThrowingFuncInInit(CallExpr* node, bool insideTryStack);
+
   ErrorHandlingVisitor();
 };
 
 ErrorHandlingVisitor::ErrorHandlingVisitor(ArgSymbol*   _outError,
-                                           LabelSymbol* _epilogue) {
+                                           LabelSymbol* _epilogue,
+                                           InitErrorHandling* _state) {
   deferDepth = 0;
   outError   = _outError;
   epilogue   = _epilogue;
+  state = _state;
 }
 
 bool ErrorHandlingVisitor::enterTryStmt(TryStmt* node) {
@@ -335,51 +348,91 @@ void ErrorHandlingVisitor::lowerCatches(const TryInfo& info) {
   info.tryStmt->replace(tryBody);
 }
 
+static VarSymbol* createAndInsertErrorVar(Expr* insert) {
+  VarSymbol* errorVar = newTemp("error", dtErrorNilable());
+  errorVar->addFlag(FLAG_ERROR_VARIABLE);
+  insert->insertBefore(new DefExpr(errorVar));
+  insert->insertBefore(new CallExpr(PRIM_MOVE, errorVar, gNil));
+  return errorVar;
+}
+
+static bool isCallToThrowingFunction(CallExpr* node) {
+  if (auto calledFn = node->resolvedOrVirtualFunction()) {
+    return calledFn->throwsError();
+  } else if (auto calledFt = node->functionType()) {
+    return calledFt->throws();
+  }
+  return false;
+}
+
 bool ErrorHandlingVisitor::enterCallExpr(CallExpr* node) {
   bool insideTry = !tryStack.empty();
 
-  // The common case of a user-level call to a resolved function
-  FnSymbol* calledFn = node->resolvedOrVirtualFunction();
+  if (isCallToThrowingFunction(node)) {
+    FnSymbol* calledFn = node->resolvedFunction();
 
-  if (calledFn != NULL) {
-    if (calledFn->throwsError()) {
-      SET_LINENO(node);
+    checkThrowingFuncInInit(node, insideTry);
 
-      VarSymbol* errorVar    = NULL;
-      BlockStmt* errorPolicy = new BlockStmt();
-      Expr*      insert      = node->getStmtExpr();
+    SET_LINENO(node);
 
-      if (insideTry && node->tryTag != TRY_TAG_IN_TRYBANG) {
-        TryInfo info = tryStack.top();
-        errorVar = info.errorVar;
+    VarSymbol* errorVar    = NULL;
+    BlockStmt* errorPolicy = new BlockStmt();
+    Expr*      insert      = node->getStmtExpr();
 
-        errorPolicy->insertAtTail(gotoHandler());
-      } else {
-        // without try, need an error variable
-        errorVar = newTemp("error", dtErrorNilable());
-        errorVar->addFlag(FLAG_ERROR_VARIABLE);
-        insert->insertBefore(new DefExpr(errorVar));
-        insert->insertBefore(new CallExpr(PRIM_MOVE, errorVar, gNil));
+    if (insideTry && node->tryTag != TRY_TAG_IN_TRYBANG) {
+      TryInfo info = tryStack.top();
+      errorVar = info.errorVar;
 
-        if (outError != NULL && node->tryTag != TRY_TAG_IN_TRYBANG && deferDepth == 0)
+      // (a) an enclosing try/try!
+      errorPolicy->insertAtTail(gotoHandler());
+    } else {
+      // without try, need an error variable
+      errorVar = createAndInsertErrorVar(insert);
+
+      // TODO: if deferDepth > 0, either implement error handling
+      // or make the program halt regardless of insideTry or outError.
+      if (outError != NULL && node->tryTag != TRY_TAG_IN_TRYBANG &&
+          deferDepth == 0 && !node->parentSymbol->hasFlag(FLAG_OUTSIDE_TRY)) {
+        // (b) throw from the enclosing function
+        errorPolicy->insertAtTail(setOutGotoEpilogue(errorVar));
+      }
+      else if (calledFn && calledFn->hasFlag(FLAG_TASK_JOIN_IMPL_FN)) {
+        if (node->parentSymbol->hasFlag(FLAG_ITERATOR_FN))
+          // (c) coforall or similar in a non-throwing iterator
+          // ==> we will propagate the error when the iterator is inlined
+          errorPolicy->insertAtTail(haltExpr(errorVar, false));
+        else if (node->parentSymbol->hasFlag(FLAG_TASK_FN_FROM_ITERATOR_FN))
+          // (d) coforall/... in a task function in a non-throwing iterator
+          // ==> propagate the error through the task function
           errorPolicy->insertAtTail(setOutGotoEpilogue(errorVar));
         else
-          errorPolicy->insertAtTail(haltExpr(errorVar, false));
+          // (e) coforall or similar in a non-throwing procedure
+          // ==> halt right away
+          errorPolicy->insertAtTail(haltExpr(errorVar, true));
       }
+      else {
+        // (f) a throwing call in a non-throwing function ==> halt right away
+        errorPolicy->insertAtTail(haltExpr(errorVar, true));
+      }
+    }
 
-      node->insertAtTail(errorVar); // adding error argument to call
+    node->insertAtTail(errorVar); // adding error argument to call
 
-      // If we are calling a non-blocking task function,
-      // we'll lower the error handling in parallel.cpp,
-      // at the end of parallel(),  using lowerCheckErrorPrimitive.
+    // If we are calling a non-blocking task function,
+    // we'll lower the error handling in parallel.cpp,
+    // at the end of parallel(),  using lowerCheckErrorPrimitive.
+    bool skipCheck = false;
+    if (calledFn) {
       if (calledFn->hasFlag(FLAG_NON_BLOCKING) ||
           calledFn->hasFlag(FLAG_BEGIN) ||
           calledFn->hasFlag(FLAG_COBEGIN_OR_COFORALL)) {
         // Don't add errorPolicy block or conditional.
-      } else {
-        // Regular operation
-        insert->insertAfter(new CondStmt(new CallExpr(PRIM_CHECK_ERROR, errorVar), errorPolicy));
+        skipCheck = true;
       }
+    }
+    if (!skipCheck) {
+      // Regular operation
+      insert->insertAfter(new CondStmt(new CallExpr(PRIM_CHECK_ERROR, errorVar), errorPolicy));
     }
   } else if (node->isPrimitive(PRIM_THROW)) {
     SET_LINENO(node);
@@ -413,6 +466,22 @@ bool ErrorHandlingVisitor::enterCallExpr(CallExpr* node) {
     SET_LINENO(node);
     node->replace(new SymExpr(info.errorVar));
   }
+
+  // If appropriate, advance the phase after we've done our other checks.
+  // This will allow us to check if the `this.init` or `super.init` call would
+  // throw (which shouldn't be allowed yet)
+  if (state != NULL) {
+    if (isInitStmt(node) == true) {
+      if (isResolvedThisInit(node) == true) {
+        state->completePhase1(node);
+      } else if (isResolvedSuperInit(node) == true) {
+        state->completePhase0(node);
+      }
+    } else if (state->isInitDone(node) == true) {
+      state->completePhase1(node);
+    }
+  }
+
   return true;
 }
 
@@ -425,12 +494,7 @@ void ErrorHandlingVisitor::setupForThrowingLoop(Stmt* node,
                                                 LabelSymbol* handlerLabel,
                                                 BlockStmt* body)
 {
-  VarSymbol*   errorVar     = newTemp("error", dtErrorNilable());
-  errorVar->addFlag(FLAG_ERROR_VARIABLE);
-
-  node->insertBefore(new DefExpr(errorVar));
-  node->insertBefore(new CallExpr(PRIM_MOVE, errorVar, gNil));
-
+  VarSymbol* errorVar = createAndInsertErrorVar(node);
   TryInfo info = {errorVar, handlerLabel, NULL, node, body};
   tryStack.push(info);
 }
@@ -448,6 +512,7 @@ bool ErrorHandlingVisitor::enterForLoop(ForLoop* node) {
     LabelSymbol* b = new LabelSymbol("forall_break_label");
     // intentionally *not* marked with FLAG_ERROR_LABEL so that
     // we don't auto-destroy everything just before it.
+    b->addFlag(FLAG_FORALL_BREAK_LABEL);
     node->breakLabelSet(b);
     node->insertAfter(new DefExpr(b));
   }
@@ -457,8 +522,7 @@ bool ErrorHandlingVisitor::enterForLoop(ForLoop* node) {
   return true;
 }
 
-
-static bool canForallStmtThrow(ForallStmt* fs) {
+static void checkTPVs(ForallStmt* fs) {
   // Do this first to check for throwing non-POD initializer exprs.
   for_shadow_vars(svar, temp, fs) {
     if (BlockStmt* IB = svar->initBlock()) {
@@ -470,7 +534,6 @@ static bool canForallStmtThrow(ForallStmt* fs) {
           USR_FATAL_CONT(IB, "the initialization expression of the task-private"
             " variable '%s' throws - this is currently not supported"
             " for variables of non-POD types", svar->name);
-        return true;
       }
     }
     if (BlockStmt* DB = svar->deinitBlock()) {
@@ -480,19 +543,19 @@ static bool canForallStmtThrow(ForallStmt* fs) {
                        " throws - this is currently not supported", svar->name);
     }
   }
-
-  // Now check the loop body.
-  if (canBlockStmtThrow(fs->loopBody()))
-    return true;
-
-  // Did not find anything that throws.
-  return false;
 }
 
 bool ErrorHandlingVisitor::enterForallStmt(ForallStmt* node) {
-  // We assume that fRecIterGetIterator/fRecIterFreeIterator do not throw.
+  checkTPVs(node);
 
-  if (!canForallStmtThrow(node))
+  // If 'node' is outside an error handling context:, the body will need to
+  // halt on an error, so treat this as non-throwing.
+  if (tryStack.empty() &&
+      (outError == NULL || node->parentSymbol->hasFlag(FLAG_OUTSIDE_TRY)))
+    return true;
+
+  // We assume that fRecIterGetIterator/fRecIterFreeIterator do not throw.
+  if (!canBlockStmtThrow(node->loopBody()))
     return true;
 
   SET_LINENO(node);
@@ -502,6 +565,7 @@ bool ErrorHandlingVisitor::enterForallStmt(ForallStmt* node) {
     LabelSymbol* b = new LabelSymbol("forall_break_label");
     // intentionally *not* marked with FLAG_ERROR_LABEL so that
     // we don't auto-destroy everything just before it.
+    b->addFlag(FLAG_FORALL_BREAK_LABEL);
     node->fErrorHandlerLabel = b;
     node->insertAfter(new DefExpr(b));
   }
@@ -518,6 +582,8 @@ void ErrorHandlingVisitor::exitForallLoop(Stmt* node)
 
   TryInfo& info = tryStack.top();
   if (info.throwingForall == NULL)
+    return;
+  else if (info.throwingForall != node)
     return;
 
   tryStack.pop();
@@ -564,6 +630,67 @@ void ErrorHandlingVisitor::exitDeferStmt(DeferStmt* node) {
   deferDepth--;
 }
 
+bool ErrorHandlingVisitor::enterCondStmt(CondStmt* node) {
+  if (state != NULL) {
+    InitErrorHandling* oldState = state;
+    InitErrorHandling* thenState = new InitErrorHandling(node, *state);
+    state = thenState;
+
+    node->thenStmt->accept(this);
+
+    if (node->elseStmt != NULL) {
+      InitErrorHandling* elseState = new InitErrorHandling(node, *oldState);
+      state = elseState;
+      node->elseStmt->accept(this);
+
+      // Handling during normalize should ensure that both branches result in
+      // the same final state
+      INT_ASSERT(thenState->currPhase() == elseState->currPhase());
+      thenState->merge(*elseState);
+      delete elseState;
+    }
+    state = oldState; // To ensure we don't strand the memory
+
+    state->merge(*thenState);
+    delete thenState;
+
+    return false; // Already handled, no need to traverse again
+  } else {
+    return true; // Normal behavior
+  }
+}
+
+void ErrorHandlingVisitor::checkThrowingFuncInInit(CallExpr* node,
+                                                   bool insideTryStack) {
+  if (state != NULL) {
+    FnSymbol* fn = state->theFn();
+    INT_ASSERT(fn);
+
+    if (insideTryStack && node->tryTag != TRY_TAG_IN_TRYBANG) {
+      TryInfo info = tryStack.top();
+      if (info.tryStmt->tryBang()) {
+        if (info.tryStmt->_catches.length != 0) {
+          if (!state->isPhase2()) {
+            USR_FATAL_CONT(node,
+                           "cannot call a throwing function in a try! with catch clauses before phase 2");
+          }
+        }
+      } else {
+        if (!state->isPhase2() && fn->throwsError()) {
+          USR_FATAL_CONT(node,
+                         "cannot call a throwing function outside of a try! before phase 2");
+        }
+      }
+    } else {
+      if (!state->isPhase2() && node->tryTag != TRY_TAG_IN_TRYBANG &&
+          fn->throwsError()) {
+        USR_FATAL_CONT(node,
+                       "cannot call a throwing function outside of a try! before phase 2");
+      }
+    }
+  } // not in an initializer
+}
+
 
 // Sets the fn out variable with the given error, then goes to the fn epilogue.
 AList ErrorHandlingVisitor::setOutGotoEpilogue(VarSymbol* error) {
@@ -600,9 +727,18 @@ AList ErrorHandlingVisitor::setOuterErrorAndGotoHandler(VarSymbol* error) {
   return ret;
 }
 
+static AList errorCondHelper(VarSymbol* errorVar,
+                             BlockStmt* thenBlock, BlockStmt* elseBlock);
+
 AList ErrorHandlingVisitor::errorCond(VarSymbol* errorVar,
                                       BlockStmt* thenBlock,
                                       BlockStmt* elseBlock) {
+  return errorCondHelper(errorVar, thenBlock, elseBlock);
+}
+
+static AList errorCondHelper(VarSymbol* errorVar,
+                             BlockStmt* thenBlock, BlockStmt* elseBlock)
+{
   VarSymbol* errorExistsVar = newTemp("shouldHandleError", dtBool);
   CallExpr*  errorExists    = new CallExpr(PRIM_CHECK_ERROR, errorVar);
 
@@ -667,24 +803,26 @@ static bool catchesNotExhaustive(TryStmt* tryStmt) {
 // Returns true if we should raise strict-mode errors
 // for this call.
 static bool shouldEnforceStrict(CallExpr* node, int taskFunctionDepth) {
-  if (FnSymbol* calledFn = node->resolvedFunction()) {
-    bool inCompilerGeneratedFn = false;
-    bool inDefaultActualFn = false;
-    if (FnSymbol* parentFn = toFnSymbol(node->parentSymbol)) {
-      // Don't check wrapper functions in strict mode, unless they are task
-      // functions and we know the caller of the task function is not declared
-      // as throws.
-      inCompilerGeneratedFn = isCompilerGeneratedFunction(parentFn) &&
-        !(isTaskFun(parentFn) && taskFunctionDepth > 0);
-      inDefaultActualFn = parentFn->hasFlag(FLAG_DEFAULT_ACTUAL_FUNCTION);
-    }
-    bool callsUncheckedThrowsFn = isUncheckedThrowsFunction(calledFn);
-    bool strictError = !((inCompilerGeneratedFn && !inDefaultActualFn) ||
-                         callsUncheckedThrowsFn);
+  if (!isCallToThrowingFunction(node)) return false;
 
-    return strictError;
+  auto calledFn = node->resolvedFunction();
+  bool inCompilerGeneratedFn = false;
+  bool inDefaultActualFn = false;
+
+  if (FnSymbol* parentFn = toFnSymbol(node->parentSymbol)) {
+    // Don't check wrapper functions in strict mode, unless they are task
+    // functions and we know the caller of the task function is not declared
+    // as throws.
+    inCompilerGeneratedFn = isCompilerGeneratedFunction(parentFn) &&
+                            !(isTaskFun(parentFn) &&
+                            taskFunctionDepth > 0);
+    inDefaultActualFn = parentFn->hasFlag(FLAG_DEFAULT_ACTUAL_FUNCTION);
   }
-  return false;
+
+  bool uncheckedCall = calledFn && calledFn->hasFlag(FLAG_UNCHECKED_THROWS);
+  bool ret = !((inCompilerGeneratedFn && !inDefaultActualFn) ||
+               (uncheckedCall));
+  return ret;
 }
 
 
@@ -718,7 +856,7 @@ public:
   bool enterTryStmt  (TryStmt*   node) override;
   void exitTryStmt   (TryStmt*   node) override;
   bool enterCallExpr (CallExpr*  node) override;
-  bool enterForLoop  (ForLoop*  node) override;
+  bool enterForLoop  (ForLoop*   node) override;
 
   // Does this function throw?
   bool throws() { return canThrow; }
@@ -918,70 +1056,105 @@ static void issueThrowingFnError(FnSymbol* calledFn,
                                  CallExpr* node,
                                  implicitThrowsReasons_t* reasons,
                                  const char* problem) {
+  auto calledFt = node->isIndirectCall() ? node->functionType() : nullptr;
   const char* desc = "cast";
   bool cast = true;
-  if (calledFn->name != astrScolon) {
+
+  if (calledFn && calledFn->name != astrScolon) {
     desc = astr("function ", calledFn->name);
     cast = false;
+  } else if (calledFt) {
+    desc = astr("function value of type '", calledFt->toString(), "'");
   }
+
   USR_FATAL_CONT(node, "call to throwing %s %s", desc, problem);
-  if (!cast) {
+  if (calledFn && !cast) {
     USR_PRINT(calledFn, "throwing function %s defined here", calledFn->name);
   }
   printReason(node, reasons);
 }
 
-
+/*
+If this is a call to a task function TF:
+* The call itself is (correctly) not checked for errors.
+* If TF is not implicitly-throwing
+  (which happens when all errors inside it, if any, are handled):
+  - no error checking inside TF is performed here;
+  - error checking inside TF is done by checkErrorHandling(TF),
+    at which point TF is treated as a non-throwing function;
+    however the only errors it can generate are an improper catchall
+    or "throwing call without try or try! (strict mode)",
+    if there were any other offenders, it would have been marked
+    implicitly-throwing.
+* If TF is implicitly-throwing:
+  - TF is checked recursively here if its enclosing non-task function
+    is non-throwing, including the case where taskFunctionDepth > 0,
+    which can occur only under this same condition;
+    TODO: simplify this check to 'if (!fnCanThrow)'
+  - TF is checked again by checkErrorHandling(TF),
+    at which point TF is treated as a throwing function; for this reason
+    the only errors it can generate are again an improper catchall
+    or "throwing call without try or try! (strict mode)", all other
+    conditions are acceptable within a throwing function.
+TODO: simplify this logic and do not descend into TF here.
+Instead check inside a TF only in checkErrorHandling(). Use FLAG_OUTSIDE_TRY
+to determine whether the enclosing function is non-throwing.
+*/
 bool ErrorCheckingVisitor::enterCallExpr(CallExpr* node) {
   bool insideTry = (tryDepth > 0);
 
-  if (FnSymbol* calledFn = node->resolvedFunction()) {
-    if (calledFn->throwsError()) {
+  if (isCallToThrowingFunction(node)) {
+    auto calledFn = node->resolvedFunction();
+    auto parentFn = toFnSymbol(node->parentSymbol);
+    bool inThrowingFunction = parentFn ? parentFn->throwsError() : false;
 
-      bool inThrowingFunction = false;
-      if (FnSymbol* parentFn = toFnSymbol(node->parentSymbol)) {
-        inThrowingFunction = parentFn->throwsError();
+    if (!inThrowingFunction && calledFn && isTaskFun(calledFn)) {
+      taskFunctionDepth++;
+      calledFn->body->accept(this);
+      taskFunctionDepth--;
+      return true;
+    } else if (taskFunctionDepth > 0) {
+      if (calledFn && isTaskFun(calledFn)) {
+        taskFunctionDepth++;
+        calledFn->body->accept(this);
+        taskFunctionDepth--;
+        return true;
+      } else {
+        // The above logic never descends into a task function - therefore
+        // never gets to this point - unless the top-most non-task parentFn
+        // is non-throwing. Cf. at this point we are in a throwing task fn.
+        // So, adjust 'inThrowingFunction' to correspond to the top-most
+        // non-task parentFn. This will make it equivalent to 'fnCanThrow'.
+        inThrowingFunction = false;
+      }
+    } else if (calledFn && isTaskFun(calledFn)) {
+      // One way or another, we should not be going further
+      // if it is a task function.
+      return true;
+    }
 
-        if (!inThrowingFunction && isTaskFun(calledFn)) {
-          taskFunctionDepth++;
-          calledFn->body->accept(this);
+    INT_ASSERT(inThrowingFunction == fnCanThrow);
 
-          taskFunctionDepth--;
-          return true;
-        } else if (taskFunctionDepth > 0) {
-          if (isTaskFun(calledFn)) {
-            taskFunctionDepth++;
-            calledFn->body->accept(this);
+    if (insideTry || node->tryTag == TRY_TAG_IN_TRYBANG) {
 
-            taskFunctionDepth--;
-            return true;
-          } else {
-            inThrowingFunction = false;
-          }
-        }
+      // OK, in a try { } or marked with try!
+
+    } else if(node->tryTag == TRY_TAG_IN_TRY) {
+      if (!inThrowingFunction) {
+        issueThrowingFnError(calledFn, node, reasons,
+                             "is in a try but not handled");
       }
 
-      if (insideTry || node->tryTag == TRY_TAG_IN_TRYBANG) {
+      // Otherwise, OK, a try in a throwing function
 
-        // OK, in a try { } or marked with try!
-
-      } else if(node->tryTag == TRY_TAG_IN_TRY) {
-        if (!inThrowingFunction) {
+    } else {
+      if (shouldEnforceStrict(node, taskFunctionDepth)) {
+        if (mode == ERROR_MODE_STRICT) {
           issueThrowingFnError(calledFn, node, reasons,
-                               "is in a try but not handled");
-        }
-
-        // Otherwise, OK, a try in a throwing function
-
-      } else {
-        if (shouldEnforceStrict(node, taskFunctionDepth)) {
-          if (mode == ERROR_MODE_STRICT) {
-            issueThrowingFnError(calledFn, node, reasons,
-                                 "without try or try! (strict mode)");
-          } else if (mode == ERROR_MODE_RELAXED && !inThrowingFunction) {
-            issueThrowingFnError(calledFn, node, reasons,
-                                 "without throws, try, or try! (relaxed mode)");
-          }
+                               "without try or try! (strict mode)");
+        } else if (mode == ERROR_MODE_RELAXED && !inThrowingFunction) {
+          issueThrowingFnError(calledFn, node, reasons,
+                               "without throws, try, or try! (relaxed mode)");
         }
       }
     }
@@ -1010,6 +1183,104 @@ void ErrorCheckingVisitor::exitDeferStmt(DeferStmt* node) {
 
 } /* end anon namespace */
 
+Symbol* findErrorVarForHandlerLabel(LabelSymbol* handlerLabel) {
+  // find the error that this handlerLabel is working with
+  for(Expr* e = handlerLabel->defPoint->next; e != NULL; e = e->next) {
+    std::vector<CallExpr*> calls;
+    collectCallExprs(e, calls);
+    for_vector(CallExpr, call, calls) {
+      if (call->isPrimitive(PRIM_CHECK_ERROR)) {
+        SymExpr* se = toSymExpr(call->get(1));
+        INT_ASSERT(se->symbol()->hasFlag(FLAG_ERROR_VARIABLE));
+        return se->symbol();
+      }
+    }
+  }
+
+  INT_FATAL("Could not find error variable for handler");
+  return NULL;
+}
+
+struct ErrorVarAndGoto { Symbol* errorVar; GotoStmt* gotoHandler; };
+
+static ArgSymbol* errorFormal(FnSymbol* fn) {
+  for_formals(formal, fn)
+    if (formal->hasFlag(FLAG_ERROR_VARIABLE))
+      return formal;
+  return NULL;
+}
+
+//
+// Returns (error variable, goto to the handler label) for the error handling
+// block of 'fs'. If the error handling block does not exist, creates it.
+//
+// The newly-created error handler is to be used for an IBB only, i.e.,
+// to handle an error thrown within loop body, whereas the ForallStmt
+// and the IBB (which is right after a yield) are within an iterator.
+// The error received by this error handler should not be passed to an
+// enclosing try-block because errors thrown within loop body should not be
+// handled by the iterator's try-blocks. Although this will happen currently,
+// for example when the ForallStmt has an existing error handler that passes
+// an error to an enclosing try-block.
+//
+// The label is created analogously to ErrorHandlingVisitor::enterForallStmt().
+// The goto looks like the one created in ErrorHandlingVisitor::gotoHandler().
+//
+static ErrorVarAndGoto forallHandlerForIBB(ForallStmt* fs) {
+  LabelSymbol* handlerLabel = fs->fErrorHandlerLabel;
+  VarSymbol*   errorVar     = NULL;
+  if (handlerLabel == nullptr) {
+    // distinguish its name from regular forall_break_label, for debugging
+    handlerLabel = new LabelSymbol("forall_IBB_break_label");
+    handlerLabel->addFlag(FLAG_FORALL_BREAK_LABEL);
+    fs->fErrorHandlerLabel = handlerLabel;
+    fs->insertAfter(new DefExpr(handlerLabel));
+    // 'fs' not having handlerLabel means it does not have errorVar either.
+    errorVar = createAndInsertErrorVar(fs);
+
+    // Pass errorVar to the enclosing error handling entity:
+    // either the function's out_error or the forall's error.
+    ErrorVarAndGoto parentEG = {NULL, NULL};
+    if (ForallStmt* parentFS = enclosingForallStmt(fs)) {
+      // connect to the enclosing ForallStmt
+      parentEG = forallHandlerForIBB(parentFS);
+    }
+    else {
+      // connect to the function's out_error
+      FnSymbol* parentFn = toFnSymbol(fs->parentSymbol);
+      parentEG.gotoHandler = new GotoStmt(GOTO_ERROR_HANDLING_RETURN,
+                                   parentFn->getOrCreateEpilogueLabel());
+      parentEG.errorVar = errorFormal(parentFn);
+    }
+
+    BlockStmt* errorPolicy = new BlockStmt();
+    if (parentEG.errorVar == nullptr) {
+      errorPolicy->insertAtTail(new CallExpr(gChplPropagateError, errorVar));
+    }
+    else {
+      errorPolicy->insertAtTail(
+                        new CallExpr(PRIM_ASSIGN, parentEG.errorVar, errorVar));
+      errorPolicy->insertAtTail(parentEG.gotoHandler);
+    }
+    handlerLabel->defPoint->insertAfter(
+                                errorCondHelper(errorVar, errorPolicy, NULL));
+  }
+  else {
+    // Find the already-existing errorVar.
+    errorVar = toVarSymbol(findErrorVarForHandlerLabel(handlerLabel));
+  }
+
+  ErrorVarAndGoto result =
+    {errorVar, new GotoStmt(GOTO_BREAK_ERROR_HANDLING, handlerLabel)};
+  return result;
+}
+
+// Returns a new GotoStmt to fs->fErrorHandlerLabel.
+// If the label is not there, creates the label, the error variable,
+// and the error handling block.
+GotoStmt* gotoForallErrorHandler(ForallStmt* fs) {
+  return forallHandlerForIBB(fs).gotoHandler;
+}
 
 bool canFunctionImplicitlyThrow(FnSymbol* fn)
 {
@@ -1143,11 +1414,10 @@ static void checkErrorHandling(FnSymbol* fn, implicitThrowsReasons_t* reasons)
 
 static ArgSymbol* addOutErrorArg(FnSymbol* fn)
 {
-  ArgSymbol* outError = NULL;
-
   SET_LINENO(fn);
-
-  outError = new ArgSymbol(INTENT_REF, "error_out", dtErrorNilable());
+  auto f = FunctionType::constructErrorHandlingFormal();
+  auto outError = new ArgSymbol(f.intent(), f.name(), f.type());
+  outError->qual = f.qual();
   outError->addFlag(FLAG_ERROR_VARIABLE);
   fn->insertFormalAtTail(outError);
 
@@ -1167,14 +1437,36 @@ static void lowerErrorHandling(FnSymbol* fn)
     INT_ASSERT(epilogue); // throws requires an epilogue
   }
 
-  ErrorHandlingVisitor visitor = ErrorHandlingVisitor(outError, epilogue);
+  InitErrorHandling* state = NULL;
+  if (fn->isInitializer() == true ||
+      fn->isCopyInit() == true) {
+    state = new InitErrorHandling(fn);
+  }
+
+  ErrorHandlingVisitor visitor = ErrorHandlingVisitor(outError, epilogue,
+                                                      state);
   fn->accept(&visitor);
+
+  if (state != NULL) {
+    visitor.state->removeInitDone();
+    visitor.state = NULL;
+    delete state;
+  }
+
+  if (fn->throwsError()) {
+    INT_ASSERT(fn->isErrorHandlingLowered());
+    if (fn->hasFlag(FLAG_FIRST_CLASS_FUNCTION_INVOCATION)) {
+      // Recompute the types of roots used to initialize procedure values.
+      auto ft = fn->computeAndSetType();
+      INT_ASSERT(!ft->throws());
+    }
+  }
 }
 
 void lowerCheckErrorPrimitive()
 {
-  forv_Vec(CallExpr, call, gCallExprs) {
-    if (call->isPrimitive(PRIM_CHECK_ERROR)) {
+  forv_expanding_Vec(CallExpr, call, gCallExprs) {
+    if (call->isPrimitive(PRIM_CHECK_ERROR) && call->inTree()) {
       SET_LINENO(call);
 
       SymExpr* errSe   = toSymExpr(call->get(1));
@@ -1230,11 +1522,17 @@ static bool isCompilerGeneratedFunction(FnSymbol* fn)
          fn->hasFlag(FLAG_COMPILER_GENERATED);
 }
 
-static bool isUncheckedThrowsFunction(FnSymbol* fn)
-{
-  return fn->hasFlag(FLAG_UNCHECKED_THROWS);
+static Type* adjustThrowingFunctionTypeToNonThrowing(Type* t) {
+  if (auto ft = toFunctionType(t)) {
+    if (ft->throws()) return ft->getWithLoweredErrorHandling();
+  }
+  return t;
 }
 
+static void adjustFunctionTypesToBeNonThrowing() {
+  AdjustTypeFn adjustTypeFn = adjustThrowingFunctionTypeToNonThrowing;
+  adjustAllSymbolTypes(adjustTypeFn);
+}
 
 void lowerErrorHandling() {
   if (!fMinimalModules)
@@ -1261,6 +1559,9 @@ void lowerErrorHandling() {
   forv_Vec(FnSymbol, fn, gFnSymbols) {
     lowerErrorHandling(fn);
   }
+
+  // After lowering, all function types must be adjusted to remove 'throws'.
+  adjustFunctionTypesToBeNonThrowing();
 
   // Note, PRIM_CHECK_ERROR will be lowered when a later
   // pass calls lowerCheckErrorPrimitive().

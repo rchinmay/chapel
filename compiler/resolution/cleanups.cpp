@@ -1,5 +1,5 @@
 /*
- * Copyright 2020-2022 Hewlett Packard Enterprise Development LP
+ * Copyright 2020-2025 Hewlett Packard Enterprise Development LP
  * Copyright 2004-2019 Cray Inc.
  * Other additional copyright holders may be indicated within.
  *
@@ -32,6 +32,8 @@
 #include "passes.h"
 #include "resolution.h"
 #include "wellknown.h"
+
+#include "global-ast-vecs.h"
 
 static void clearDefaultInitFns(FnSymbol* unusedFn) {
   AggregateType* at = toAggregateType(unusedFn->retType);
@@ -81,7 +83,7 @@ static void removeUnusedFunctions() {
 
           collectDefExprs(fn, defExprs);
 
-          forv_Vec(DefExpr, def, defExprs) {
+          for (DefExpr* def : defExprs) {
             if (TypeSymbol* typeSym = toTypeSymbol(def->sym)) {
               Type* refType = typeSym->type->refType;
 
@@ -118,6 +120,14 @@ static void removeUnusedFunctions() {
           removeUnusedFunction(fn);
         }
       }
+    }
+  }
+}
+
+static void removeTopLevelSymExprs() {
+  for_alive_in_Vec(SymExpr, se, gSymExprs) {
+    if (se->getStmtExpr() == se) {
+      se->remove();
     }
   }
 }
@@ -214,6 +224,33 @@ static void removeRandomPrimitive(CallExpr* call) {
         Symbol* sym = se->symbol();
         if (isTypeSymbol(sym) || sym->hasFlag(FLAG_TYPE_VARIABLE))
           call->remove();
+
+      // Remove type construction calls that contain runtime types, now.
+      // They may have been used to default-init but are no longer needed.
+      } else if (auto innerCall = toCallExpr(call->get(2))) {
+        auto baseExpr = innerCall->baseExpr;
+
+        if (baseExpr && isTypeExpr(baseExpr)) {
+          if (isTypeExpr(call->get(1))) {
+            bool containsRuntimeType = false;
+
+            for_actuals(actual, innerCall) {
+              if (auto se = toSymExpr(actual)) {
+                auto ts = se->symbol()->type->symbol;
+
+                // Runtime types should have been transformed into values.
+                if (ts && ts->hasFlag(FLAG_RUNTIME_TYPE_VALUE)) {
+                  INT_ASSERT(se->symbol()->defPoint->inTree());
+                  containsRuntimeType = true;
+                  break;
+                }
+              }
+            }
+
+            INT_ASSERT(containsRuntimeType);
+            call->remove();
+          }
+        }
       }
     }
     break;
@@ -232,7 +269,7 @@ static void removeRandomPrimitive(CallExpr* call) {
 }
 
 static void removeRandomPrimitives() {
-  for_alive_in_Vec(CallExpr, call, gCallExprs)
+  for_alive_in_expanding_Vec(CallExpr, call, gCallExprs)
     if (call->isPrimitive())
       removeRandomPrimitive(call);
 }
@@ -507,14 +544,15 @@ static void removeUnusedTypes() {
   std::set<Type*> wellknown = getWellKnownTypesSet();
 
   // Remove unused aggregate types.
-  for_alive_in_Vec(TypeSymbol, type, gTypeSymbols) {
-    if (! type->hasFlag(FLAG_REF)                &&
-        ! type->hasFlag(FLAG_RUNTIME_TYPE_VALUE)) {
-      if (AggregateType* at = toAggregateType(type->type)) {
+  for_alive_in_expanding_Vec(TypeSymbol, ts, gTypeSymbols) {
+    if (! ts->hasFlag(FLAG_REF)                &&
+        ! ts->hasFlag(FLAG_RUNTIME_TYPE_VALUE)) {
+      // First collect any unused aggregates.
+      if (AggregateType* at = toAggregateType(ts->type)) {
         if (isUnusedClass(at, wellknown)) {
           at->symbol->defPoint->remove();
         }
-      } else if(DecoratedClassType* dt = toDecoratedClassType(type->type)) {
+      } else if(DecoratedClassType* dt = toDecoratedClassType(ts->type)) {
         if (isUnusedClass(dt->getCanonicalClass(), wellknown)) {
           dt->symbol->defPoint->remove();
         }
@@ -523,21 +561,40 @@ static void removeUnusedTypes() {
   }
 
   // Remove unused ref types.
-  for_alive_in_Vec(TypeSymbol, type, gTypeSymbols) {
-    if (type->hasFlag(FLAG_REF)) {
+  for_alive_in_Vec(TypeSymbol, ts, gTypeSymbols) {
+    if (ts->hasFlag(FLAG_REF)) {
       // Get the value type of the ref type.
-      if (AggregateType* at1 = toAggregateType(type->getValType())) {
+      if (AggregateType* at1 = toAggregateType(ts->getValType())) {
         if (isUnusedClass(at1, wellknown)) {
           // If the value type is unused, its ref type can also be removed.
-          type->defPoint->remove();
+          ts->defPoint->remove();
         }
       } else if(DecoratedClassType* dt =
-                toDecoratedClassType(type->getValType())) {
+                toDecoratedClassType(ts->getValType())) {
         if (isUnusedClass(dt->getCanonicalClass(), wellknown)) {
-          type->defPoint->remove();
+          ts->defPoint->remove();
         }
       }
     }
+  }
+}
+
+static void removeStaleFunctionTypes() {
+  for_alive_in_expanding_Vec(TypeSymbol, ts, gTypeSymbols) {
+    auto ft = toFunctionType(ts->type);
+    if (!ft) continue;
+
+    bool containsRemoved = !ft->returnType()->inTree();
+    if (!containsRemoved) {
+      for (int i = 0; i < ft->numFormals(); i++) {
+        if (!ft->formal(i)->type()->inTree()) {
+          containsRemoved = true;
+          break;
+        }
+      }
+    }
+
+    if (containsRemoved) ft->symbol->defPoint->remove();
   }
 }
 
@@ -744,23 +801,21 @@ static bool isNothingType(Type* type) {
   }
   if (type->symbol->hasFlag(FLAG_STAR_TUPLE)) {
     Symbol* field = type->getField("x0", false);
-    if (field == NULL || field->type == dtNothing) {
-      return true;
-    }
+    return field == NULL || isNothingType(field->type);
   }
   return false;
 }
 
 static void cleanupNothingVarsAndFields() {
   // Remove most uses of nothing variables and fields
-  for_alive_in_Vec(CallExpr, call, gCallExprs) {
+  for_alive_in_expanding_Vec(CallExpr, call, gCallExprs) {
      if (call->isPrimitive())
       switch (call->primitive->tag) {
       case PRIM_MOVE:
       case PRIM_ASSIGN:
         if (isNothingType(call->get(2)->typeInfo()) ||
             call->get(2)->typeInfo() == dtNothing->refType) {
-          INT_ASSERT(call->get(1)->typeInfo() == call->get(2)->typeInfo());
+          INT_ASSERT(call, call->get(1)->typeInfo() == call->get(2)->typeInfo());
           // Remove moves where the rhs has type nothing. If the rhs is a
           // call to something other than a few primitives, still make
           // that call, just don't move the result into anything.
@@ -825,10 +880,16 @@ static void cleanupNothingVarsAndFields() {
             seenNothing = true;
           }
         }
-        if (seenNothing && fn->hasFlag(FLAG_AUTO_DESTROY_FN)) {
-          INT_ASSERT(call->numActuals() == 0);
+        if (seenNothing) {
           // A 0-arg call to autoDestroy would upset later passes.
-          call->remove();
+          if (fn->hasFlag(FLAG_AUTO_DESTROY_FN)) {
+            INT_ASSERT(call->numActuals() == 0);
+            call->remove();
+          } else if (fn->name == astr_initCopy &&
+                     fn->retType == dtNothing) {
+            SET_LINENO(call);
+            call->replace(new SymExpr(gNone));
+          }
         }
       }
   }
@@ -855,11 +916,14 @@ static void cleanupNothingVarsAndFields() {
       }
   }
 
-  // Set for loop index variables that are nothing to the global nothing value
+  // Set for loop index variables that are nothing to the global nothing value.
+  // TODO: If we follow this through, does it actually make it past the pass
+  // 'lowerIterators'?
   for_alive_in_Vec(BlockStmt, block, gBlockStmts) {
     if (ForLoop* loop = toForLoop(block)) {
-      if (loop->indexGet() && loop->indexGet()->typeInfo() == dtNothing) {
-        loop->indexGet()->setSymbol(gNone);
+      auto idx = loop->indexGet();
+      if (idx && idx->typeInfo() == dtNothing) {
+        for_SymbolSymExprs(se, idx->symbol()) se->setSymbol(gNone);
       }
     }
   }
@@ -867,24 +931,25 @@ static void cleanupNothingVarsAndFields() {
   // Now that uses of nothing have been cleaned up, remove the
   // DefExprs for nothing variables.
   for_alive_in_Vec(DefExpr, def, gDefExprs) {
-      if (isNothingType(def->sym->type) ||
-          def->sym->type == dtNothing->refType) {
-        if (VarSymbol* var = toVarSymbol(def->sym)) {
-          // Avoid removing the "_val" field from refs
-          // and forall statements' induction/shadow variables.
-          if (! def->parentSymbol->hasFlag(FLAG_REF) &&
-              ! isForallIterVarDef(def)              &&
-              ! preserveShadowVar(var)               ) {
-            if (var != gNone) {
-              def->remove();
-            }
-          }
+    if (isNothingType(def->sym->type) ||
+        def->sym->type == dtNothing->refType) {
+      if (VarSymbol* var = toVarSymbol(def->sym)) {
+        // Avoid removing the "_val" field from refs
+        // and forall statements' induction/shadow variables.
+        if (!def->parentSymbol->hasFlag(FLAG_REF) &&
+            !isForallIterVarDef(def) &&
+            !preserveShadowVar(var) &&
+            var != gNone) {
+          // Otherwise we may be left with SymExpr that point to garbage.
+          for_SymbolSymExprs(se, var) se->setSymbol(gNone);
+          def->remove();
         }
       } else if (def->sym->type == dtUninstantiated &&
                  isVarSymbol(def->sym) &&
                  !def->parentSymbol->hasFlag(FLAG_REF)) {
         def->remove();
       }
+    }
   }
 
   adjustNothingShadowVariables();
@@ -894,10 +959,19 @@ static void cleanupNothingVarsAndFields() {
   // be left in the tree if optimizations are disabled, and can cause codegen
   // failures later on (at least under LLVM).
   //
-  // Solution: Remove SymExprs to none if the expr is at the
-  // statement level.
+  // Solution: Remove SymExprs to none if the expr is at the statement level.
   for_SymbolSymExprs(se, gNone) {
+    bool removeParent = false;
+    bool remove = false;
     if (se == se->getStmtExpr()) {
+      remove = true;
+    } else if (auto call = toCallExpr(se->parentExpr)) {
+      remove = call->isPrimitive(PRIM_END_OF_STATEMENT);
+      removeParent = remove && call->numActuals() == 1;
+    }
+    if (removeParent) {
+      se->parentExpr->remove();
+    } else if (remove) {
       se->remove();
     }
   }
@@ -990,6 +1064,8 @@ void pruneResolvedTree() {
 
   removeUnusedFunctions();
 
+  removeTopLevelSymExprs();
+
   if (fRemoveUnreachableBlocks) {
     deadBlockElimination();
   }
@@ -1023,6 +1099,8 @@ void pruneResolvedTree() {
   expandInitFieldPrims();
 
   cleanupNothingVarsAndFields();
+
+  removeStaleFunctionTypes();
 
   cleanupAfterRemoves();
 }

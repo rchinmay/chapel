@@ -12,8 +12,9 @@ EXTRA_DIST = $(dotpl_DATA) \
 	gasnet_handler.h \
 	gasnetrun_mic \
 	gasnet_ibrun \
-	cross-configure-cray-aries-alps \
-	cross-configure-cray-aries-slurm \
+	ident \
+	cross-configure-cray-xc-alps \
+	cross-configure-cray-xc-slurm \
 	cross-configure-intel-knc \
 	cross-configure-intel-knl
 # exclude from distribution for now
@@ -23,7 +24,9 @@ EXTRA_DIST = $(dotpl_DATA) \
 dotpldir = $(bindir)
 dotpl_DATA = gasnet_trace.pl
 
-bin_SCRIPTS = gasnet_trace
+bin_SCRIPTS = \
+	gasnet_trace \
+	ident
 
 all-local: $(bin_SCRIPTS) $(dotpl_DATA)
 

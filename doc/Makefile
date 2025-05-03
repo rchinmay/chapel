@@ -12,7 +12,7 @@ endif
 # release's verion number
 #
 WEB_DOC_DIR=
-WEB_DOC_VERSION=master
+WEB_DOC_VERSION=main
 
 # Makefile.sphinx interfaces with sphinx build commands
 include Makefile.sphinx
@@ -59,22 +59,25 @@ help-source:
 
 docs: FORCE
 	@COMP_DOCS_ERROR=0 ; \
-	(cd ../compiler/next && $(MAKE) -f Makefile.help libchplcomp-docs) || \
+	(cd ../compiler && $(MAKE) frontend-docs) || \
 	 COMP_DOCS_ERROR=1 ; \
 	$(MAKE) html-release && \
 	if [ $$COMP_DOCS_ERROR -ne 0 -o ! -d $(COMPILER_INTERNALS_DOXYGEN) ] ; \
 	  then \
 	  echo ; \
-	  echo " This docs build does not include compiler library API docs" ; \
-	  echo " Try 'make clobber-libchplcomp && make libchplcomp-docs'" ; \
+	  echo " This docs build does not include frontend library API docs" ; \
+	  echo " Try 'make frontend-docs'" ; \
 	fi
 
+docs-release: FORCE
+	$(MAKE) docs
+	cd html && rm versionButton.php && ln -s ../versionButton.php .
 
 man-chapel: FORCE
 	$(MAKE) man
 
 
-source: collect-syntax module-docs primers examples symlinks compiler-internals
+source: collect-syntax module-docs primers examples symlinks compiler-internals chplcheck-docs
 
 
 collect-syntax:
@@ -87,7 +90,7 @@ collect-syntax:
 
 module-docs:
 	@echo
-	@echo "Generating module docs from "'$$CHPL_HOME'"/modules/ into $(SOURCEDIR)/modules"
+	@echo "Generating module docs from "'$(CHPL_MAKE_HOME)'"/modules/ into $(SOURCEDIR)/modules"
 	@# modules/Makefile will
 	@#   store module docs in doc/rst/modules and doc/rst/builtins
 	@#   including meta/modules/* and meta/builtins/*
@@ -95,7 +98,7 @@ module-docs:
 
 primers:
 	@echo
-	@echo "Generating primers from "'$$CHPL_HOME'"/test/release/examples to $(SOURCEDIR)/primers"
+	@echo "Generating primers from "'$(CHPL_MAKE_HOME)'"/test/release/examples to $(SOURCEDIR)/primers"
 	@rm -rf $(CHPL_DOC_PRIMERS_BUILD_DIR)
 	@mkdir -p $(CHPL_DOC_PRIMERS_BUILD_DIR)
 	@#Note - this assumes that we are not in a release tar ball
@@ -107,7 +110,7 @@ primers:
 
 examples:
 	@echo
-	@echo "Generating hellos from "'$$CHPL_HOME'"/test/release/examples to $(SOURCEDIR)/examples"
+	@echo "Generating hellos from "'$(CHPL_MAKE_HOME)'"/test/release/examples to $(SOURCEDIR)/examples"
 	@rm -rf $(CHPL_DOC_EXAMPLES_BUILD_DIR)
 	@mkdir -p $(CHPL_DOC_EXAMPLES_BUILD_DIR)
 	@$(CHPL2RST) $(CHPL2RSTOPTS_HELLO) ../examples/hello*.chpl
@@ -118,22 +121,27 @@ examples:
 symlinks:
 	@echo
 	@echo "Creating symlinks"
-	@if [ ! -e $(SOURCEDIR)/usingchapel/man.rst ]; then ln -s $$CHPL_HOME/man/chpl.rst $(SOURCEDIR)/usingchapel/man.rst; fi
-	@if [ ! -e $(SOURCEDIR)/tools/chpldoc/man.rst ]; then ln -s $$CHPL_HOME/man/chpldoc.rst $(SOURCEDIR)/tools/chpldoc/man.rst; fi
-	@if [ ! -e $(SOURCEDIR)/tools/chplvis/examples ]; then ln -s $$CHPL_HOME/test/release/examples $(SOURCEDIR)/tools/chplvis/examples; fi
-	@if [ ! -e $(SOURCEDIR)/users-guide/base/examples ]; then ln -s $$CHPL_HOME/test/release/examples $(SOURCEDIR)/users-guide/base/examples; fi
-	@if [ ! -e $(SOURCEDIR)/users-guide/taskpar/examples ]; then ln -s $$CHPL_HOME/test/release/examples $(SOURCEDIR)/users-guide/taskpar/examples; fi
-	@if [ ! -e $(SOURCEDIR)/users-guide/datapar/examples ]; then ln -s $$CHPL_HOME/test/release/examples $(SOURCEDIR)/users-guide/datapar/examples; fi
-	@if [ ! -e $(SOURCEDIR)/users-guide/locality/examples ]; then ln -s $$CHPL_HOME/test/release/examples $(SOURCEDIR)/users-guide/locality/examples; fi
+	@if [ ! -e $(SOURCEDIR)/usingchapel/man.rst ]; then ln -s $(CHPL_MAKE_HOME)/man/chpl.rst $(SOURCEDIR)/usingchapel/man.rst; fi
+	@if [ ! -e $(SOURCEDIR)/tools/chpldoc/man.rst ]; then ln -s $(CHPL_MAKE_HOME)/man/chpldoc.rst $(SOURCEDIR)/tools/chpldoc/man.rst; fi
+	@if [ ! -e $(SOURCEDIR)/tools/chplvis/examples ]; then ln -s $(CHPL_MAKE_HOME)/test/release/examples $(SOURCEDIR)/tools/chplvis/examples; fi
+	@if [ ! -e $(SOURCEDIR)/users-guide/base/examples ]; then ln -s $(CHPL_MAKE_HOME)/test/release/examples $(SOURCEDIR)/users-guide/base/examples; fi
+	@if [ ! -e $(SOURCEDIR)/users-guide/taskpar/examples ]; then ln -s $(CHPL_MAKE_HOME)/test/release/examples $(SOURCEDIR)/users-guide/taskpar/examples; fi
+	@if [ ! -e $(SOURCEDIR)/users-guide/datapar/examples ]; then ln -s $(CHPL_MAKE_HOME)/test/release/examples $(SOURCEDIR)/users-guide/datapar/examples; fi
+	@if [ ! -e $(SOURCEDIR)/users-guide/locality/examples ]; then ln -s $(CHPL_MAKE_HOME)/test/release/examples $(SOURCEDIR)/users-guide/locality/examples; fi
 
 compiler-internals: FORCE
 	@echo "Updating compiler-internals"
 	rm -rf "$(COMPILER_INTERNALS)"
 	@if [ -d $(COMPILER_INTERNALS_DOXYGEN) ]; then \
-	  ln -s ../meta/compiler-internals-doxygen "$(COMPILER_INTERNALS)" ; \
+	  ln -s ../../../frontend/doc "$(COMPILER_INTERNALS)" ; \
 	else \
 	  ln -s ../meta/compiler-internals-no-doxygen "$(COMPILER_INTERNALS)" ; \
 	fi
+
+chplcheck-docs: FORCE
+	@echo
+	@echo "Generating docs for chplcheck"
+	@(cd ../tools/chplcheck && $(MAKE) chplcheck-docs)
 
 checkdocs: FORCE
 	$(MAKE) check
@@ -143,20 +151,18 @@ checkdocs: FORCE
 
 prunedocs: FORCE
 	rm -f html/_downloads/quickReference.pdf
-	rm -f html/_downloads/chapelLanguageSpec.pdf
 	if [ -d "html" ]; then \
 	ln -s ../../$(SOURCEDIR)/language/quickReference.pdf html/_downloads/quickReference.pdf; \
-	ln -s ../../$(SOURCEDIR)/language/chapelLanguageSpec.pdf html/_downloads/chapelLanguageSpec.pdf; \
 	fi
 
 
-clean: clean-source clean-build clean-build-dir clean-doxygen FORCE
+clean: clean-source clean-build clean-build-dir clean-doxygen clean-pycache FORCE
 
-cleanall: clean-source clean-build clean-build-dir clean-doxygen FORCE
+cleanall: clean-source clean-build clean-build-dir clean-doxygen clean-pycache FORCE
 
-clobber: clean-source clean-build clean-build-dir clean-doxygen FORCE
+clobber: clean-source clean-build clean-build-dir clean-doxygen clean-pycache FORCE
 
-clean-source: clean-module-docs clean-primers clean-examples clean-symlinks clean-collect-syntax clean-compiler-internals FORCE
+clean-source: clean-module-docs clean-primers clean-examples clean-symlinks clean-collect-syntax clean-compiler-internals clean-chplcheck-docs FORCE
 
 clean-build-dir: FORCE
 	rm -rf ../build/doc
@@ -179,12 +185,12 @@ clean-module-docs: FORCE
 
 clean-primers: FORCE
 	@echo
-	@echo "Removing primers generated into $(CHPL_DOC_HELLO_DIR)"
+	@echo "Removing primers generated into $(SOURCEDIR)/primers/"
 	rm -rf $(SOURCEDIR)/primers/
 
 clean-examples: FORCE
 	@echo
-	@echo "Removing hellos generated into $(CHPL_DOC_HELLO_DIR)"
+	@echo "Removing hellos generated into $(SOURCEDIR)/examples/"
 	rm -rf $(SOURCEDIR)/examples/
 
 clean-symlinks: FORCE
@@ -193,7 +199,14 @@ clean-symlinks: FORCE
 	find $(SOURCEDIR) -type l -delete
 
 clean-doxygen: FORCE
-	cd ../compiler/next && $(MAKE) -f Makefile.help clean-libchplcomp-docs
+	rm -rf $(CHPL_MAKE_HOME)/build/doc/doxygen
+
+clean-pycache: FORCE
+	rm -rf util/__pycache__
+	rm -rf $(SOURCEDIR)/__pycache__
+
+clean-chplcheck-docs: FORCE
+	cd ../tools/chplcheck && $(MAKE) clean-chplcheck-docs
 
 FORCE:
 

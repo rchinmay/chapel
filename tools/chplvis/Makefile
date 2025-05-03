@@ -1,15 +1,15 @@
-# Copyright 2020-2022 Hewlett Packard Enterprise Development LP
+# Copyright 2020-2025 Hewlett Packard Enterprise Development LP
 # Copyright 2015-2019 Cray Inc.
 # Other additional copyright holders may be indicated within.
-# 
+#
 # The entirety of this work is licensed under the Apache License,
 # Version 2.0 (the "License"); you may not use this file except
 # in compliance with the License.
-# 
+#
 # You may obtain a copy of the License at
-# 
+#
 #     http://www.apache.org/licenses/LICENSE-2.0
-# 
+#
 # Unless required by applicable law or agreed to in writing, software
 # distributed under the License is distributed on an "AS IS" BASIS,
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -24,20 +24,32 @@ ifndef CHPL_MAKE_HOME
 export CHPL_MAKE_HOME=$(shell pwd)/../..
 endif
 
-CHPL_MAKE_HOST_TARGET = --target
+CHPL_MAKE_HOST_TARGET = --host
 include $(CHPL_MAKE_HOME)/make/Makefile.base
 
 # FLTK config section
 
-FLTK_CONFIG=$(FLTK_INSTALL_DIR)/bin/fltk-config
-FLTK_FLUID=$(FLTK_INSTALL_DIR)/bin/fluid
+FLTK_CONFIG=fltk-config
+FLTK_FLUID=fluid
 
-CXXFLAGS=  -Wall -I. -g
+FLTK_COMPILE=${CHPL_MAKE_HOST_CXX} $(shell $(FLTK_CONFIG) --use-images --cxxflags)
+FLTK_LINK=${CHPL_MAKE_HOST_CXX}
+FLTK_LIBS=$(shell $(FLTK_CONFIG) --use-images --ldflags --libs)
+
+# If fltk is installed with Homebrew on ARM, need to look in /opt/homebrew
+ifeq ($(CHPL_MAKE_PLATFORM), darwin)
+ifeq ($(CHPL_MAKE_HOST_ARCH), arm64)
+  FLTK_COMPILE += -I/opt/homebrew/include
+  FLTK_LINK += -L/opt/homebrew/lib
+endif
+endif
+
+CXXFLAGS +=  -Wall -I. -g
 
 # Suffix rule for compiling .cxx files
 .SUFFIXES: .o .h .cxx
 .cxx.o:
-	$$($(FLTK_CONFIG) --cxx) -c $$($(FLTK_CONFIG) --cxxflags) $(CXXFLAGS) $<
+	$(FLTK_COMPILE) -c $(CXXFLAGS) $<
 
 
 SRCS=   GraphView.cxx DataModel.cxx Event.cxx InfoBar.cxx LocCommWin.cxx \
@@ -56,9 +68,8 @@ OFILES= $(SRCS:.cxx=.o) $(GENSRCS:.cxx=.o)
 
 all: chplvis
 
-chplvis: $(GENSRCS) $(OFILES) 
-	$$($(FLTK_CONFIG) --cxx)  -o chplvis $(OFILES) \
-	        $$($(FLTK_CONFIG) --ldflags) $$($(FLTK_CONFIG) --libs)
+chplvis: $(GENSRCS) $(OFILES)
+	$(FLTK_LINK) -o chplvis $(OFILES) $(FLTK_LIBS)
 
 chplvis.h: chplvis.fl
 	$(FLTK_FLUID) -c chplvis.fl
@@ -78,6 +89,7 @@ clobber: clean
 	rm -f chplvis
 
 install: chplvis
+	mkdir -p $(CHPL_BIN_DIR)
 	cp chplvis $(CHPL_BIN_DIR)
 
 # Dependencies
@@ -114,7 +126,7 @@ SubView.o:  chplvis.h Fl_MultiGroup.H Settings.h DataModel.h InfoBar.h \
      ConcurrencyWin.h ConcurrencyView.h SelectBrowser.h SubView.h
 Event.o: Event.h
 DataModel.o: DataModel.h StringCache.h
-Fl_MultiGroup.o: Fl_MultiGroup.H 
+Fl_MultiGroup.o: Fl_MultiGroup.H
 LocCommWin.o: LocCommWin.h GraphView.h  ConcurrencyWin.h DataModel.h \
     DataView.h ConcurrencyView.h
 LocCommBox.o: LocCommBox.h

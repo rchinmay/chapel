@@ -1,0 +1,6 @@
+#!/bin/sh
+
+sort $2 > $2.tmp
+
+# ignore launches from internal modules and data movement
+grep -v 'copy from' $2.tmp >$2

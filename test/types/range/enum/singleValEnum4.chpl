@@ -23,7 +23,7 @@ enum color { red };
 
 {
   writeln("implicit strided");
-  var r: range(color, stridable=true);
+  var r: range(color, strides=strideKind.any);
   testit(r);
 
   writeln("overwritten:");
@@ -42,8 +42,8 @@ enum color { red };
 proc testit(r) {
   writeln("r is: ", r);
   writeln("r.size: ", r.size);
-  writeln("r.low: ", r.low);
-  writeln("r.high: ", r.high);
+  writeln("r.lowBound: ", r.lowBound);
+  writeln("r.highBound: ", r.highBound);
 
   writeln("serial iter:");
   for i in r do

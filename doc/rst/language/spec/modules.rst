@@ -1,5 +1,7 @@
 .. default-domain:: chpl
 
+.. index::
+   single: modules
 .. _Chapter-Modules:
 
 =======
@@ -19,6 +21,10 @@ in :ref:`Visibility_Of_Symbols`. The execution of a program
 and module initialization/deinitialization are described
 in :ref:`Program_Execution`.
 
+.. index::
+   single: module
+   single: modules; definitions
+   single: modules; top-level
 .. _Module_Definitions:
 
 Module Definitions
@@ -55,6 +61,8 @@ Any module declaration that is not contained within another module
 creates a *top-level module*. Module declarations within other modules
 create nested modules (:ref:`Nested_Modules`).
 
+.. index::
+   single: modules; prototype
 .. _Prototype_Modules:
 
 Prototype Modules
@@ -70,6 +78,10 @@ errors that are not handled will terminate the program
 Implicit modules (:ref:`Implicit_Modules`) are implicitly considered
 ``prototype`` modules as well.
 
+.. index::
+   single: modules; and files
+   single: implicit modules
+   single: modules; implicit
 .. _Implicit_Modules:
 
 Files and Implicit Modules
@@ -166,6 +178,30 @@ identifier, it cannot be referenced in a use statement.
    Module implicit defines the module-scope symbols x, y, printX, and
    printY.
 
+.. _Finding_Toplevel_Module_Files:
+
+Finding Toplevel Module Files
+-----------------------------
+
+When a top-level module is named in a ``use`` or ``import`` statement,
+the compiler will find an appropriately named module in the module search
+path and use that module for the ``use`` or ``import``.
+
+For example, if the module is named ``MyLib``, the compiler will search
+for a file named ``MyLib.chpl`` in the module search path. This exact
+filename must match even on case-insensitive filesystems.
+
+The module search path is a list of directories in which the compiler will
+search for a such file names.
+
+   *Implementation Notes*.
+
+   The *––M* flag can be used to add to the module search path.
+   See :ref:`the chpl manual page <man-chpl>`.
+
+.. index::
+   single: modules; nested
+   single: modules; sub-modules
 .. _Nested_Modules:
 
 Nested Modules
@@ -254,10 +290,11 @@ nested modules.
 
    .. BLOCK-test-chapeloutput
 
-      nested.chpl:11: warning: This file-scope code is outside of any explicit module declarations (e.g., module MY), so an implicit module named 'nested' is being introduced to contain the file's contents.
       0
       0
 
+.. index::
+   single: modules; access
 .. _Access_Of_Module_Contents:
 
 Access of Module Contents
@@ -270,15 +307,17 @@ done via the use statement (:ref:`Using_Modules`), the import
 statement (:ref:`Importing_Modules`) or qualified
 naming (:ref:`Explicit_Naming`).
 
+.. index::
+   single: modules; access
 .. _Visibility_Of_A_Module:
 
 Visibility Of A Module
 ~~~~~~~~~~~~~~~~~~~~~~
 
 A top-level module is available for use (:ref:`Using_Modules`) or import
-(:ref:`Importing_Modules`) anywhere.  A module name is not accessible in other
-statements or expressions unless an ``import`` or ``use`` statement has brought
-the name into scope.
+(:ref:`Importing_Modules`) anywhere.  A top-level module name is not
+accessible in other statements or expressions unless an ``import`` or
+``use`` statement has brought the name into scope.
 
 Additionally, ``use`` and ``import`` can both name a module with a relative
 path; for example, ``this.Submodule`` or ``super.Siblingmodule``.  ``use`` and
@@ -302,6 +341,8 @@ imported with just its name, even from the scope in which the module is defined,
 unless it has already been brought into scope by another ``use`` or ``import``
 statement.
 
+.. index::
+   single: modules; symbol visibility
 .. _Visibility_Of_Symbols:
 
 Visibility Of A Module’s Symbols
@@ -317,6 +358,9 @@ it contains are accessible via the use statement (:ref:`Using_Modules`), import
 statement (:ref:`Importing_Modules`), or qualified
 naming (:ref:`Explicit_Naming`).
 
+.. index::
+   single: modules; using
+   single: modules; importing
 .. _Using_And_Importing:
 
 Using and Importing
@@ -327,38 +371,71 @@ access a module's symbols from outside of the module.  For top-level modules, a
 ``use`` or ``import`` statement is required before referring to the module’s
 name or the symbols it contains within a given lexical scope.
 
-The names that are made visible by a ``use`` or ``import`` statement are
-inserted in to a new scope that immediately encloses the scope within which the
-statement appears.  This implies that the position of the ``use`` or ``import``
-statement within a scope has no effect on its behavior.  If a scope includes
-multiple ``use`` statements, multiple ``import`` statements, or a combination of
-``import`` and ``use`` statements, then the newly-visible names are inserted
-into a common enclosing scope.
+The ``use`` and ``import`` statements themselves are processed in order,
+so it is not possible to ``use`` a module that is only made available by
+a later ``use``.
+
+The other mentions of a name made visible by a ``use`` or ``import``
+statement can be at any position relative to the ``use`` or ``import``.
+
+Private ``use`` statements -- for example ``use M`` or ``private use M``
+- make the contents of the module available in a scope just outside of
+the current one and the name of the module itself (``M`` in the example)
+available in a second scope just outside of that. In contrast, ``import``
+as well as ``public use`` do not use these implicit scopes.
+
+Also, note that ``public use`` statements do not enable qualified access
+by default (see :ref:`Public_Use`).
 
 .. _Use_And_Import_Conflicts:
 
 Conflicts
 +++++++++
 
-The implicit scope added by ``use`` and ``import`` described in the previous
-section follows the same rules about conflicting variables as other scopes (see
+Variable names available through ``use`` or ``import``
+follow the same rules about conflicting variables as other scopes (see
 :ref:`Variable_Conflicts`).  Thus an error will be signaled if multiple
 variables with the same name would be inserted into this enclosing scope and
 that name is accessed.  Remember that this does not apply to functions unless
 they are also indistinguishable in other ways, see :ref:`Function_Overloading`.
 
-Because symbols brought into scope by a ``use`` or ``import`` statement are
+Because symbols brought into scope by a ``private use`` statement are
 placed at a scope enclosing where the statement appears, such symbols will be
 shadowed by other symbols with the same name defined in the scope with the
 statement.  The symbols that are shadowed will only be accessible via
-:ref:`Explicit_Naming`.
+:ref:`Explicit_Naming`. For example:
 
-Symbols defined by public ``use`` or ``import`` statements can impact the scope
-they are inserted into in different ways (see :ref:`Public_Use` and
-:ref:`Reexporting` for more information on the ``public`` keyword).  Symbols
-that are brought in by a ``public use`` for unqualified access are treated as
-at successive distances relative to how many ``public use`` statements were
-necessary to obtain them.  For instance,
+   *Example (shadowing.chpl)*.
+
+   .. code-block:: chapel
+
+      module A {
+        var x: int;
+      }
+
+      module MainMod {
+        private use A; // note: 'use A' means the same as 'private use A'
+        var x = "hello";
+
+        proc main() {
+          writeln(x);
+        }
+      }
+
+   This program will compile and print out ``hello`` because the use of
+   ``x`` refers to ``MainMod.x`` which shadows ``A.x`` because ``private
+   use A`` introduces ``x`` in a scope just outside of the scope of
+   ``MainMod``.
+  
+   .. code-block:: printoutput
+
+      hello
+
+
+The ``public use`` and ``public import`` statements bring the names into
+a single scope (the scope containing the ``use``  or ``import``
+statement). Once that occurs, the original source of the names is
+irrelevant for the purpose of determining conflicts. For example:
 
    *Example (conflict1.chpl)*.
 
@@ -384,29 +461,14 @@ necessary to obtain them.  For instance,
         }
       }
 
-   This code demonstrates a module (MainMod) using two modules, B and C.  Module
-   C defines a symbol named x, while module B publicly uses another module, A,
-   which also defines a symbol named x.  The program as written will compile and
-   will print out the value of ``C.x``, which is ``false``, because A's x is
-   considered further away (it is made available to MainMod through `two` use
-   statements instead of just one).  Thus, it will generate the following
-   output:
-
+   This program does not compile because the use of ``x`` in ``main``
+   could refer to ``A.x`` or to ``C.x``.
+  
    .. code-block:: printoutput
 
-      false
+      conflict1.chpl:2: error: symbol x is multiply defined
+      conflict1.chpl:10: note: also defined here
 
-   If, however, C had been publicly used by another module D and that was used
-   by MainMod instead, then the compiler cannot determine which of ``C.x`` and
-   ``A.x`` was intended for ``writeln(x);``.  The program must use qualified
-   access to indicate which x to access.
-
-Symbols brought in directly by a ``public import`` are treated as though defined
-*at* the scope with the ``public import`` for the purpose of determining
-conflicts (see :ref:`Reexporting`).  This means that if the ``public use`` in
-module B of the previous example was instead replaced with a ``public import
-A.x``, A's x would conflict with ``C.x`` when resolving the main function's
-body.
 
 .. _Using_Modules:
 
@@ -438,8 +500,10 @@ The syntax of the use statement is given by:
      'only' rename-list[OPT]
 
    exclude-list:
-     identifier-list
-     $ * $
+     operator-name
+     identifier
+     operator-name , exclude-list
+     identifier , exclude-list
 
    rename-list:
      rename-base
@@ -449,6 +513,7 @@ The syntax of the use statement is given by:
      identifier 'as' identifier
      identifier 'as' _
      identifier
+     operator-name
 
 For example, the program
 
@@ -539,24 +604,19 @@ Use statements may be explicitly declared ``public`` or ``private``.
 By default, uses are ``private``.  Making a use ``public`` causes its
 symbols to be transitively visible: if module A uses module B, and
 module B contains a public use of a module or enumerated type C, then
-C’s public symbols will also be visible to A unless they are shadowed
-by symbols of the same name in B.  Conversely, if B's use of C is
+C’s public symbols will also be visible to A. Conversely, if B's use of C is
 ``private`` then A will not be able to see C's symbols due to that
 ``use``.
-
-This notion of transitivity extends to the case in which a scope
-imports symbols from multiple modules or constants from multiple
-enumeration types. For example if a module A uses modules B1, B2, B3
-and modules B1, B2, B3 publicly use modules C1, C2, C3 respectively,
-then all of the public symbols in B1, B2, B3 have the potential to
-shadow the public symbols of C1, C2, and C3. However an error is
-signaled if C1, C2, C3 have conflicting public module-level
-definitions of the same symbol.
 
 Making a use ``public`` additionally causes its symbols to be visible as though
 they were defined in the scope with the use.  This strategy is called
 `re-exporting`.  More information about re-exporting can be found in the
 relevant section (:ref:`Reexporting`).
+
+Lastly, by default, ``public use`` does not enable qualified access. For
+example, ``public use M`` brings in the contents of module ``M`` but not
+the name ``M`` itself. However the ``as`` syntax can be used to opt in to
+bringing in the module name to enable qualified access: ``public use M as M``.
 
 .. _Limitation_Clauses:
 
@@ -574,8 +634,8 @@ enumerated type (unless the module has been renamed to ``_``, as described
 earlier). It is an error to provide a name in a ``limitation-clause`` that does
 not exist or is not visible in the respective module or enumerated type.
 
-If an ``only`` list is left empty or an ``except`` is followed by :math:`*`
-then no symbols are made available to the scope without prefix.
+If an ``only`` list is left empty then no symbols are made available to the
+scope without prefix.
 
 When the ``limitation-clause`` for a use of a module contains a type, the
 visibility of its tertiary methods that are defined in that module, if any, is
@@ -584,19 +644,21 @@ methods cannot be specified in a ``limitation-clause`` on their own.  Fields,
 and primary and secondary methods are visible to any instance of the type
 regardless of use statements, see :ref:`Method_Calls`.
 
-Within an ``only`` list, a visible symbol from that module may optionally be
-given a new name using the ``as`` keyword. This new name will be usable from the
-scope of the use in place of the old name unless the old name is additionally
-specified in the ``only`` list. If a use which renames a symbol is present at
-module scope, uses and imports of that module will also be able to access
-that symbol using the new name instead of the old name. Renaming does not affect
-accesses to that symbol via the source module’s or enumerated type’s prefix, nor
-does it affect uses or imports of that module or enumerated type from other
-contexts. It is an error to attempt to rename a symbol that does not exist or is
-not visible in the respective module or enumerated type, or to rename a symbol
-to a name that is already present in the same ``only`` list. It is, however,
-perfectly acceptable to rename a symbol to a name present in the respective
-module or enumerated type which was not specified via that ``only`` list.
+Within an ``only`` list, a visible symbol (that is not an operator) from that
+module may optionally be given a new name using the ``as`` keyword. This new
+name will be usable from the scope of the use in place of the old name unless
+the old name is additionally specified in the ``only`` list. If a ``public use``
+which renames a symbol is present at module scope, uses and imports of that
+module will also be able to access that symbol using the new name instead of the
+old name. Renaming does not affect accesses to that symbol via the source
+module’s or enumerated type’s prefix, nor does it affect uses or imports of that
+module or enumerated type from other contexts. It is an error to attempt to
+rename a symbol that does not exist or is not visible in the respective module
+or enumerated type, or to rename a symbol to a name that is already present in
+the same ``only`` list.  It is also an error to attempt to rename an operator,
+or to attempt to rename a symbol to an operator name.  It is, however, perfectly
+acceptable to rename a symbol to a name present in the respective module or
+enumerated type which was not specified via that ``only`` list.
 
 If a use statement mentions multiple modules or enumerated types or a
 mix of these symbols, only the last module or enumerated type can have a
@@ -750,9 +812,9 @@ A submodule may not be imported without either the full path to it, or a
 ``super`` or ``this`` prefix at the beginning of the path.
 
 A module or a public module-level symbol being imported may optionally be given
-a new name using the ``as`` keyword.  This new name will be usable from the
-scope of the import in place of the old name.  This new name does not affect
-imports or uses of that module from other contexts.
+a new name using the ``as`` keyword, unless it is an operator.  This new name
+will be usable from the scope of the import in place of the old name.  This new
+name does not affect imports or uses of that module from other contexts.
 
 Import statements may be explicitly declared ``public`` or ``private``.  By
 default, imports are ``private``.  Making an import ``public`` causes its
@@ -776,24 +838,28 @@ secondary methods are visible to any instance of the type regardless of import
 statements, see :ref:`Method_Calls`.
 
 Within an ``unqualified-list``, a visible symbol from that module may optionally
-be given a new name using the ``as`` keyword.  This new name will be usable from
-the scope of the import in place of the old name unless the old name is
-additionally specified in the ``unqualified-list``.  If an import which renames
-a symbol is present at module scope, imports and uses of that module will also
-be able to access that symbol using the new name instead of the old name.
-Renaming does not affect accesses to that symbol via the source module's prefix,
-nor does it affect imports or uses of that module from other contexts.  It is an
-error to attempt to rename a symbol that does not exist or is not visible in the
-respective module, or to rename a symbol to a name that is already present in
-the same ``unqualified-list``.  It is, however, perfectly acceptable to rename a
-symbol to a name present in the respective module which was not specified via
-that ``unqualified-list``.
+be given a new name using the ``as`` keyword, except for any operators.  This
+new name will be usable from the scope of the import in place of the old name
+unless the old name is additionally specified in the ``unqualified-list``.  If
+an import which renames a symbol is present at module scope, imports and uses of
+that module will also be able to access that symbol using the new name instead
+of the old name.  Renaming does not affect accesses to that symbol via the
+source module's prefix, nor does it affect imports or uses of that module from
+other contexts.  It is an error to attempt to rename a symbol that does not
+exist or is not visible in the respective module, or to rename a symbol to a
+name that is already present in the same ``unqualified-list``.  It is also an
+error to attempt to rename an operator, or to attempt to rename another symbol
+to an operator name.  It is, however, perfectly acceptable to rename a symbol to
+a name present in the respective module which was not specified via that
+``unqualified-list``.
 
 The list of symbols for unqualified access can also be applied transitively -
 in the second example of re-exporting, if module A's import of B only allowed
 access to certain symbols, that list will also limit which of the symbols from
 C1, C2, and C3 will be available to A.
 
+.. index::
+   single: modules; qualified naming
 .. _Explicit_Naming:
 
 Qualified Naming of Module Symbols
@@ -865,7 +931,7 @@ be used to disambiguate the symbols in this case.
         }
       }
 
-   
+
 
    .. BLOCK-test-chapeloutput
 
@@ -926,9 +992,7 @@ Re-exporting
 
 Making a use or import ``public`` causes the symbols brought in by that
 statement to be visible as though they were defined in the scope with the use or
-import, a strategy which will be referred to as `re-exporting`.  However,
-symbols with the same name in the scope with the use or import will still take
-precedence.
+import, a strategy which will be referred to as `re-exporting`.
 
    *Example (use-reexport1.chpl)*.
 
@@ -948,51 +1012,17 @@ precedence.
       module A {
         proc main() {
           use B;
-          writeln(B.C.cSymbol);
           writeln(B.cSymbol);
         }
       }
 
-   In this case, C will be visible to A as though it was a submodule of B, and
-   its symbols can also be treated as though they were defined within B.  This
-   means that A can contain mentions like ``B.C.cSymbol`` if cSymbol was a
-   symbol defined in C, regardless of if C was actually a submodule of B.
+   In this case, the symbols within ``C`` will be treated as though they
+   were defined within B.  As a result, ``A`` can contain mentions like
+   ``B.cSymbol`` which would access ``C``'s ``cSymbol``.
 
-   This also means that A can contain mentions like ``B.cSymbol`` which would
-   access C's cSymbol, assuming these symbols were not shadowed by symbols with
-   the same name in B.
-
-   .. BLOCK-test-chapeloutput
-
-      0
-      0
-
-   *Example (use-reexport2.chpl)*.
-
-   However, if the public use of C also disabled accesses to the module name
-   using the ``as`` keyword, e.g.
-
-   .. code-block:: chapel
-
-      module C {
-        var cSymbol: int;
-      }
-
-      module B {
-        public use C as _;
-      }
-
-      module A {
-        proc main() {
-          use B;
-          // writeln(B.C.cSymbol); // Would not work
-          writeln(B.cSymbol);
-        }
-      }
-
-   Then A could only contain mentions like ``B.cSymbol``, it could not access
-   ``cSymbol`` using ``B.C.cSymbol``.  This is because C is not present as a
-   public name in B's scope.
+   Note that something like ``B.C.cSymbol`` will not compile in this
+   specific example. Please see :ref:`Public_Use` for details, including
+   how to enable patterns like this.
 
    .. BLOCK-test-chapeloutput
 
@@ -1001,9 +1031,8 @@ precedence.
 Conversely, if B's use of C was ``private`` then A would not be able to see C's
 symbols at all due to that ``use``.
 
-The situation for ``import`` is similar.  Because import statements only
-enable either qualified or unqualified access to a symbol, it more closely
-resembles the second example instead of the first.
+The situation for ``import`` is similar.  However, import statements only
+enable either qualified or unqualified access to a symbol, but not both.
 
    *Example (import-reexport1.chpl)*.
 
@@ -1071,7 +1100,7 @@ symbols due to that ``import``.
 This notion of re-exporting extends to the case in which a scope uses multiple
 modules.
 
-   *Example (use-reexport3.chpl)*.
+   *Example (use-reexport2.chpl)*.
 
    Say we have a module A that uses a module B, and module B contains a
    public use of modules C1, C2, and C3.
@@ -1097,44 +1126,42 @@ modules.
       module A {
         proc main() {
           use B;
-          writeln(B.C1.c1Symbol);
-          writeln(B.C2.c2Symbol);
-          writeln(B.C3.c3Symbol);
-
           writeln(B.c1Symbol);
           writeln(B.c2Symbol);
           writeln(B.c3Symbol);
         }
       }
 
-   In this case all three of those modules will be accessible by A as though
-   they were submodules of B.  This also means that symbols in C1, C2, and C3
-   will be accessible as though they were defined in B, assuming these symbols
-   were not shadowed by symbols with the same name in B and that these symbols
-   do not conflict with each other.
+   In this case, symbols in C1, C2, and C3 will be accessible as though
+   they were defined in B, assuming these symbols were not shadowed by
+   symbols with the same name in B and that these symbols do not conflict
+   with each other.
+
+   Note that something like ``B.C1.c1Symbol`` will not compile in this
+   specific example. Please see :ref:`Public_Use` for details, including
+   how to enable patterns like this.
 
    .. BLOCK-test-chapeloutput
 
       0
       false
       3
-      0
-      false
-      3
 
-This similarly applies to import statements that contain multiple
-subexpressions.
 
+.. index::
+   pair: modules; initialization
 .. _Module_Initialization:
 
 Module Initialization
 ~~~~~~~~~~~~~~~~~~~~~
 
-Module initialization occurs at program start-up. All module-scope
-statements within a module other than function and type declarations are
-executed during module initialization. Modules that are not referred to,
-including both top-level modules and sub-modules, will not be
-initialized.
+Module initialization occurs at program start-up. Modules that are not
+referred to, including both top-level modules and sub-modules, will not
+be initialized. Top-level modules that are in files named on the command
+line will be initialized.
+
+When a module is initialized, all module-scope statements within that
+module, other than function and type declarations, are executed.
 
    *Example (init.chpl)*.
 
@@ -1162,12 +1189,14 @@ initialized.
 
       Hi!
 
-   The function foo() will be invoked and its result assigned to x. Then
+   The procedure foo() will be invoked and its result assigned to x. Then
    “Hi!” will be printed.
 
 Module initialization order is discussed
 in :ref:`Module_Initialization_Order`.
 
+.. index::
+   pair: modules; deinitialization
 .. _Module_Deinitialization:
 
 Module Deinitialization
@@ -1177,7 +1206,7 @@ Module deinitialization occurs at program tear-down. During module
 deinitialization:
 
 -  If the module contains a deinitializer, which is a module-scope
-   function named ``deinit()``, it is executed first.
+   procedure named ``deinit()``, it is executed first.
 
 -  If the module declares module-scope variables, they are deinitialized in
    the reverse order of their initialization.
@@ -1185,39 +1214,44 @@ deinitialization:
 Module deinitialization order is discussed
 in :ref:`Module_Deinitialization_Order`.
 
+.. index::
+   single: program execution
+   single: program initialization
 .. _Program_Execution:
 
 Program Execution
 -----------------
 
 Chapel programs start by initializing all modules and then executing the
-main function (:ref:`The_main_Function`).
+``main`` procedure (:ref:`The_main_Procedure`).
 
-.. _The_main_Function:
+.. _The_main_Module:
 
-The *main* Function
-~~~~~~~~~~~~~~~~~~~
+The *main* Module
+~~~~~~~~~~~~~~~~~
 
-The main function must be called ``main`` and must have zero arguments.
-It can be specified with or without parentheses. In any Chapel program,
-there is a single main function that defines the program’s entry point.
-If a program defines multiple potential entry points, the implementation
-may provide a compiler flag that disambiguates between main functions in
-multiple modules.
+Each Chapel program has a single module that is identified as the main
+module. The compiler identifies the main module by checking for each of
+the following situations in order:
+
+ * if a command line option indicates the name of the main module is used
+   then that will determine the main module
+ * if there is a single module in a file named on the compile command
+   line that contains a ``main`` procedure, the module containing that
+   ``main`` procedure is the main module
+ * if there is a single module in a file named on the command line, that
+   single module is the main module
 
    *Implementation Notes*.
 
-   In the current Chapel compiler implementation, the *– –main-module* flag
-   can be used to specify the module from which the main function
-   definition will be used.
-
-..
+   The *––main-module* flag can be used to specify the main module. This
+   is particularly useful in the event that multiple modules define a
+   ``main`` procedure. See :ref:`the chpl manual page <man-chpl>`.
 
    *Example (main-module.chpl)*.
 
-   Because it defines two ``main`` functions, the following code will
+   Because it defines two ``main`` procedures, the following code will
    yield an error unless a main module is specified on the command line.
-   
 
    .. code-block:: chapel
 
@@ -1246,42 +1280,53 @@ multiple modules.
       --main-module M2 # main_module.M2.good
 
    If M1 is specified as the main module, the program will output:
-   
 
    .. BLOCK-test-chapeloutputname
 
       main_module.M1.good
 
-   
 
    .. code-block:: printoutput
 
       M1's main
 
    If M2 is specified as the main module the program will output:
-   
 
    .. BLOCK-test-chapeloutputname
 
       main_module.M2.good
 
-   
 
    .. code-block:: printoutput
 
       M1's main
       M2's main
 
-   Notice that main is treated like just another function if it is not
+   Notice that ``main`` is treated like just another procedure if it is not
    in the main module and can be called as such.
 
-To aid in exploratory programming, a default main function is created if
-the program does not contain a user-defined main function. The default
-main function is equivalent to 
+.. index::
+   single: main
+   single: functions; main
+   single: exploratory programming
+.. _The_main_Procedure:
+
+The *main* Procedure
+~~~~~~~~~~~~~~~~~~~~
+
+The main procedure must be called ``main`` and can either have zero
+arguments or a single argument that is an array of strings. A
+zero-argument ``main`` can be declared with or without parentheses. If
+the identified main module (:ref:`The_main_Module`) does not have a
+``main`` procedure, then the compiler will add a default one.
+
+The default ``main`` procedure aids exploratory programming. It is
+created if the main module does not contain a user-defined ``main``
+procedure. The default main function is equivalent to:
 
 .. code-block:: chapel
 
-   proc main() {}
+     proc main() { }
 
 ..
 
@@ -1293,27 +1338,35 @@ main function is equivalent to
 
       writeln("hello, world");
 
-   
 
    .. BLOCK-test-chapeloutput
 
       hello, world
 
-   is a legal and complete Chapel program. The startup code for a Chapel
-   program first calls the module initialization code for the main
-   module and then calls ``main()``. This program’s initialization
-   function is the file-scope writeln() statement. The module
-   declaration is taken to be the entire file, as described
-   in :ref:`Implicit_Modules`.
+   is a legal and complete Chapel program. When it runs, that Chapel
+   program will start out by initializing the main module and then it
+   will run the ``main()`` procedure. For this program, there is an
+   implicit module containing everything in the file
+   (:ref:`Implicit_Modules`) and that module is the main module. The
+   initialization of this module will execute the ``writeln`` statement.
+   The compiler adds an empty default ``main`` which runs after that
+   module is initialized.
 
+.. index::
+   single: modules; initialization order
 .. _Module_Initialization_Order:
 
 Module Initialization Order
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Module initialization is performed using the following algorithm.
+Module initialization is performed at program start-up and initializes
+modules in an order determined by the ``use`` and ``import`` statements.
+Not all modules need to be initialized (see :ref:`Module_Initialization`
+for details).
 
-Starting from the module that defines the main function, the modules named in
+The following describes the module initialization order.
+
+Starting from :ref:`The_main_Module`, the modules named in
 its use and import statements are visited depth-first and initialized in
 post-order. If a use or import statement names a module that has already been
 visited, it is not visited a second time. Thus, infinite recursion is avoided.
@@ -1362,8 +1415,10 @@ uses are initialized before the nested module and its uses or imports.
    M1, the main module, uses M2.M3 and then M2, thus M2.M3 must be
    initialized. Because M2.M3 is a nested module, M4 (which is used by
    M2) must be initialized first. M2 itself is initialized, followed by
-   M2.M3. Finally M1 is initialized, and the main function is run.
+   M2.M3. Finally M1 is initialized, and the main procedure is run.
 
+.. index::
+   single: modules; deinitialization order
 .. _Module_Deinitialization_Order:
 
 Module Deinitialization Order

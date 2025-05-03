@@ -1,5 +1,5 @@
 /*
- * Copyright 2020-2022 Hewlett Packard Enterprise Development LP
+ * Copyright 2020-2025 Hewlett Packard Enterprise Development LP
  * Copyright 2004-2019 Cray Inc.
  * Other additional copyright holders may be indicated within.
  *
@@ -34,6 +34,8 @@
 #include "stringutil.h"
 #include "symbol.h"
 #include "view.h"
+
+#include "global-ast-vecs.h"
 
 static const bool debugScalarReplacement = false;
 
@@ -225,9 +227,11 @@ scalarReplaceClass(AggregateType* ct, Symbol* sym) {
         return false;
 
       // The use must appear as the first argument in the containing
-      // expression.
-      if (se != call->get(1))
+      // expression, or second in a PRIM_CAST to c_ptr(void).
+      if (!(se == call->get(1) ||
+            (se == call->get(2) && call->isPrimitive(PRIM_CAST)))) {
         return false;
+      }
       // The use must be the first argument of one of the following
       // primitives or allocation functions.
       if (!(call->isPrimitive(PRIM_SET_MEMBER) ||
@@ -237,6 +241,9 @@ scalarReplaceClass(AggregateType* ct, Symbol* sym) {
             // As of r21945, compiler inserted calls to
             // chpl_here_free() have as its first argument a void *
             call->isPrimitive(PRIM_CAST_TO_VOID_STAR) ||
+            // Also support calls to chpl_here_free() with c_ptr(void) argument
+            (call->isPrimitive(PRIM_CAST) &&
+             isCVoidPtr(call->get(1)->qualType().type())) ||
             (call->isResolved() &&
              (call->resolvedFunction()->hasFlag(FLAG_ALLOCATOR) ||
               // TODO: don't know this is necessary as the arg to free
@@ -301,7 +308,8 @@ scalarReplaceClass(AggregateType* ct, Symbol* sym) {
         // class reference, we can remove the call to free it
         //
         call->remove();
-      } else if (call->isPrimitive(PRIM_CAST_TO_VOID_STAR)) {
+      } else if (call->isPrimitive(PRIM_CAST_TO_VOID_STAR) ||
+                 call->isPrimitive(PRIM_CAST)) {
         CallExpr* parent = toCallExpr(call->parentExpr);
         INT_ASSERT(parent);
         CallExpr* parentNext = toCallExpr(parent->next);

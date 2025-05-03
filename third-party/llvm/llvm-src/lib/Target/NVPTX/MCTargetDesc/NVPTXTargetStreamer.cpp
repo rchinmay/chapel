@@ -21,12 +21,15 @@ using namespace llvm;
 // NVPTXTargetStreamer Implemenation
 //
 NVPTXTargetStreamer::NVPTXTargetStreamer(MCStreamer &S) : MCTargetStreamer(S) {}
-
 NVPTXTargetStreamer::~NVPTXTargetStreamer() = default;
+
+NVPTXAsmTargetStreamer::NVPTXAsmTargetStreamer(MCStreamer &S)
+    : NVPTXTargetStreamer(S) {}
+NVPTXAsmTargetStreamer::~NVPTXAsmTargetStreamer() = default;
 
 void NVPTXTargetStreamer::outputDwarfFileDirectives() {
   for (const std::string &S : DwarfFiles)
-    getStreamer().emitRawText(S.data());
+    getStreamer().emitRawText(S);
   DwarfFiles.clear();
 }
 
@@ -43,8 +46,7 @@ static bool isDwarfSection(const MCObjectFileInfo *FI,
                            const MCSection *Section) {
   // FIXME: the checks for the DWARF sections are very fragile and should be
   // fixed up in a followup patch.
-  if (!Section || Section->getKind().isText() ||
-      Section->getKind().isWriteable())
+  if (!Section || Section->isText())
     return false;
   return Section == FI->getDwarfAbbrevSection() ||
          Section == FI->getDwarfInfoSection() ||
@@ -81,8 +83,7 @@ static bool isDwarfSection(const MCObjectFileInfo *FI,
 }
 
 void NVPTXTargetStreamer::changeSection(const MCSection *CurSection,
-                                        MCSection *Section,
-                                        const MCExpr *SubSection,
+                                        MCSection *Section, uint32_t SubSection,
                                         raw_ostream &OS) {
   assert(!SubSection && "SubSection is not null!");
   const MCObjectFileInfo *FI = getStreamer().getContext().getObjectFileInfo();
@@ -93,8 +94,9 @@ void NVPTXTargetStreamer::changeSection(const MCSection *CurSection,
     // Emit DWARF .file directives in the outermost scope.
     outputDwarfFileDirectives();
     OS << "\t.section";
-    Section->PrintSwitchToSection(*getStreamer().getContext().getAsmInfo(),
-                                  FI->getTargetTriple(), OS, SubSection);
+    Section->printSwitchToSection(*getStreamer().getContext().getAsmInfo(),
+                                  getStreamer().getContext().getTargetTriple(),
+                                  OS, SubSection);
     // DWARF sections are enclosed into braces - emit the open one.
     OS << "\t{\n";
     HasSections = true;

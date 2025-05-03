@@ -1,15 +1,15 @@
-# Copyright 2020-2022 Hewlett Packard Enterprise Development LP
+# Copyright 2020-2025 Hewlett Packard Enterprise Development LP
 # Copyright 2004-2019 Cray Inc.
 # Other additional copyright holders may be indicated within.
-# 
+#
 # The entirety of this work is licensed under the Apache License,
 # Version 2.0 (the "License"); you may not use this file except
 # in compliance with the License.
-# 
+#
 # You may obtain a copy of the License at
-# 
+#
 #     http://www.apache.org/licenses/LICENSE-2.0
-# 
+#
 # Unless required by applicable law or agreed to in writing, software
 # distributed under the License is distributed on an "AS IS" BASIS,
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -42,6 +42,14 @@ ifneq ($(CHPL_COMM_DEBUG),)
 RUNTIME_DEFS += -DCHPL_COMM_DEBUG
 endif
 
+ifneq ($(CHPL_HWLOC_DEBUG),)
+RUNTIME_DEFS += -DCHPL_HWLOC_DEBUG
+endif
+
+ifneq ($(CHPL_TASKS_DEBUG),)
+RUNTIME_DEFS += -DCHPL_TASKS_DEBUG
+endif
+
 ifeq ($(OPTIMIZE),1)
 RUNTIME_DEFS += -DCHPL_OPTIMIZE -DNDEBUG
 endif
@@ -51,12 +59,11 @@ RUNTIME_INCLS += \
         -I. \
         -I$(RUNTIME_INCLUDE_ROOT)/localeModels/$(CHPL_MAKE_LOCALE_MODEL) \
         -I$(RUNTIME_INCLUDE_ROOT)/localeModels \
-        -I$(RUNTIME_INCLUDE_ROOT)/gpu/$(CHPL_MAKE_GPU_CODEGEN) \
+        -I$(RUNTIME_INCLUDE_ROOT)/gpu/$(CHPL_MAKE_GPU) \
         -I$(RUNTIME_INCLUDE_ROOT)/gpu \
         -I$(RUNTIME_INCLUDE_ROOT)/comm/$(CHPL_MAKE_COMM) \
         -I$(RUNTIME_INCLUDE_ROOT)/comm \
         -I$(RUNTIME_INCLUDE_ROOT)/tasks/$(CHPL_MAKE_TASKS) \
-        -I$(RUNTIME_INCLUDE_ROOT)/threads/$(CHPL_MAKE_THREADS) \
         -I$(RUNTIME_INCLUDE_ROOT) \
         -I$(RUNTIME_INCLUDE_ROOT)/qio \
         -I$(RUNTIME_INCLUDE_ROOT)/atomics/$(CHPL_MAKE_ATOMICS) \
@@ -94,6 +101,11 @@ ifeq ($(MAKE_LAUNCHER),1)
       $(RUNTIME_ROOT)/make/Makefile.runtime.mem-$(CHPL_MAKE_TARGET_MEM)
     -include $(TARGET_MEM_INCLUDE)
   endif
+  ifeq ($(CHPL_MAKE_TARGET_MEM),mimalloc)
+    TARGET_MEM_INCLUDE=\
+      $(RUNTIME_ROOT)/make/Makefile.runtime.mem-$(CHPL_MAKE_TARGET_MEM)
+    -include $(TARGET_MEM_INCLUDE)
+  endif
 endif
 
 # Add any further includes for COMM.
@@ -121,6 +133,9 @@ endif
 # If compiling for GPU locale add CUDA runtime headers to include path
 ifeq ($(CHPL_MAKE_LOCALE_MODEL),gpu)
 RUNTIME_INCLS += -I$(CHPL_MAKE_CUDA_PATH)/include
+  ifeq ($(CHPL_MAKE_GPU),cpu)
+    RUNTIME_DEFS += -DGPU_RUNTIME_CPU
+  endif
 RUNTIME_DEFS += -DHAS_GPU_LOCALE
 endif
 

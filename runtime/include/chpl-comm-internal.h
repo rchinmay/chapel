@@ -1,16 +1,16 @@
 /*
- * Copyright 2020-2022 Hewlett Packard Enterprise Development LP
+ * Copyright 2020-2025 Hewlett Packard Enterprise Development LP
  * Copyright 2004-2019 Cray Inc.
  * Other additional copyright holders may be indicated within.
- * 
+ *
  * The entirety of this work is licensed under the Apache License,
  * Version 2.0 (the "License"); you may not use this file except
  * in compliance with the License.
- * 
+ *
  * You may obtain a copy of the License at
- * 
+ *
  *     http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -54,6 +54,10 @@ extern size_t chpl_rt_priv_bcast_lens[];
   MACRO(chpl_comm_diagnostics)               \
   MACRO(chpl_comm_diags_print_unstable)      \
   MACRO(chpl_verbose_comm_stacktrace)        \
+  MACRO(chpl_verbose_gpu)                   \
+  MACRO(chpl_gpu_diagnostics)               \
+  MACRO(chpl_gpu_diags_print_unstable)      \
+  MACRO(chpl_verbose_gpu_stacktrace)        \
   MACRO(chpl_verbose_mem)
 
 #define _RT_PRV_BCAST_M(sym)  chpl_rt_prv_tab_ ## sym ## _idx,

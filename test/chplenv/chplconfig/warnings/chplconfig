@@ -7,6 +7,11 @@
 
 # Incorrect format:
 CHPL_TASKS == fifo
+CHPL_TASKS = = fifo
+# entry with '=' still works`
+CHPL_TARGET_CC = clang --gcc-toolchain=/usr
+# entry can start with ''
+CHPL_TARGET_CXX = '=/usr' # this is garbage for the purposes of testing
 
 # Unacceptable variable:
 CHPL_COMMS = none
@@ -14,7 +19,3 @@ CHPL_COMMS = none
 # Duplicate entries:
 CHPL_COMM = none
 CHPL_COMM = gasnet
-
-# Test for CHPL_REGEXP deprecation warning, replacing it with CHPL_RE2
-CHPL_REGEXP = re2
-CHPL_RE2 = bundled

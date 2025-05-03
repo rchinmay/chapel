@@ -1,4 +1,4 @@
-use SysCTypes;
+use CTypes;
 
 proc doit(type t) {
   writeln(t:string, " : ", isPODType(t));
@@ -92,7 +92,6 @@ doit(owned MyClass);
 doit(shared MyClass);
 doit(atomic int);
 doit(sync int);
-doit(single int);
 doit(NotPod1);
 doit(NotPod2);
 doit(NotPod3);

@@ -1,16 +1,16 @@
 /*
- * Copyright 2020-2022 Hewlett Packard Enterprise Development LP
+ * Copyright 2020-2025 Hewlett Packard Enterprise Development LP
  * Copyright 2004-2019 Cray Inc.
  * Other additional copyright holders may be indicated within.
- * 
+ *
  * The entirety of this work is licensed under the Apache License,
  * Version 2.0 (the "License"); you may not use this file except
  * in compliance with the License.
- * 
+ *
  * You may obtain a copy of the License at
- * 
+ *
  *     http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -89,7 +89,7 @@ void initAprunAttributes() {
   argv[0] = (char *) "cnselect";
   argv[1] = (char *) "-l";
   argv[2] = NULL;
-  
+
   memset(CNA, 0, CNAbuflen);
   // We assume here that 'cnselect -l' will always return something meaningful
   if (chpl_run_utility1K("cnselect", argv, CNA, CNAbuflen) <= 0) {
@@ -126,7 +126,7 @@ int getCoresPerLocale() {
     argv[0] = (char *) "cnselect";
     argv[1] = (char *) "-Lnumcores";
     argv[2] = NULL;
-  
+
     memset(buf, 0, buflen);
     if (chpl_run_utility1K("cnselect", argv, buf, buflen) <= 0)
       chpl_error("Error trying to determine number of cores per node", 0, 0);
@@ -142,11 +142,11 @@ int getCoresPerLocale() {
     const int buflen = 1024;
     char buf[buflen];
     char* argv[3];
- 
+
     argv[0] = (char *) "cnselect";
     argv[1] = (char *) "-Lcoremask";
     argv[2] = NULL;
-  
+
     memset(buf, 0, buflen);
     if (chpl_run_utility1K("cnselect", argv, buf, buflen) <= 0)
       chpl_error("Error trying to determine number coremask on node", 0, 0);
@@ -242,16 +242,18 @@ char** chpl_create_aprun_cmd(int argc, char* argv[],
   if (verbosity < 2) {
     largv[largc++] = (char *) "-q";
   }
-  sprintf(_nbuf, "%s%d", getNumLocalesStr(), numLocales);
+  snprintf(_nbuf, sizeof(_nbuf), "%s%d", getNumLocalesStr(), numLocales);
   largv[largc++] = (char *) getAprunArgStr(aprun_cc);
   largv[largc++] = (char *) ccArg;
-  sprintf(_dbuf, "%s%d", getCoresPerLocaleStr(), getCoresPerLocale());
+  snprintf(_dbuf, sizeof(_dbuf), "%s%d", getCoresPerLocaleStr(),
+           getCoresPerLocale());
   largv[largc++] = _dbuf;
   largv[largc++] = _nbuf;
-  sprintf(_Nbuf, "%s%d", getLocalesPerNodeStr(), getLocalesPerNode());
+  snprintf(_Nbuf, sizeof(_Nbuf), "%s%d", getLocalesPerNodeStr(),
+           getLocalesPerNode());
   largv[largc++] = _Nbuf;
   if ((CPUsPerCU = getCPUsPerCU()) >= 0) {
-    sprintf(_jbuf, "%s%d", getCPUsPerCUStr(), getCPUsPerCU());
+    snprintf(_jbuf, sizeof(_jbuf), "%s%d", getCPUsPerCUStr(), getCPUsPerCU());
     largv[largc++] = _jbuf;
   }
   if ((nodeListOpt = getNodeListOpt()) != NULL) {

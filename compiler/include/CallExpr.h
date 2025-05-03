@@ -1,5 +1,5 @@
 /*
- * Copyright 2020-2022 Hewlett Packard Enterprise Development LP
+ * Copyright 2020-2025 Hewlett Packard Enterprise Development LP
  * Copyright 2004-2019 Cray Inc.
  * Other additional copyright holders may be indicated within.
  *
@@ -108,6 +108,15 @@ public:
   void            setResolvedFunction(FnSymbol* fn);
   FnSymbol*       resolvedOrVirtualFunction()                            const;
 
+  // An indirect call is _only_ one in which the base expression of the call
+  // is a value with a function type, but is not a use of a 'FnSymbol'. That
+  // is, the type of the function is known, but not exactly which function
+  // the call refers to.
+  bool isIndirectCall()                                                  const;
+
+  // Return the function type representing the function used to make the call.
+  FunctionType* functionType()                                           const;
+
   FnSymbol*       theFnSymbol()                                          const;
 
   bool            isNamed(const char*)                                   const;
@@ -129,7 +138,7 @@ private:
   // Declare CallExpr::codegenPRIM_UNKNOWN() etc
 #define PRIMITIVE_G(NAME, str) static void codegen ## NAME (CallExpr*, GenRet&);
 #define PRIMITIVE_R(NAME, str)
-#include "chpl/uast/PrimOpsList.h"
+#include "chpl/uast/prim-ops-list.h"
 #undef PRIMITIVE_G
 #undef PRIMITIVE_R
 
@@ -138,10 +147,12 @@ private:
 
   GenRet          codegenBasicPrimitiveExpr()                            const;
 
+public:
   bool            isRefExternStarTuple(Symbol* formal, Expr* actual)     const;
 };
 
 CallExpr* callChplHereAlloc(Type* type, VarSymbol* md = NULL);
+CallExpr* callChplHereAllocWithAllocator(Type* type, Expr* allocator, VarSymbol* md = NULL);
 
 void      insertChplHereAlloc(Expr*      call,
                               bool       insertAfter,
@@ -176,6 +187,58 @@ inline FnSymbol* CallExpr::theFnSymbol() const {
 
 inline bool CallExpr::isResolved() const {
   return resolvedFunction() != NULL;
+}
+
+inline bool CallExpr::isEmpty() const {
+  return primitive == NULL && baseExpr == NULL;
+}
+
+inline bool CallExpr::isPrimitive() const {
+  return primitive != NULL;
+}
+
+inline bool CallExpr::isPrimitive(PrimitiveTag primitiveTag) const {
+  return primitive && primitive->tag == primitiveTag;
+}
+
+inline bool CallExpr::isPrimitive(const char* primitiveName) const {
+  return primitive && !strcmp(primitive->name, primitiveName);
+}
+
+inline bool CallExpr::isIndirectCall() const {
+  // Eliminate edge cases first (e.g., primitives, direct call).
+  if (!baseExpr || resolvedFunction() || isPrimitive()) return false;
+
+  // Otherwise, if the base expression has a function type...
+  if (isFunctionType(baseExpr->qualType().type()->getValType())) {
+    return true;
+  }
+
+  return false;
+}
+
+inline FunctionType* CallExpr::functionType() const {
+  if (isIndirectCall()) {
+    // For indirect calls, grab the type of the base expression.
+    auto ret = toFunctionType(baseExpr->qualType().type()->getValType());
+    INT_ASSERT(ret);
+    return ret;
+
+  } else if (auto fn = resolvedFunction()) {
+    // The call is a direct call, so compute the function's type...
+    auto ret = fn->computeAndSetType();
+    return ret;
+  }
+
+  return nullptr;
+}
+
+inline int CallExpr::numActuals() const {
+  return argList.length;
+}
+
+inline Expr* CallExpr::get(int index) const {
+  return argList.get(index);
 }
 
 // TODO: rename these

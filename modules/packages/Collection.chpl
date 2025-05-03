@@ -1,5 +1,5 @@
 /*
- * Copyright 2020-2022 Hewlett Packard Enterprise Development LP
+ * Copyright 2020-2025 Hewlett Packard Enterprise Development LP
  * Copyright 2004-2019 Cray Inc.
  * Other additional copyright holders may be indicated within.
  *
@@ -18,7 +18,7 @@
  * limitations under the License.
  */
 
-/*
+/* Provides an abstract class representing a 'Collection' interface.
 
   Summary
   _______
@@ -66,7 +66,7 @@ module Collection {
     proc init(type eltType) {
       this.eltType = eltType;
 
-      complete();
+      init this;
     }
 
     /*

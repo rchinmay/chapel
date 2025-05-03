@@ -18,7 +18,7 @@ record HashedPath {
 // stumbling block: no < for record
 // stumbling block: comparator increases complexity
 // stumbling block: need to know SHA256Hash has compare and/or <
-record HashedPathComparator {
+record HashedPathComparator: relativeComparator {
   proc compare(a: HashedPath, b: HashedPath) {
     if a.hash < b.hash {
       return -1;
@@ -40,7 +40,7 @@ record HashedPathComparator {
    file stored at that path and save the result in that
    array element.
  */
-proc computeHashes(hashAndPath:[] HashedPath) {
+proc computeHashes(ref hashAndPath:[] HashedPath) {
 
   forall rec in hashAndPath {
     try {
@@ -101,7 +101,7 @@ proc handleArguments(args: [] string, ref paths: domain(string)) {
         paths += relativeRealPath(arg);
       }
     } else if isDir(arg) {
-      for path in findfiles(arg, recursive=true) {
+      for path in findFiles(arg, recursive=true) {
         if filter == "" || path.endsWith(filter) {
           paths += relativeRealPath(path);
         }

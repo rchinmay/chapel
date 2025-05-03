@@ -1,5 +1,5 @@
 /*
- * Copyright 2020-2022 Hewlett Packard Enterprise Development LP
+ * Copyright 2020-2025 Hewlett Packard Enterprise Development LP
  * Copyright 2004-2019 Cray Inc.
  * Other additional copyright holders may be indicated within.
  *
@@ -18,11 +18,10 @@
  * limitations under the License.
  */
 
-pragma "no doc"
+@chpldoc.nodoc
 module ExportWrappers {
   use ChapelStandard;
-  use CPtr;
-  use SysCTypes;
+  use CTypes;
 
   private proc _initDynamicEndCount() {
     var endCount = _endCountAlloc(forceLocalTypes=false);
@@ -74,7 +73,7 @@ module ExportWrappers {
   }
 
   proc chpl__exportRet(ref val: string, type rt: chpl_byte_buffer): rt {
-    return chpl__exportRetStringOrBytes(val); 
+    return chpl__exportRetStringOrBytes(val);
   }
 
   proc chpl__exportRet(ref val: bytes, type rt: chpl_byte_buffer): rt {
@@ -82,20 +81,20 @@ module ExportWrappers {
   }
 
   proc chpl__exportArg(cp: bool, val: chpl_byte_buffer, type rt: string): rt {
-    var data = val.data:c_string;
+    var data = val.data:c_ptrConst(c_char);
     var size = val.size.safeCast(int);
     try! {
-      if cp then return createStringWithNewBuffer(data, size);
-      return createStringWithBorrowedBuffer(data, size);
+      if cp then return string.createCopyingBuffer(data, size);
+      return string.createBorrowingBuffer(data, size);
     }
   }
 
   proc chpl__exportArg(cp: bool, val: chpl_byte_buffer, type rt: bytes): rt {
-    var data = val.data:c_string;
+    var data = val.data:c_ptrConst(c_char);
     var size = val.size.safeCast(int);
     try! {
-      if cp then return createBytesWithNewBuffer(data, size);
-      return createBytesWithBorrowedBuffer(data, size);
+      if cp then return bytes.createCopyingBuffer(data, size);
+      return bytes.createBorrowingBuffer(data, size);
     }
   }
 

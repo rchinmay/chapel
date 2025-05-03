@@ -1,9 +1,10 @@
 #include "AVRELFStreamer.h"
 
 #include "llvm/BinaryFormat/ELF.h"
+#include "llvm/MC/MCAssembler.h"
 #include "llvm/MC/MCSubtargetInfo.h"
-#include "llvm/MC/SubtargetFeature.h"
 #include "llvm/Support/FormattedStream.h"
+#include "llvm/TargetParser/SubtargetFeature.h"
 
 #include "AVRMCTargetDesc.h"
 
@@ -53,16 +54,15 @@ static unsigned getEFlagsForFeatureSet(const FeatureBitset &Features) {
   return EFlags;
 }
 
-AVRELFStreamer::AVRELFStreamer(MCStreamer &S,
-                               const MCSubtargetInfo &STI)
+AVRELFStreamer::AVRELFStreamer(MCStreamer &S, const MCSubtargetInfo &STI)
     : AVRTargetStreamer(S) {
-
-  MCAssembler &MCA = getStreamer().getAssembler();
-  unsigned EFlags = MCA.getELFHeaderEFlags();
+  ELFObjectWriter &W = getStreamer().getWriter();
+  unsigned EFlags = W.getELFHeaderEFlags();
 
   EFlags |= getEFlagsForFeatureSet(STI.getFeatureBits());
+  EFlags |= ELF::EF_AVR_LINKRELAX_PREPARED;
 
-  MCA.setELFHeaderEFlags(EFlags);
+  W.setELFHeaderEFlags(EFlags);
 }
 
 } // end namespace llvm

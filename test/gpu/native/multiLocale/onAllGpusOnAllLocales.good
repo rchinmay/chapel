@@ -1,0 +1,3 @@
+here.gpus.size > 1:  true
+numLaunches.size == Locales.size: true
+numLaunches[i] == numLaunches[i+1] for all i > 0?:  true

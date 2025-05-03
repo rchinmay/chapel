@@ -15,13 +15,15 @@
   #error "VAPI-conduit is no longer supported"
 #endif
 
-#define GASNET_CORE_VERSION      2.10
+#define GASNET_CORE_VERSION      2.16
 #define GASNET_CORE_VERSION_STR  _STRINGIFY(GASNET_CORE_VERSION)
 #define GASNET_CORE_NAME         IBV
 #define GASNET_CORE_NAME_STR     _STRINGIFY(GASNET_CORE_NAME)
 #define GASNET_CONDUIT_NAME      GASNET_CORE_NAME
 #define GASNET_CONDUIT_NAME_STR  _STRINGIFY(GASNET_CONDUIT_NAME)
 #define GASNET_CONDUIT_IBV       1
+
+#define GASNETC_DEFAULT_SPAWNER  GASNETC_IBV_SPAWNER_CONF
 
 // Client-facing indications of multirail support:
 // GASNET_IBV_MULTIRAIL: 1/undef for enabled/disabled
@@ -64,25 +66,41 @@
   #define GASNET_ALIGNED_SEGMENTS   1
 #endif
 
-  /* define to 1 if conduit allows internal GASNet fns to issue put/get for remote
-     addrs out of segment - not true when PSHM is used */
-#if 0
-#define GASNETI_SUPPORTS_OUTOFSEGMENT_PUTGET 1
-#endif
+  // If this conduit is considered a "portable conduit" only *conditionally*,
+  // uncomment to enable calls to gasnetc_check_portable_conduit(void) as
+  // described in gasnet_internal.c.
+//#define GASNETC_CHECK_PORTABLE_CONDUIT_HOOK 1
 
   // uncomment for each MK_CLASS which the conduit supports. leave commented otherwise
 #define GASNET_HAVE_MK_CLASS_CUDA_UVA (GASNETI_MK_CLASS_CUDA_UVA_ENABLED && GASNET_SEGMENT_FAST)
 #define GASNET_HAVE_MK_CLASS_HIP (GASNETI_MK_CLASS_HIP_ENABLED && GASNET_SEGMENT_FAST)
+//#define GASNET_HAVE_MK_CLASS_ZE GASNETI_MK_CLASS_ZE_ENABLED
 
+  // define to 1 if your conduit has "private" thread(s) which can run AM handlers
+#if GASNETC_IBV_RCV_THREAD
+  #define GASNET_RCV_THREAD 1
+#endif
+
+  // define to 1 if your conduit has "private" thread(s) which progress sends of RMA and/or AM
+#if GASNETC_IBV_SND_THREAD
+  #define GASNET_SND_THREAD 1
+#endif
+
+#ifndef GASNETC_DYNAMIC_CONNECT
+  #define GASNETC_DYNAMIC_CONNECT 1
+#endif
+
+#if GASNETC_IBV_RCV_THREAD || GASNETC_IBV_SND_THREAD || (GASNETC_DYNAMIC_CONNECT && GASNETC_IBV_CONN_THREAD)
   /* uncomment if your conduit has "private" threads which might run conduit
      code and/or the client's AM handlers, even under GASNET_SEQ.
      this ensures locking is still done correctly, etc
    */
-#ifndef GASNETC_DYNAMIC_CONNECT
-  #define GASNETC_DYNAMIC_CONNECT 1
-#endif
-#if GASNETC_IBV_RCV_THREAD || (GASNETC_DYNAMIC_CONNECT && GASNETC_IBV_CONN_THREAD)
   #define GASNETI_CONDUIT_THREADS 1
+#endif
+
+// Conduit-specific implementation of gex_System_QueryProgressThreads()
+#if GASNETC_IBV_RCV_THREAD || GASNETC_IBV_SND_THREAD
+  #define gex_System_QueryProgressThreads gasnetc_query_progress_threads
 #endif
 
 #if GASNETC_IBV_RCV_THREAD
@@ -101,12 +119,20 @@
    */
 /* #define GASNETC_GET_HANDLER 1 */
 
+  /* uncomment each line for which your conduit supports the
+     corresponding token info query.
+  */
+#define GASNET_SUPPORTS_TI_SRCRANK 1
+#define GASNET_SUPPORTS_TI_EP 1
+#define GASNET_SUPPORTS_TI_ENTRY 1
+#define GASNET_SUPPORTS_TI_IS_REQ 1
+#define GASNET_SUPPORTS_TI_IS_LONG 1
+
   /* uncomment for each {Request,Reply} X {Medium,Long} pair for which your
-     conduit implements the corresponding gasnetc_AM_{Prepare,Commit}*().
-     If unset, a conduit-independent implementation in terms of the internal
-     functions gasnetc_AM{Request,Reply}{Medium,Long}V() will be used, and
-     your conduit must provide the V-suffixed functions for any of these that
-     are not defined.
+     conduit implements the corresponding gasnetc_AM_{Prepare,Commit}*() in
+     a "native" manner which "can avoid one or more payload copies relative
+     to the corresponding fixed-payload AM call under the right conditions".
+     See also "GASNETC_BUILD_NP_*", immediately below.
    */
 #define GASNET_NATIVE_NP_ALLOC_REQ_MEDIUM 1
 #define GASNET_NATIVE_NP_ALLOC_REP_MEDIUM 1
@@ -115,7 +141,25 @@
 #define GASNET_NATIVE_NP_ALLOC_REP_LONG 1
 #endif
 
-  /* uncomment for each GASNET_NATIVE_NP_ALLOC_* enabled above if the Commit function
+  /* conduits may define to '1' (or '0') for {Request,Reply} X {Medium,Long}
+     pairs to force (or prevent) compilation of the corresponding pieces of
+     the conduit-independent reference implementation.
+     If unset, the default is equivalent to '!GASNET_NATIVE_NP_ALLOC_[foo]'.
+     In other words: by default each reference implementation is built if and
+     only if the conduit is not claiming a "native" implementation.
+     This default is correct for most conduits.
+
+     The conduit-independent implementation works in terms of the internal
+     functions gasnetc_AM{Request,Reply}{Medium,Long}V().  Therefore, your
+     conduit must provide the V-suffixed functions for any case with the
+     corresponding GASNETC_BUILD_NP_* equal to '1' (explicitly or by default).
+   */
+/* #define GASNETC_BUILD_NP_REQ_MEDIUM (###) */
+/* #define GASNETC_BUILD_NP_REP_MEDIUM (###) */
+/* #define GASNETC_BUILD_NP_REQ_LONG (###) */
+/* #define GASNETC_BUILD_NP_REP_LONG (###) */
+
+  /* uncomment for each conduit-provided Commit{Req,Rep}{Medium,Long}() which
      has the numargs argument even in an NDEBUG build (it is always passed in
      DEBUG builds).
    */
@@ -138,7 +182,7 @@
      include a call to gasneti_AMPoll (or equivalent) for progress.
      The preferred implementation is to Poll only in the M-suffixed calls
      and not the V-suffixed calls (and GASNETC_REQUESTV_POLLS undefined).
-     Used if (and only if) any of the GASNET_NATIVE_NP_ALLOC_* values above are unset.
+     Used only by reference implementations (if any) of Prepare/Commit.
    */
 /* #define GASNETC_REQUESTV_POLLS 1 */
 
@@ -184,8 +228,14 @@
   // See gasnet_internal.h for prototypes and brief descriptions.
 #define GASNETC_SEGMENT_ATTACH_HOOK 1
 #define GASNETC_SEGMENT_CREATE_HOOK 1
-//#define GASNETC_SEGMENT_DESTROY_HOOK 1
+#define GASNETC_SEGMENT_DESTROY_HOOK 1
+//#define GASNETC_EP_BINDSEGMENT_HOOK 1
 #define GASNETC_EP_PUBLISHBOUNDSEGMENT_HOOK 1
+
+  // Uncomment the following defines if conduit provides the corresponding hook.
+  // See other/kinds/gasnet_kinds_internal.h for prototypes and brief descriptions.
+//#define GASNETC_MK_CREATE_HOOK 1
+//#define GASNETC_MK_DESTROY_HOOK 1
 
 #if GASNETC_PIN_SEGMENT // multi-EP NOT supported with remote firehose
 // If conduit supports GASNET_MAXEPS!=1, set default and (optional) max values here.
@@ -214,6 +264,7 @@
 	TIME(C, GET_AMREQ_BUFFER_STALL, stalled time) \
 	CNT(C, GET_BBUF, cnt)                     \
 	TIME(C, GET_BBUF_STALL, stalled time)     \
+	CNT(C, SPARE_REPLY_BBUF, cnt)             \
 	VAL(C, ALLOC_SREQ, sreqs)                 \
 	VAL(C, POST_SR, segments)                 \
 	CNT(C, POST_INLINE_SR, cnt)               \
@@ -222,6 +273,7 @@
 	TIME(C, POST_SR_STALL_SQ2, stalled time)  \
 	CNT(C, POST_SR_SPLIT, cnt)                \
 	VAL(C, POST_SR_LIST, requests)            \
+	CNT(C, SND_REAP_THR, cnt)                 \
 	VAL(C, SND_REAP, reaped)                  \
 	VAL(C, RCV_REAP, reaped)                  \
 	CNT(C, CONN_STATIC, peers)                \

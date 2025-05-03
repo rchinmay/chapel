@@ -2,9 +2,7 @@
 
 // Note: Generated with fake std headers
 
-use CPtr;
-use SysCTypes;
-use SysBasic;
+use CTypes;
 extern proc foobar(x : c_int) : c_int;
 
 extern proc main() : c_int;
@@ -25,9 +23,9 @@ extern record MirConnection {};
 // Opaque struct?
 extern record MirDisplayConfig {};
 
-extern type MirEGLNativeDisplayType = c_void_ptr;
+extern type MirEGLNativeDisplayType = c_ptr(void);
 
-extern type MirEGLNativeWindowType = c_void_ptr;
+extern type MirEGLNativeWindowType = c_ptr(void);
 
 // Opaque struct?
 extern record MirPersistentId {};

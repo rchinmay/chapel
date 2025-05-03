@@ -6,7 +6,7 @@ from utils import memoize
 @memoize
 def get_uniq_cfg_path():
     def_uniq_cfg = third_party_utils.default_uniq_cfg_path()
-    lm = chpl_locale_model.get();
+    lm = chpl_locale_model.get()
     target_mem = chpl_mem.get('target')
     hwloc = chpl_hwloc.get()
     return '{0}-{1}-{2}-{3}'.format(def_uniq_cfg, lm, target_mem, hwloc)
@@ -16,15 +16,14 @@ def get_uniq_cfg_path():
 @memoize
 def get_compile_args():
     ucp_val = get_uniq_cfg_path()
-    return third_party_utils.get_bundled_compile_args('qthread', ucp=ucp_val)
+    bundled, system = third_party_utils.get_bundled_compile_args('qthread', ucp=ucp_val)
+    return (bundled, system)
 
 
 # returns 2-tuple of lists
 #  (linker_bundled_args, linker_system_args)
 @memoize
 def get_link_args():
-    # Qthreads may call back to the runtime, so re-search libchpl after.
-    return third_party_utils.get_bundled_link_args('qthread',
-                                                   ucp=get_uniq_cfg_path(),
-                                                   libs=['libqthread.la',
-                                                         '-lchpl'])
+    (bundled, system) = third_party_utils.libtool_get_bundled_link_args(
+                                      'qthread', ucp=get_uniq_cfg_path())
+    return (bundled, system)

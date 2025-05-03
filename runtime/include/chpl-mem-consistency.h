@@ -1,16 +1,16 @@
 /*
- * Copyright 2020-2022 Hewlett Packard Enterprise Development LP
+ * Copyright 2020-2025 Hewlett Packard Enterprise Development LP
  * Copyright 2004-2019 Cray Inc.
  * Other additional copyright holders may be indicated within.
- * 
+ *
  * The entirety of this work is licensed under the Apache License,
  * Version 2.0 (the "License"); you may not use this file except
  * in compliance with the License.
- * 
+ *
  * You may obtain a copy of the License at
- * 
+ *
  *     http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -21,9 +21,11 @@
 #ifndef _chpl_mem_consistency_h_
 #define _chpl_mem_consistency_h_
 
-#include "chpl-atomics.h" // for memory_order
+#include "chpl-atomics.h" // for chpl_memory_order
 
 #include "chpl-cache.h" // for chpl_cache_release, chpl_cache_acquire
+
+#include "chpl-gpu.h" // for chpl_gpu_task_fence
 
 #ifdef __cplusplus
 extern "C" {
@@ -68,6 +70,9 @@ void chpl_rmem_consist_release(int ln, int32_t fn)
 #ifdef HAS_CHPL_CACHE_FNS
   chpl_cache_release(ln, fn);
 #endif
+#ifdef HAS_GPU_LOCALE
+  chpl_gpu_task_fence();
+#endif
 }
 
 static inline
@@ -76,17 +81,20 @@ void chpl_rmem_consist_acquire(int ln, int32_t fn)
 #ifdef HAS_CHPL_CACHE_FNS
   chpl_cache_acquire(ln, fn);
 #endif
+#ifdef HAS_GPU_LOCALE
+  chpl_gpu_task_fence();
+#endif
 }
 
 
 // These should just call chpl_cache_release or chpl_cache_acquire. They
-// exist so that we have a single place to put any required memory consistency 
-// operations/fences. 
+// exist so that we have a single place to put any required memory consistency
+// operations/fences.
 
 static inline
-//void chpl_atomic_rmem_fence_pre(memory_order order, int ln, int32_t fn) {
-void chpl_rmem_consist_maybe_release(memory_order order, int ln, int32_t fn) {
-  if(order==memory_order_acquire || order==memory_order_relaxed) {
+//void chpl_atomic_rmem_fence_pre(chpl_memory_order order, int ln, int32_t fn) {
+void chpl_rmem_consist_maybe_release(chpl_memory_order order, int ln, int32_t fn) {
+  if(order==chpl_memory_order_acquire || order==chpl_memory_order_relaxed) {
     // do nothing
   } else {
     // for release or sequentially consistent, flush pending writes
@@ -94,9 +102,9 @@ void chpl_rmem_consist_maybe_release(memory_order order, int ln, int32_t fn) {
   }
 }
 static inline
-//void chpl_atomic_rmem_fence_post(memory_order order, int ln, int32_t fn) {
-void chpl_rmem_consist_maybe_acquire(memory_order order, int ln, int32_t fn) {
-  if(order==memory_order_release || order==memory_order_relaxed) {
+//void chpl_atomic_rmem_fence_post(chpl_memory_order order, int ln, int32_t fn) {
+void chpl_rmem_consist_maybe_acquire(chpl_memory_order order, int ln, int32_t fn) {
+  if(order==chpl_memory_order_release || order==chpl_memory_order_relaxed) {
     // do nothing
   } else {
     // for acquire or sequentially consistent, do not reuse any cached values
@@ -105,16 +113,16 @@ void chpl_rmem_consist_maybe_acquire(memory_order order, int ln, int32_t fn) {
 }
 
 static inline
-//void chpl_atomic_rmem_fence(memory_order order, int ln, int32_t fn) {
-void chpl_rmem_consist_fence(memory_order order, int ln, int32_t fn) {
-  if(order==memory_order_relaxed) {
+//void chpl_atomic_rmem_fence(chpl_memory_order order, int ln, int32_t fn) {
+void chpl_rmem_consist_fence(chpl_memory_order order, int ln, int32_t fn) {
+  if(order==chpl_memory_order_relaxed) {
     // do nothing
   } else {
     int acquire = 1;
     int release = 1;
-    if( order == memory_order_acquire ) {
+    if( order == chpl_memory_order_acquire ) {
       release = 0;
-    } else if( order == memory_order_release ) {
+    } else if( order == chpl_memory_order_release ) {
       acquire = 0;
     }
 

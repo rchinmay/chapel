@@ -1,5 +1,5 @@
 /*
- * Copyright 2020-2022 Hewlett Packard Enterprise Development LP
+ * Copyright 2020-2025 Hewlett Packard Enterprise Development LP
  * Copyright 2004-2019 Cray Inc.
  * Other additional copyright holders may be indicated within.
  *
@@ -24,6 +24,8 @@
 #include "ForLoop.h"
 #include "passes.h"
 #include "stringutil.h"
+
+#include "global-ast-vecs.h"
 
 ForallOptimizationInfo::ForallOptimizationInfo():
   infoGathered(false),
@@ -189,7 +191,7 @@ void ForallStmt::accept(AstVisitor* visitor) {
     if (fRecIterGetIterator)  fRecIterGetIterator->accept(visitor);
     if (fRecIterFreeIterator) fRecIterFreeIterator->accept(visitor);
     if (fZipCall)             fZipCall->accept(visitor);
-    
+
     fLoopBody->accept(visitor);
 
     visitor->exitForallStmt(this);
@@ -357,8 +359,14 @@ LabelSymbol* ForallStmt::continueLabel() {
     // If this presents hardship, we can switch to always creating
     // fContinueLabel, right when the ForallStmt is created.
     INT_ASSERT(!normalized);
+    // We need the continue label to be in an outer scope w.r.t.
+    // the user-defined loop body, see #21292.
+    BlockStmt* wrapper = new BlockStmt();
+    BlockStmt* userBody = fLoopBody;
+    userBody->replace(wrapper);
+    wrapper->insertAtTail(userBody);
     fContinueLabel = new LabelSymbol("_continueLabel");
-    fLoopBody->insertAtTail(new DefExpr(fContinueLabel));
+    wrapper->insertAtTail(new DefExpr(fContinueLabel));
   }
   return fContinueLabel;
 }
@@ -417,7 +425,8 @@ static int numIterablesToDestructure(ForallStmt* fs) {
 static void createAndAddIndexVar(AList& fIterVars, Symbol* idxVar) {
   idxVar->addFlag(FLAG_INDEX_VAR);
   idxVar->addFlag(FLAG_INSERT_AUTO_DESTROY);
-  INT_ASSERT(idxVar->defPoint == NULL); // ensure we do not overwrite it
+  if (idxVar->defPoint && idxVar->defPoint->inTree())
+    idxVar->defPoint->remove();
   fIterVars.insertAtTail(new DefExpr(idxVar));
 }
 
@@ -445,6 +454,9 @@ static inline VarSymbol* indexExprToVarSymbol(BaseAST* index) {
     return new VarSymbol(USE->unresolved);
   if (VarSymbol* VS = toVarSymbol(index))
     return VS;
+  if (DefExpr* def = toDefExpr(index))
+    if (VarSymbol* VS = toVarSymbol(def->sym))
+      return VS;
   // Caller responsibility.
   return NULL;
 }
@@ -496,13 +508,21 @@ static void fsDestructureIndex(ForallStmt* fs, AList& fIterVars,
     // There is already a Symbol for it - use it.
     createAndAddIndexVar(fIterVars, indexSE->symbol());
 
-  } else {
+  } else if (isCallExpr(index)) {
     // We need to create an index variable and go from there.
-    INT_ASSERT(isCallExpr(index)); // need to implement the other cases
-
     VarSymbol* idxVar = createAndAddIndexVar(fIterVars, idxNum);
+    idxVar->removeFlag(FLAG_INSERT_AUTO_DESTROY);
     destructureIndices(fs->loopBody(), index, new SymExpr(idxVar), false);
 
+  } else if (DefExpr* def = toDefExpr(index)) {
+    if (VarSymbol* var = toVarSymbol(def->sym)) {
+      // There is already a Symbol for it - use it.
+      createAndAddIndexVar(fIterVars, var);
+    } else {
+      INT_FATAL("case not handled");
+    }
+  } else {
+    INT_FATAL("case not handled");
   }
 }
 
@@ -535,7 +555,7 @@ static void fsDestructureIndices(ForallStmt* fs, Expr* indices) {
   }
 
   if (CallExpr* indicesCall = toCallExpr(indices)) {
-    INT_ASSERT(indicesCall->isNamed("_build_tuple")); // ensured by checkIndices()
+    INT_ASSERT(indicesCall->isNamedAstr(astrBuildTuple)); // ensured by checkIndices()
 
     if (numIterables == 0)
       ; // If overTupleExpand(), we will check this later during resolution.
@@ -550,6 +570,9 @@ static void fsDestructureIndices(ForallStmt* fs, Expr* indices) {
 
   } else if (UnresolvedSymExpr* indicesUSE = toUnresolvedSymExpr(indices)) {
     fsDestructureWhenSingleIdxVar(fs, fIterVars, indicesUSE, numIterables);
+
+  } else if (DefExpr* indicesDef = toDefExpr(indices)) {
+    fsDestructureWhenSingleIdxVar(fs, fIterVars, indicesDef, numIterables);
 
   } else {
     INT_ASSERT(false); // This case has not been considered.
@@ -600,14 +623,27 @@ ForallStmt* ForallStmt::buildHelper(Expr* indices, Expr* iterator,
   return fs;
 }
 
+// like checkIndices in build.cpp but allows more patterns
+// TODO: adjust forall builders to conform to the same requirements
+// and just use checkIndices
+static void checkIndicesForall(BaseAST* indices) {
+  if (CallExpr* call = toCallExpr(indices)) {
+    if (!call->isNamedAstr(astrBuildTuple))
+      USR_FATAL(indices, "invalid index expression");
+    for_actuals(actual, call)
+      checkIndicesForall(actual);
+  } else if (!isSymExpr(indices) && !isUnresolvedSymExpr(indices) &&
+             !isDefExpr(indices))
+    USR_FATAL(indices, "invalid index expression");
+}
+
+
 BlockStmt* ForallStmt::build(Expr* indices, Expr* iterator, CallExpr* intents,
                              BlockStmt* body, bool zippered, bool serialOK)
 {
-  checkControlFlow(body, "forall statement");
-
   if (!indices)
     indices = new UnresolvedSymExpr("chpl__elidedIdx");
-  checkIndices(indices);
+  checkIndicesForall(indices);
 
   ForallStmt* fs = ForallStmt::buildHelper(indices, iterator, intents, body,
                                            zippered, false);
@@ -727,4 +763,8 @@ std::vector<BlockStmt*> ForallStmt::loopBodies() const {
     bodies.push_back(fLoopBody);
   }
   return bodies;
+}
+
+bool ForallStmt::isInductionVar(Symbol* sym) {
+  return sym->defPoint->list == &inductionVariables();
 }

@@ -10,6 +10,9 @@ LOG=log
 declare -a NAME
 declare -a RESULT
 
+# enable resizing for FreeBSD images
+export VAGRANT_EXPERIMENTAL="disks"
+
 echo > log
 echo > log2
 echo "Running command on images:" | tee -a log
@@ -54,7 +57,6 @@ do
       RESULT[$i]="FAIL: $lastline"
       echo "     FAIL:" $name
       echo "     Leaving virtual machine up"
-      cd ..
       echo "     You might want to run:"
       echo
       echo "     cd" $name
@@ -62,9 +64,11 @@ do
       echo "     " $*
       echo
       echo
-      exit 1
+      #uncomment the below line to make errors fatal
+      #exit 1
       ;;
     esac
+
     vagrant halt 2>&1 | tee -a "$DIR"/log
     cd "$DIR"
 

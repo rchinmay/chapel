@@ -1,5 +1,5 @@
 /*
- * Copyright 2021-2022 Hewlett Packard Enterprise Development LP
+ * Copyright 2021-2025 Hewlett Packard Enterprise Development LP
  * Copyright 2004-2019 Cray Inc.
  * Other additional copyright holders may be indicated within.
  *
@@ -19,13 +19,13 @@
  */
 
 /*
-  This module contains the implementation of the unrolledLinkedList type.
+  This module contains the implementation of the 'unrolledLinkedList' type.
 
-  An unrolled linked list is a linked list of small arrays, all of the same size 
-  where each is so small that the insertion or deletion is fast and quick, but 
+  An unrolled linked list is a linked list of small arrays, all of the same size
+  where each is so small that the insertion or deletion is fast and quick, but
   large enough to fill the cache line. The list tends to keep each node half full.
 
-  Given a list with size N and nodeCapacity M, indexing is O(N/M). And insertion or 
+  Given a list with size N and nodeCapacity M, indexing is O(N/M). And insertion or
   deletion at a given place is O(N/M + M), which contains a indexing operation.
   Appending operation, which doesn't need to index, is O(M).
 */
@@ -36,7 +36,7 @@ module UnrolledLinkedList {
   private use IO;
   private use List;
 
-  pragma "no doc"
+  @chpldoc.nodoc
   private param _sanityChecks = false;
 
   //
@@ -48,35 +48,35 @@ module UnrolledLinkedList {
       assert(expr);
   }
 
-  pragma "no doc"
+  @chpldoc.nodoc
   type _lockType = ChapelLocks.chpl_LocalSpinlock;
 
   //
   // Use a wrapper class to let unrolledLinkedList methods have a const ref receiver even
   // when `parSafe` is `true` and the unrolledLinkedList lock is used.
   //
-  pragma "no doc"
+  @chpldoc.nodoc
   class _LockWrapper {
-    var lock$ = new _lockType();
+    var lockVar = new _lockType();
 
     inline proc lock() {
-      lock$.lock();
+      lockVar.lock();
     }
 
     inline proc unlock() {
-      lock$.unlock();
+      lockVar.unlock();
     }
   }
 
   /* Check that element type is supported by unrolledLinkedList */
-  pragma "no doc"
+  @chpldoc.nodoc
   proc _checkType(type eltType) {
     if !isDefaultInitializable(eltType) {
       compilerError("unrolledLinkedList element type must be default-initializable");
     }
   }
 
-  pragma "no doc"
+  @chpldoc.nodoc
   proc _checkNodeCapacity(cap: int) {
     if cap < 2 {
       halt("unrolledLinkedList nodeCapacity can't be less than 2");
@@ -86,7 +86,7 @@ module UnrolledLinkedList {
     }
   }
 
-  pragma "no doc"
+  @chpldoc.nodoc
   class _linkedNode {
     type eltType;
     const capacity: int = 32;
@@ -108,9 +108,9 @@ module UnrolledLinkedList {
       data[size] = x;
       size += 1;
     }
-  };
+  }
 
-  record unrolledLinkedList {
+  record unrolledLinkedList : writeSerializable {
 
     /* The type of the elements contained in this unrolledLinkedList. */
     type eltType;
@@ -124,23 +124,23 @@ module UnrolledLinkedList {
     /*
       The number of nodes in the unrolledLinkedList
     */
-    pragma "no doc"
+    @chpldoc.nodoc
     var _size = 0;
 
-    pragma "no doc"
-    var _lock$ = if parSafe then new _LockWrapper() else none;
+    @chpldoc.nodoc
+    var _lock = if parSafe then new _LockWrapper() else none;
 
 
-    pragma "no doc"
+    @chpldoc.nodoc
     var _head: unmanaged _linkedNode(eltType)? = nil;
 
-    pragma "no doc"
+    @chpldoc.nodoc
     var _tail: unmanaged _linkedNode(eltType)? = nil;
 
     /*
       Delete all nodes in the list
     */
-    pragma "no doc"
+    @chpldoc.nodoc
     proc _destroy() {
       var cur = _head;
       while cur != nil {
@@ -150,7 +150,7 @@ module UnrolledLinkedList {
       }
     }
 
-    pragma "no doc"
+    @chpldoc.nodoc
     proc deinit() {
       _destroy();
     }
@@ -162,6 +162,9 @@ module UnrolledLinkedList {
 
       :arg parSafe: If `true`, this unrolledLinkedList will use parallel safe operations.
       :type parSafe: `param bool`
+
+      :arg nodeCapacity: The capacity of one linked node of this unrolledLinkedList.
+      :type nodeCapacity: `int`
     */
     proc init(type eltType, param parSafe=false, nodeCapacity: int = 32) {
       _checkType(eltType);
@@ -170,7 +173,7 @@ module UnrolledLinkedList {
       this.eltType = eltType;
       this.parSafe = parSafe;
       this.nodeCapacity = nodeCapacity;
-      this.complete();
+      init this;
     }
 
     /*
@@ -183,6 +186,9 @@ module UnrolledLinkedList {
 
       :arg parSafe: If `true`, this unrolledLinkedList will use parallel safe operations.
       :type parSafe: `param bool`
+
+      :arg nodeCapacity: The capacity of one linked node of this unrolledLinkedList.
+      :type nodeCapacity: `int`
     */
     proc init(other: list(?t), param parSafe=false, nodeCapacity: int = 32) {
       _checkType(t);
@@ -193,12 +199,12 @@ module UnrolledLinkedList {
       this.eltType = t;
       this.parSafe = parSafe;
       this.nodeCapacity = nodeCapacity;
-      this.complete();
+      init this;
       _commonInitFromIterable(other);
     }
 
     /*
-      Initializes an unrolledLinkedList containing elements that are copy 
+      Initializes an unrolledLinkedList containing elements that are copy
       initialized from the elements contained in an array.
 
       Used in new expressions.
@@ -207,6 +213,9 @@ module UnrolledLinkedList {
 
       :arg parSafe: If `true`, this unrolledLinkedList will use parallel safe operations.
       :type parSafe: `param bool`
+
+      :arg nodeCapacity: The capacity of one linked node of this unrolledLinkedList.
+      :type nodeCapacity: `int`
     */
     proc init(other: [?d] ?t, param parSafe=false, nodeCapacity: int = 32) {
       _checkType(t);
@@ -218,12 +227,12 @@ module UnrolledLinkedList {
       this.eltType = t;
       this.parSafe = parSafe;
       this.nodeCapacity = nodeCapacity;
-      this.complete();
+      init this;
       _commonInitFromIterable(other);
     }
 
     /*
-      Initializes an unrolledLinkedList containing elements that are copy 
+      Initializes an unrolledLinkedList containing elements that are copy
       initialized from the elements contained in another unrolledLinkedList.
 
       :arg other: The list to initialize from.
@@ -238,19 +247,19 @@ module UnrolledLinkedList {
       this.eltType = this.type.eltType;
       this.parSafe = this.type.parSafe;
       this.nodeCapacity = other.nodeCapacity;
-      this.complete();
+      init this;
       _commonInitFromIterable(other);
     }
 
-    pragma "no doc"
-    proc _commonInitFromIterable(iterable) {
+    @chpldoc.nodoc
+    proc ref _commonInitFromIterable(iterable) {
       for x in iterable do
         append(x);
     }
 
     // A helper function for getting a reference to an unrolledLinkedList element.
     //
-    pragma "no doc"
+    @chpldoc.nodoc
     inline proc const ref _getRef(idx: int) ref {
       if _sanityChecks {
         assert(idx >= 0 && idx < _size);
@@ -268,19 +277,19 @@ module UnrolledLinkedList {
       halt("unrolledLinkedList out of range");
     }
 
-    pragma "no doc"
+    @chpldoc.nodoc
     inline proc _enter() {
       if parSafe then
-        _lock$.lock();
+        _lock.lock();
     }
 
-    pragma "no doc"
+    @chpldoc.nodoc
     inline proc _leave() {
       if parSafe then
-        _lock$.unlock();
+        _lock.unlock();
     }
 
-    pragma "no doc"
+    @chpldoc.nodoc
     inline proc const _withinBounds(idx: int): bool {
       return (idx >= 0 && idx < _size);
     }
@@ -289,8 +298,8 @@ module UnrolledLinkedList {
      Split a node from the given node p
      by moving half of the content of p into the new one
     */
-    pragma "no doc"
-    proc _split(p: unmanaged _linkedNode(eltType)) {
+    @chpldoc.nodoc
+    proc ref _split(p: unmanaged _linkedNode(eltType)) {
       if _sanityChecks then
         assert(p.size == nodeCapacity);
       var node = new unmanaged _linkedNode(eltType, nodeCapacity);
@@ -298,7 +307,7 @@ module UnrolledLinkedList {
       for i in start..p.size-1 {
         node.append(p.data[i]);
         if isSharedClass(this.eltType) then
-          p.data[i].clear();
+          p.data[i] = nil;
       }
       p.size -= node.size;
       if _sanityChecks then
@@ -318,8 +327,8 @@ module UnrolledLinkedList {
       If it's not possible to merge nodes, then fill the previous node to half
       Return whether it's merged
     */
-    pragma "no doc"
-    proc _merge(p: unmanaged _linkedNode(eltType)): bool {
+    @chpldoc.nodoc
+    proc ref _merge(p: unmanaged _linkedNode(eltType)): bool {
       var result = false;
 
       // Nothing to do
@@ -362,8 +371,8 @@ module UnrolledLinkedList {
     /*
       Make sure there's enough space in _tail for one element
     */
-    pragma "no doc"
-    proc _spareSpaceInTail() {
+    @chpldoc.nodoc
+    proc ref _spareSpaceInTail() {
       if _tail == nil {
         _tail = new unmanaged _linkedNode(eltType, nodeCapacity);
         _head = _tail;
@@ -379,17 +388,17 @@ module UnrolledLinkedList {
       }
     }
 
-    pragma "no doc"
-    proc _append(x: eltType)
-    lifetime this < x { 
+    @chpldoc.nodoc
+    proc ref _append(x: eltType)
+    lifetime this < x {
       _size += 1;
       _spareSpaceInTail();
       _tail!.append(x);
     }
 
-    pragma "no doc"
-    proc _append(ref x: eltType) where isOwnedClass(x)
-    lifetime this < x { 
+    @chpldoc.nodoc
+    proc ref _append(ref x: eltType) where isOwnedClass(x)
+    lifetime this < x {
       _size += 1;
       _spareSpaceInTail();
       _tail!.append(x);
@@ -400,6 +409,9 @@ module UnrolledLinkedList {
 
       :arg x: An element to append.
       :type x: `eltType`
+
+      :return: List index where element was inserted.
+      :rtype: `int`
     */
     proc ref append(x: eltType)
     lifetime this < x {
@@ -408,12 +420,123 @@ module UnrolledLinkedList {
       _leave();
     }
 
-    pragma "no doc"
-    proc append(ref x: eltType) where isOwnedClass(x)
+    @chpldoc.nodoc
+    proc ref append(ref x: eltType) where isOwnedClass(x)
     lifetime this < x {
       _enter();
       _append(x);
       _leave();
+    }
+
+    @chpldoc.nodoc
+    inline proc ref _appendGeneric(collection) {
+      var startSize: int;
+      var endSize: int;
+      on this {
+        startSize = _size;
+        // TODO: Maybe we can allocate space at one time and append.
+        for item in collection {
+          _append(item);
+        }
+        endSize = _size;
+      }
+
+      return startSize..(endSize-1);
+    }
+
+    /*
+      Append a copy of each element contained in a list to the end of this
+      unrolledLinkedList.
+
+      :arg other: A list containing elements of the same type as those
+        contained in this list.
+      :type other: `list(eltType)`
+
+      :return: List indices where elements were inserted.
+      :rtype: `range`
+    */
+    proc ref append(other: list(eltType, ?p)) lifetime this < other {
+      var ret: range;
+      on this {
+        _enter();
+        ret = _appendGeneric(other);
+        _leave();
+      }
+      return ret;
+    }
+
+    /*
+      Append a copy of each element contained in another unrolledLinkedList to
+      the end of this unrolledLinkedList.
+
+      :arg other: an unrolledLinkedList containing elements of the same type as
+        those contained in this unrolledLinkedList.
+      :type other: `unrolledLinkedList(eltType)`
+
+      :return: List indices where elements were inserted.
+      :rtype: `range`
+    */
+    proc ref append(other: unrolledLinkedList(eltType, ?p)) lifetime this < other {
+      var ret: range;
+      on this {
+        _enter();
+        ret = _appendGeneric(other);
+        _leave();
+      }
+      return ret;
+    }
+
+    /*
+      Append a copy of each element contained in an array to the end of this
+      list.
+
+      :arg other: An array containing elements of the same type as those
+        contained in this unrolledLinkedList.
+      :type other: `[?d] eltType`
+
+      :return: List indices where elements were inserted.
+      :rtype: `range`
+    */
+    proc ref append(other: [?d] eltType) lifetime this < other {
+      var ret: range;
+      on this {
+        _enter();
+        ret = _appendGeneric(other);
+        _leave();
+      }
+      return ret;
+    }
+
+    /*
+      Append a copy of each element yielded by a range to the end of this
+      unrolledLinkedList.
+
+      .. note::
+
+        Attempting to initialize an unrolledLinkedList from an unbounded range
+        will trigger a compiler error.
+
+      :arg other: The range to initialize from.
+      :type other: `range(eltType)`
+
+      :return: List indices where elements were inserted.
+      :rtype: `range`
+    */
+    proc ref append(other: range(eltType, ?b, ?d)) lifetime this < other {
+      if other.bounds != boundKind.both {
+        param e = this.type:string;
+        param f = other.type:string;
+        param msg = "Cannot extend " + e + " with unbounded " + f;
+        compilerError(msg);
+      }
+
+      var ret: range;
+      on this {
+        _enter();
+        ret = _appendGeneric(other);
+        _leave();
+      }
+      return ret;
     }
 
     /*
@@ -449,8 +572,8 @@ module UnrolledLinkedList {
 
       .. warning::
 
-        Calling this method on an empty unrolledLinkedList will cause the 
-        currently running program to halt. If the `--fast` flag is used, no 
+        Calling this method on an empty unrolledLinkedList will cause the
+        currently running program to halt. If the `--fast` flag is used, no
         safety checks will be performed.
 
       :return: A reference to the first item in this unrolledLinkedList.
@@ -475,8 +598,8 @@ module UnrolledLinkedList {
 
       .. warning::
 
-        Calling this method on an empty unrolledLinkedList will cause the 
-        currently running program to halt. If the `--fast` flag is used, no 
+        Calling this method on an empty unrolledLinkedList will cause the
+        currently running program to halt. If the `--fast` flag is used, no
         safety checks will be performed.
 
       :return: A reference to the last item in this unrolledLinkedList.
@@ -489,106 +612,21 @@ module UnrolledLinkedList {
         _leave();
         boundsCheckHalt("Called \"unrolledLinkedList.last\" on an empty unrolledLinkedList.");
       }
-     
+
       ref result = _tail!.data[_tail!.size-1];
       _leave();
 
-      return result;  
+      return result;
     }
 
-    pragma "no doc"
-    inline proc ref _extendGeneric(collection) {
-      on this {
-        // TODO: Maybe we can allocate space at one time and append.
-        for item in collection {
-          _append(item);
-        }
-      }
-    }
-
-    /*
-      Extend this unrolledLinkedList by appending a copy of each element 
-      contained in a list.
-
-      :arg other: A list containing elements of the same type as those
-        contained in this list.
-      :type other: `list(eltType)`
-    */
-    proc ref extend(other: list(eltType, ?p)) lifetime this < other {
-      on this {
-        _enter();
-        _extendGeneric(other);
-        _leave();
-      }
-    }
-
-    /*
-      Extend this unrolledLinkedList by appending a copy of each element 
-      contained in an unrolledLinkedList.
-
-      :arg other: an unrolledLinkedList containing elements of the same type as 
-        those contained in this unrolledLinkedList.
-      :type other: `unrolledLinkedList(eltType)`
-    */
-    proc ref extend(other: unrolledLinkedList(eltType, ?p)) lifetime this < other {
-      on this {
-        _enter();
-        _extendGeneric(other);
-        _leave();
-      }
-    }
-
-    /*
-      Extend this unrolledLinkedList by appending a copy of each element 
-      contained in an array.
-
-      :arg other: An array containing elements of the same type as those
-        contained in this unrolledLinkedList.
-      :type other: `[?d] eltType`
-    */
-    proc ref extend(other: [?d] eltType) lifetime this < other {
-      on this {
-        _enter();
-        _extendGeneric(other);
-        _leave();
-      }
-    }
-
-    /*
-      Extends this unrolledLinkedList by appending a copy of each element 
-      yielded by a range.
-
-      .. note::
-
-        Attempting to initialize an unrolledLinkedList from an unbounded range 
-        will trigger a compiler error.
-
-      :arg other: The range to initialize from.
-      :type other: `range(eltType)`
-    */
-    proc ref extend(other: range(eltType, ?b, ?d)) lifetime this < other {
-      if !isBoundedRange(other) {
-        param e = this.type:string;
-        param f = other.type:string;
-        param msg = "Cannot extend " + e + " with unbounded " + f;
-        compilerError(msg);
-      }
-
-      on this {
-        _enter();
-        _extendGeneric(other);
-        _leave();
-      }
-    }
-
-    pragma "no doc"
-    proc ref _insert(idx: int, in x: eltType) 
+    @chpldoc.nodoc
+    proc ref _insert(idx: int, in x: eltType)
          lifetime this < x {
 
       _size += 1;
 
       var pos = 0;
-      var cur = _head; 
+      var cur = _head;
       while cur != nil {
         if idx >= pos + cur!.size {
           pos += cur!.size;
@@ -597,7 +635,7 @@ module UnrolledLinkedList {
         else {
           // The position in this node
           var i = idx - pos;
-          
+
           // The node to insert into
           var dest = cur;
 
@@ -614,7 +652,7 @@ module UnrolledLinkedList {
           dest!.size += 1;
           for j in i+1..dest!.size-1 by -1 {
             dest!.data[j] = dest!.data[j-1];
-          } 
+          }
 
           dest!.data[i] = x;
 
@@ -625,17 +663,17 @@ module UnrolledLinkedList {
 
     /*
       Insert an element at a given position in this unrolledLinkedList, shifting
-      all elements currently at and following that index one to the right. The 
-      call ``a.insert(0, x)`` inserts an element at the front of the 
-      unrolledLinkedList `a`, and ``a.insert((a.size), x)`` is equivalent to 
+      all elements currently at and following that index one to the right. The
+      call ``a.insert(0, x)`` inserts an element at the front of the
+      unrolledLinkedList `a`, and ``a.insert((a.size), x)`` is equivalent to
       ``a.append(x)``.
 
       If the insertion is successful, this method returns `true`. If the given
       index is out of bounds, this method does nothing and returns `false`.
 
       .. warning::
-      
-        Inserting an element into this unrolledLinkedList may invalidate 
+
+        Inserting an element into this unrolledLinkedList may invalidate
         existing references to the elements contained in this unrolledLinkedList.
 
       :arg idx: The index into this unrolledLinkedList at which to insert.
@@ -666,10 +704,10 @@ module UnrolledLinkedList {
         _leave();
       }
 
-      return result;  
+      return result;
     }
 
-    pragma "no doc"
+    @chpldoc.nodoc
     proc ref _insertGenericKnownSize(idx: int, items, size: int): bool {
       //TODO: Maybe some optimization here. This O(N^2)
       var result = false;
@@ -702,16 +740,16 @@ module UnrolledLinkedList {
     }
 
     /*
-      Insert elements of an array `arr` into this unrolledLinkedList at index 
-      `idx`, shifting all elements at and following the index `arr.size` 
-      positions to the right. 
+      Insert elements of an array `arr` into this unrolledLinkedList at index
+      `idx`, shifting all elements at and following the index `arr.size`
+      positions to the right.
 
       If the insertion is successful, this method returns `true`. If the given
       index is out of bounds, this method does nothing and returns `false`.
 
       .. warning::
 
-        Inserting elements into this unrolledLinkedList may invalidate existing 
+        Inserting elements into this unrolledLinkedList may invalidate existing
         references to the elements contained in this unrolledLinkedList.
 
       :arg idx: The index into this unrolledLinkedList at which to insert.
@@ -737,8 +775,8 @@ module UnrolledLinkedList {
     }
 
     /*
-      Insert elements of a list `lst` into this unrolledLinkedList at index 
-      `idx`, shifting all elements at and following the index `lst.size` 
+      Insert elements of a list `lst` into this unrolledLinkedList at index
+      `idx`, shifting all elements at and following the index `lst.size`
       positions to the right.
 
       If the insertion is successful, this method returns `true`. If the given
@@ -746,7 +784,7 @@ module UnrolledLinkedList {
 
       .. warning::
 
-        Inserting elements into this unrolledLinkedList may invalidate existing 
+        Inserting elements into this unrolledLinkedList may invalidate existing
         references to the elements contained in this unrolledLinkedList.
 
       :arg idx: The index into this unrolledLinkedList at which to insert.
@@ -759,9 +797,9 @@ module UnrolledLinkedList {
       :rtype: `bool`
     */
     proc ref insert(idx: int, lst: list(eltType)): bool lifetime this < lst {
-      
+
       var result = false;
-      
+
       // Prevent deadlock if we are trying to insert this into itself.
       const size = lst.size;
 
@@ -775,16 +813,16 @@ module UnrolledLinkedList {
     }
 
     /*
-      Remove the first `count` elements from this unrolledLinkedList with values 
+      Remove the first `count` elements from this unrolledLinkedList with values
       equal to `x`, shifting all elements following the removed item left.
 
       If the count of elements to remove is less than or equal to zero, then
-      all elements from this unrolledLinkedList equal to the value of `x` will 
+      all elements from this unrolledLinkedList equal to the value of `x` will
       be removed.
 
       .. warning::
 
-        Removing elements from this unrolledLinkedList may invalidate existing 
+        Removing elements from this unrolledLinkedList may invalidate existing
         references to the elements contained in this unrolledLinkedList.
 
       :arg x: The value of the element to remove.
@@ -818,7 +856,7 @@ module UnrolledLinkedList {
             }
             dst_i += 1;
           }
-          
+
           // No hit in this node, continue
           if dst_i == cur!.size {
             cur = cur!.next;
@@ -859,7 +897,7 @@ module UnrolledLinkedList {
       return result;
     }
 
-    pragma "no doc"
+    @chpldoc.nodoc
     proc ref _popAtIndex(idx: int): eltType {
       _size -= 1;
 
@@ -894,14 +932,14 @@ module UnrolledLinkedList {
 
       .. warning::
 
-        Popping an element from this unrolledLinkedList will invalidate any 
-        reference to the element taken while it was contained in this 
+        Popping an element from this unrolledLinkedList will invalidate any
+        reference to the element taken while it was contained in this
         unrolledLinkedList.
 
       .. warning::
 
-        Calling this method on an empty unrolledLinkedList will cause the 
-        currently running program to halt. If the `--fast` flag is used, no 
+        Calling this method on an empty unrolledLinkedList will cause the
+        currently running program to halt. If the `--fast` flag is used, no
         safety checks will be performed.
 
       :return: The element popped.
@@ -919,20 +957,20 @@ module UnrolledLinkedList {
     }
 
     /*
-      Remove the element at the index `idx` from this unrolledLinkedList and 
+      Remove the element at the index `idx` from this unrolledLinkedList and
       return it.
 
       .. warning::
 
-        Popping an element from this unrolledLinkedList will invalidate any 
-        reference to the element taken while it was contained in this 
+        Popping an element from this unrolledLinkedList will invalidate any
+        reference to the element taken while it was contained in this
         unrolledLinkedList.
 
       .. warning::
 
-        Calling this method on an empty unrolledLinkedList or with values of 
-        `idx` that are out of bounds will cause the currently running program 
-        to halt. If the `--fast` flag is used, no safety checks will be 
+        Calling this method on an empty unrolledLinkedList or with values of
+        `idx` that are out of bounds will cause the currently running program
+        to halt. If the `--fast` flag is used, no safety checks will be
         performed.
 
       :arg idx: The index of the element to remove.
@@ -953,7 +991,7 @@ module UnrolledLinkedList {
 
       .. warning::
 
-        Clearing the contents of this unrolledLinkedList will invalidate all 
+        Clearing the contents of this unrolledLinkedList will invalidate all
         existing references to the elements contained in this unrolledLinkedList.
     */
     proc ref clear() {
@@ -975,15 +1013,15 @@ module UnrolledLinkedList {
     }
 
     /*
-      Return a zero-based index into this unrolledLinkedList of the first item 
-      whose value is equal to `x`. If no such element can be found this method 
+      Return a zero-based index into this unrolledLinkedList of the first item
+      whose value is equal to `x`. If no such element can be found this method
       returns the value `-1`.
 
       .. warning::
 
-        Calling this method on an empty unrolledLinkedList or with values of 
-        `start` or `end` that are out of bounds will cause the currently running 
-        program to halt. If the `--fast` flag is used, no safety checks will be 
+        Calling this method on an empty unrolledLinkedList or with values of
+        `start` or `end` that are out of bounds will cause the currently running
+        program to halt. If the `--fast` flag is used, no safety checks will be
         performed.
 
       :arg x: An element to search for.
@@ -1070,7 +1108,7 @@ module UnrolledLinkedList {
     }
 
     /*
-      Index this unrolledLinkedList via subscript. Returns a reference to the 
+      Index this unrolledLinkedList via subscript. Returns a reference to the
       element at a given index in this unrolledLinkedList.
 
       :arg i: The index of the element to access.
@@ -1092,7 +1130,7 @@ module UnrolledLinkedList {
       return result;
     }
 
-    pragma "no doc"
+    @chpldoc.nodoc
     proc const ref this(i: int) const ref {
       if boundsChecking && !_withinBounds(i) {
         const msg = "Invalid unrolledLinkedList index: " + i:string;
@@ -1120,23 +1158,21 @@ module UnrolledLinkedList {
 
     /*
       Write the contents of this unrolledLinkedList to a channel.
-
-      :arg ch: A channel to write to.
     */
-    proc writeThis(ch: channel) throws {
+    proc serialize(writer, ref serializer) throws {
       _enter();
-      
-      ch <~> "[";
+
+      writer.write("[");
 
       var first = true;
 
       for x in this {
-        if !first then ch <~> ", ";
+        if !first then writer.write(", ");
         else first = false;
-        ch <~> x;
+        writer.write(x);
       }
 
-      ch <~> "]";
+      writer.write("]");
 
       _leave();
     }
@@ -1152,7 +1188,7 @@ module UnrolledLinkedList {
     }
 
     /*
-      The current number of elements contained in this unrolledLinkedList. Returns 
+      The current number of elements contained in this unrolledLinkedList. Returns
       in O(1).
     */
     inline proc const size {
@@ -1178,7 +1214,7 @@ module UnrolledLinkedList {
     }
 
     /*
-      Returns a new DefaultRectangular array containing a copy of 
+      Returns a new DefaultRectangular array containing a copy of
       each of the elements contained in this unrolledLinkedList.
 
       :return: A new DefaultRectangular array.
@@ -1207,7 +1243,7 @@ module UnrolledLinkedList {
   } // End record "unrolledLinkedList".
 
   /*
-    Clear the contents of this unrolledLinkedList, then extend this now-empty 
+    Clear the contents of this unrolledLinkedList, then extend this now-empty
     unrolledLinkedList with the elements contained in another unrolledLinkedList.
 
     .. warning::
@@ -1219,7 +1255,7 @@ module UnrolledLinkedList {
   operator unrolledLinkedList.=(ref lhs: unrolledLinkedList(?t, ?),
                                 rhs: unrolledLinkedList(t, ?)) {
     lhs.clear();
-    lhs.extend(rhs);
+    lhs.append(rhs);
   }
 
   /*
@@ -1251,4 +1287,3 @@ module UnrolledLinkedList {
   }
 
 } // End module "UnrolledLinkedList".
-

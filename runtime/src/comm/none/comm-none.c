@@ -1,16 +1,16 @@
 /*
- * Copyright 2020-2022 Hewlett Packard Enterprise Development LP
+ * Copyright 2020-2025 Hewlett Packard Enterprise Development LP
  * Copyright 2004-2019 Cray Inc.
  * Other additional copyright holders may be indicated within.
- * 
+ *
  * The entirety of this work is licensed under the Apache License,
  * Version 2.0 (the "License"); you may not use this file except
  * in compliance with the License.
- * 
+ *
  * You may obtain a copy of the License at
- * 
+ *
  *     http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -63,7 +63,7 @@ chpl_comm_nb_handle_t chpl_comm_put_nb(void *addr, c_nodeid_t node, void* raddr,
                                        int ln, int32_t fn)
 {
   assert(node == 0);
-  chpl_memmove(raddr, addr, size);
+  memmove(raddr, addr, size);
   return NULL;
 }
 
@@ -72,7 +72,7 @@ chpl_comm_nb_handle_t chpl_comm_get_nb(void* addr, c_nodeid_t node, void* raddr,
                                        int ln, int32_t fn)
 {
   assert(node == 0);
-  chpl_memmove(addr, raddr, size);
+  memmove(addr, raddr, size);
   return NULL;
 }
 
@@ -98,6 +98,10 @@ int chpl_comm_try_nb_some(chpl_comm_nb_handle_t* h, size_t nhandles)
   return 0;
 }
 
+void chpl_comm_free_nb_handle(chpl_comm_nb_handle_t h) {
+  assert(h == NULL);
+}
+
 int chpl_comm_addr_gettable(c_nodeid_t node, void* start, size_t len)
 {
   return 0;
@@ -108,10 +112,12 @@ int32_t chpl_comm_getMaxThreads(void) {
 }
 
 void chpl_comm_init(int *argc_p, char ***argv_p) {
+  chpl_set_num_locales_on_node(1);
   chpl_numNodes = 1;
   chpl_nodeID = 0;
-  chpl_set_num_locales_on_node(1);
 }
+
+void chpl_comm_pre_mem_init(void) { }
 
 void chpl_comm_post_mem_init(void) { }
 
@@ -175,7 +181,7 @@ void  chpl_comm_get(void* addr, c_nodeid_t node, void* raddr,
 
 void  chpl_comm_put_strd(void* dstaddr_arg, size_t* dststrides, c_nodeid_t dstnode,
                          void* srcaddr_arg, size_t* srcstrides, size_t* count,
-                         int32_t stridelevels, size_t elemSize, int32_t commID, 
+                         int32_t stridelevels, size_t elemSize, int32_t commID,
                          int ln, int32_t fn)
 {
   assert(dstnode==0);
@@ -188,7 +194,7 @@ void  chpl_comm_put_strd(void* dstaddr_arg, size_t* dststrides, c_nodeid_t dstno
 
 void  chpl_comm_get_strd(void* dstaddr_arg, size_t* dststrides, c_nodeid_t srcnode,
                          void* srcaddr_arg, size_t* srcstrides, size_t* count,
-                         int32_t stridelevels, size_t elemSize, int32_t commID, 
+                         int32_t stridelevels, size_t elemSize, int32_t commID,
                          int ln, int32_t fn)
 {
   assert(srcnode==0);
@@ -260,3 +266,5 @@ void chpl_comm_execute_on_fast(c_nodeid_t node, c_sublocid_t subloc,
 
   chpl_ftable_call(fid, arg);
 }
+
+void chpl_comm_ensure_progress(void) { }

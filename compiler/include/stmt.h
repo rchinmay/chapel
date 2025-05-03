@@ -1,5 +1,5 @@
 /*
- * Copyright 2020-2022 Hewlett Packard Enterprise Development LP
+ * Copyright 2020-2025 Hewlett Packard Enterprise Development LP
  * Copyright 2004-2019 Cray Inc.
  * Other additional copyright holders may be indicated within.
  *
@@ -27,6 +27,8 @@
 #include <cstdio>
 #include <map>
 #include <set>
+
+#include "llvm/ADT/SmallPtrSet.h"
 
 #ifdef HAVE_LLVM
 
@@ -60,6 +62,9 @@ class ResolveScope;
 
 // parent base class for UseStmt and ImportStmt
 class VisibilityStmt : public Stmt {
+
+  template <typename T, size_t N = 8> using PtrSet = llvm::SmallPtrSet<T, N>;
+
  public:
   VisibilityStmt(AstTag astTag);
  ~VisibilityStmt() override = default;
@@ -69,7 +74,7 @@ class VisibilityStmt : public Stmt {
   const char* getRename() const;
   const char* getRenamedSym(const char* name) const;
 
-  virtual std::set<const char*> typeWasNamed(Type* t) const = 0;
+  virtual PtrSet<const char*> typeWasNamed(Type* t) const = 0;
 
   virtual bool skipSymbolSearch(const char* name) const = 0;
 
@@ -146,6 +151,12 @@ public:
   virtual bool        isCoforallLoop()                             const;
   virtual bool        isCForLoop()                                 const;
 
+  bool isGpuAttributeBlock();
+  bool isGpuPrimitivesBlock();
+  bool isGpuMetadata();
+  BlockStmt* getPrimitivesBlock();
+  void noteUseOfGpuAttributeBlock(FnSymbol* user);
+
   virtual void        checkConstLoops();
   virtual bool        deadBlockCleanup();
   void                appendChapelStmt(BlockStmt* stmt);
@@ -174,7 +185,10 @@ public:
   bool                useListRemove(ModuleSymbol* mod);
   void                useListClear();
 
+  void                modRefsEnsure();
+  void                modRefsReplace(CallExpr* replacementRefs);
   void                modRefsAdd(ModuleSymbol* mod);
+  void                modRefsAdd(TemporaryConversionSymbol* mod);
   bool                modRefsRemove(ModuleSymbol* mod);
   void                modRefsClear();
 
@@ -189,10 +203,13 @@ public:
   CallExpr*           byrefVars;     // task intents - task constructs only
 
 private:
+  CallExpr*           getMarkerPrimIfExists(PrimitiveTag markerType);
   bool                canFlattenChapelStmt(const BlockStmt* stmt)  const;
 
   CallExpr*           blockInfo;
 };
+
+BlockStmt* findEnclosingGpuAttributeBlock(Expr* startFrom);
 
 /************************************* | **************************************
 *                                                                             *
@@ -300,6 +317,9 @@ struct Witnesses {
 
 class ImplementsStmt final : public Stmt {
 public:
+  static ImplementsStmt* build(InterfaceSymbol* isym,
+                               CallExpr* actuals,
+                               BlockStmt* body);
   static ImplementsStmt* build(const char* name,
                                CallExpr* actuals,
                                BlockStmt* body);

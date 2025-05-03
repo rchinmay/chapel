@@ -88,9 +88,11 @@ void gasnetc_bootstrapBroadcast(void *src, size_t len, void *dest, int rootnode)
   GASNETI_AM_SAFE_NORETURN(retval,AMMPI_SPMDBroadcast(dest, len, rootnode));
   if_pf (retval) gasneti_fatalerror("failure in gasnetc_bootstrapBroadcast()");
 }
-#if GASNET_PSHM /* Used only in call to gasneti_pshm_init() */
-/* Naive (poorly scaling) "reference" implementation via gasnetc_bootstrapExchange() */
-static void gasnetc_bootstrapSNodeBroadcast(void *src, size_t len, void *dest, int rootnode) {
+#if GASNET_PSHM // Currently used only in call to gasneti_pshm_init()
+// Naive (poorly scaling) "reference" SubsetBroadcast via AMMPI_SPMDAllGather()
+// Since every caller extracts the desired rootnode's contribution from an
+// AllGather, the NbrhdBroadcast and HostBroadcast are identical.
+static void gasnetc_bootstrapSubsetBroadcast(void *src, size_t len, void *dest, int rootnode) {
   void *tmp = gasneti_malloc(len * gasneti_nodes);
   void *self = src ? src : gasneti_malloc(len); /* Ensure never NULL */
   if (gasneti_mynode != rootnode) {
@@ -102,19 +104,29 @@ static void gasnetc_bootstrapSNodeBroadcast(void *src, size_t len, void *dest, i
   if (self != src) gasneti_free(self);
   gasneti_free(tmp);
 }
+#define gasnetc_bootstrapNbrhdBroadcast gasnetc_bootstrapSubsetBroadcast
+#define gasnetc_bootstrapHostBroadcast gasnetc_bootstrapSubsetBroadcast
 #endif
 
 #define INITERR(type, reason) do {                                      \
    if (gasneti_VerboseErrors) {                                         \
-     fprintf(stderr, "GASNet initialization encountered an error: %s\n" \
-      "  in %s at %s:%i\n",                                             \
+     gasneti_console_message("ERROR","GASNet initialization encountered an error: %s\n" \
+      "  in %s at %s:%i",                                               \
       #reason, GASNETI_CURRENT_FUNCTION,  __FILE__, __LINE__);          \
    }                                                                    \
    retval = GASNET_ERR_ ## type;                                        \
    goto done;                                                           \
  } while (0)
 
-static int gasnetc_init(int *argc, char ***argv, gex_Flags_t flags) {
+static int gasnetc_init(
+                               gex_Client_t            *client_p,
+                               gex_EP_t                *ep_p,
+                               gex_TM_t                *tm_p,
+                               const char              *clientName,
+                               int                     *argc,
+                               char                    ***argv,
+                               gex_Flags_t             flags)
+{
   int retval = GASNET_OK;
   int networkdepth = 0;
   const char *pstr = NULL;
@@ -131,8 +143,7 @@ static int gasnetc_init(int *argc, char ***argv, gex_Flags_t flags) {
     gasneti_freezeForDebugger();
 
     #if GASNET_DEBUG_VERBOSE
-      /* note - can't call trace macros during gasnet_init because trace system not yet initialized */
-      fprintf(stderr,"gasnetc_init(): about to spawn...\n"); fflush(stderr);
+      gasneti_console_message("gasnetc_init","about to spawn..."); 
     #endif
 
     /*  choose network depth */
@@ -159,9 +170,9 @@ static int gasnetc_init(int *argc, char ***argv, gex_Flags_t flags) {
         // User can ignore this warning or hide it by setting GASNET_MPI_THREAD or GASNET_QUIET if they want to "live dangerously".
         static char tmsg[1024];
         snprintf(tmsg, sizeof(tmsg),
-                      "*** WARNING: This MPI implementation reports it can only support %s.\n"
+                      "This MPI implementation reports it can only support %s.\n"
                       GASNETI_THREADMODE_MSG
-                      "*** WARNING: You can override the requested thread mode by setting GASNET_MPI_THREAD.\n"
+                      "*** WARNING: You can override the requested thread mode by setting GASNET_MPI_THREAD."
                       , pstr);
         tmsgstr = tmsg;
       }
@@ -187,24 +198,50 @@ static int gasnetc_init(int *argc, char ***argv, gex_Flags_t flags) {
     gasneti_trace_init(argc, argv);
     GASNETI_AM_SAFE(AMMPI_SPMDSetExitCallback(gasnetc_traceoutput));
     if (pstr)    GASNETI_TRACE_PRINTF(C,("AMMPI_SPMDSetThreadMode/MPI_Init_thread()=>%s",pstr));
-    if (tmsgstr) GASNETI_TRACE_PRINTF(I,("%s",tmsgstr));
-    if (tmsgstr && !gasneti_mynode &&
-        !gasneti_getenv_yesno_withdefault("GASNET_QUIET",0)) { fprintf(stderr, "%s", tmsgstr); fflush(stderr); }
+    if (tmsgstr) {
+      if (gasneti_getenv_yesno_withdefault("GASNET_QUIET",0))
+        GASNETI_TRACE_PRINTF(I,("*** WARNING: %s",tmsgstr));
+      else
+        gasneti_console0_message("WARNING","%s",tmsgstr);
+    }
 
-    #if GASNET_DEBUG_VERBOSE
-      fprintf(stderr,"gasnetc_init(): spawn successful - node %i/%i starting...\n", 
-        gasneti_mynode, gasneti_nodes); fflush(stderr);
-    #endif
+    gasneti_spawn_verbose = gasneti_getenv_yesno_withdefault("GASNET_SPAWN_VERBOSE",0);
+
+    if (gasneti_spawn_verbose) {
+      gasneti_console_message("gasnetc_init","spawn successful - proc %i/%i starting...",
+        gasneti_mynode, gasneti_nodes);
+    }
 
     gasneti_nodemapInit(&gasnetc_bootstrapExchange, NULL, 0, 0);
 
     #if GASNET_PSHM
-      gasneti_pshm_init(&gasnetc_bootstrapSNodeBroadcast, 0);
+      gasneti_pshm_init(&gasnetc_bootstrapNbrhdBroadcast, 0);
     #endif
+
+    //  Create first Client, EP and TM *here*, for use in subsequent bootstrap communication
+    {
+      //  allocate the client object
+      gasneti_Client_t client = gasneti_alloc_client(clientName, flags);
+      *client_p = gasneti_export_client(client);
+
+      //  create the initial endpoint with internal handlers
+      if (gex_EP_Create(ep_p, *client_p, GEX_EP_CAPABILITY_ALL, flags))
+        GASNETI_RETURN_ERRR(RESOURCE,"Error creating initial endpoint");
+      gasneti_EP_t ep = gasneti_import_ep(*ep_p);
+      gasnetc_handler = ep->_amtbl; // TODO-EX: this global variable to be removed
+
+      //  create the tm
+      gasneti_TM_t tm = gasneti_alloc_tm(ep, gasneti_mynode, gasneti_nodes, flags);
+      *tm_p = gasneti_export_tm(tm);
+    }
+
+    gasnetc_bootstrapBarrier();
+    gasneti_attach_done = 1; // Ready to use AM Short and Medium for bootstrap comms
 
     uintptr_t mmap_limit;
     #if HAVE_MMAP
     {
+    AMUNLOCK();
       // Bound per-host (sharedLimit) argument to gasneti_segmentLimit()
       // while properly reserving space for aux segments.
       uint64_t sharedLimit = gasneti_sharedLimit();
@@ -216,9 +253,8 @@ static int gasnetc_init(int *argc, char ***argv, gex_Flags_t flags) {
       }
       sharedLimit -= hostAuxSegs;
 
-      mmap_limit = gasneti_segmentLimit((uintptr_t)-1, sharedLimit,
-                                  &gasnetc_bootstrapExchange,
-                                  &gasnetc_bootstrapBarrier);
+      mmap_limit = gasneti_segmentLimit((uintptr_t)-1, sharedLimit, NULL, NULL);
+    AMLOCK();
     }
     #else
       // TODO-EX: we can at least look at rlimits but such logic belongs in conduit-indep code
@@ -250,7 +286,7 @@ extern int gasnetc_amregister(gex_AM_Index_t index, gex_AM_Entry_t *entry) {
   return GASNET_OK;
 }
 /* ------------------------------------------------------------------------------------ */
-extern int gasnetc_attach_primary(void) {
+extern int gasnetc_attach_primary(gex_Flags_t flags) {
   int retval = GASNET_OK;
   
   AMLOCK();
@@ -335,40 +371,31 @@ extern int gasnetc_Client_Init(
 
   //  main init
   // TODO-EX: must split off per-client and per-endpoint portions
-  if (!gasneti_init_done) {
-    int retval = gasnetc_init(argc, argv, flags);
+  if (!gasneti_init_done) { // First client
+    // NOTE: gasnetc_init() creates the first Client, EP and TM for use in bootstrap comms
+    int retval = gasnetc_init(client_p, ep_p, tm_p, clientName, argc, argv, flags);
     if (retval != GASNET_OK) GASNETI_RETURN(retval);
   #if 0
     /* called within gasnetc_init to allow init tracing */
     gasneti_trace_init(argc, argv);
   #endif
+  } else {
+    gasneti_fatalerror("No multi-client support");
   }
 
   // Do NOT move this prior to the gasneti_trace_init() call
   GASNETI_TRACE_PRINTF(O,("gex_Client_Init: name='%s' argc_p=%p argv_p=%p flags=%d",
                           clientName, (void *)argc, (void *)argv, flags));
 
-  //  allocate the client object
-  gasneti_Client_t client = gasneti_alloc_client(clientName, flags);
-  *client_p = gasneti_export_client(client);
-
-  //  create the initial endpoint with internal handlers
-  if (gex_EP_Create(ep_p, *client_p, GEX_EP_CAPABILITY_ALL, flags))
-    GASNETI_RETURN_ERRR(RESOURCE,"Error creating initial endpoint");
-  gasneti_EP_t ep = gasneti_import_ep(*ep_p);
-  gasnetc_handler = ep->_amtbl; // TODO-EX: this global variable to be removed
-
-  // TODO-EX: create team
-  gasneti_TM_t tm = gasneti_alloc_tm(ep, gasneti_mynode, gasneti_nodes, flags);
-  *tm_p = gasneti_export_tm(tm);
-
   if (0 == (flags & GASNETI_FLAG_INIT_LEGACY)) {
     /*  primary attach  */
-    if (GASNET_OK != gasnetc_attach_primary())
+    if (GASNET_OK != gasnetc_attach_primary(flags))
       GASNETI_RETURN_ERRR(RESOURCE,"Error in primary attach");
 
     /* ensure everything is initialized across all nodes */
     gasnet_barrier(0, GASNET_BARRIERFLAG_UNNAMED);
+  } else {
+    gasneti_attach_done = 0; // Pending client call to gasnet_attach()
   }
 
   return GASNET_OK;
@@ -405,7 +432,8 @@ extern void gasnetc_exit(int exitcode) {
     gasneti_mutex_lock(&exit_lock);
   }
 
-  GASNETI_TRACE_PRINTF(C,("gasnet_exit(%i)\n", exitcode));
+  if (gasneti_spawn_verbose) gasneti_console_message("EXIT STATE","gasnet_exit(%i)",exitcode);
+  else GASNETI_TRACE_PRINTF(C,("gasnet_exit(%i)\n", exitcode));
 
   #ifdef GASNETE_EXIT_CALLBACK
     /* callback for native conduits using an mpi-conduit core 
@@ -498,34 +526,43 @@ extern gex_TI_t gasnetc_Token_Info(
   info->gex_ep = gasneti_THUNK_EP;
   result |= GEX_TI_EP;
 
-#if 0 // TODO-EX: need to implement this
-  /* (###) add code here to write the address of the handle entry into info->gex_entry (optional) */
-  info->gex_entry = ###;
-  result |= GEX_TI_ENTRY;
-#endif
+  if (mask & (GEX_TI_ENTRY|GEX_TI_IS_REQ|GEX_TI_IS_LONG)) {
+      handler_t index;
+      ammpi_category_t category;
+      int is_req;
+      gasneti_assert_zeroret(AMMPI_GetTokenInfo(token,&index,&category,&is_req));
+
+      info->gex_entry = gasneti_import_ep(gasneti_THUNK_EP)->_amtbl + index;
+      result |= GEX_TI_ENTRY;
+
+      info->gex_is_req = is_req;
+      result |= GEX_TI_IS_REQ;
+
+      info->gex_is_long = (category == ammpi_Long);
+      result |= GEX_TI_IS_LONG;
+  }
 
   return GASNETI_TOKEN_INFO_RETURN(result, info, mask);
 }
 
 extern int gasnetc_AMPoll(GASNETI_THREAD_FARG_ALONE) {
-  int retval;
   GASNETI_CHECKATTACH();
   CHECKCALLHC();
 #if GASNET_PSHM
   gasneti_AMPSHMPoll(0 GASNETI_THREAD_PASS);
 #endif
-  AMLOCK();
-  static int cntr;
+  static unsigned int cntr;
   // In single-nbrhd case never need to poll the network for client AMs.
   // However, we'll still AM_Poll() every 256th call for orderly exit handling.
+  // Thread race updating cntr is harmless (this is a heuristic)
   if ((gasneti_mysupernode.grp_count > 1) || !(0xff & cntr++)) {
-    GASNETI_AM_SAFE_NORETURN(retval, AM_Poll(gasnetc_bundle));
-  } else {
-    retval = 0;
+    int retval;
+    AMLOCK();
+      GASNETI_AM_SAFE_NORETURN(retval, AM_Poll(gasnetc_bundle));
+    AMUNLOCK();
+    if_pf (retval) GASNETI_RETURN_ERR(RESOURCE);
   }
-  AMUNLOCK();
-  if_pf (retval) GASNETI_RETURN_ERR(RESOURCE);
-  else return GASNET_OK;
+  return GASNET_OK;
 }
 
 /* ------------------------------------------------------------------------------------ */
@@ -1015,8 +1052,7 @@ extern void gasnetc_hsl_unlock (gex_HSL_t *hsl) {
         gasneti_fatalerror("HSL USAGE VIOLATION: tried to gex_HSL_Unlock() an HSL out of order");
     { float NIStime = gasneti_ticks_to_ns(gasneti_ticks_now() - hsl->timestamp)/1000.0;
       if (NIStime > GASNETC_NISTIMEOUT_WARNING_THRESHOLD) {
-        fprintf(stderr,"HSL USAGE WARNING: held an HSL for a long interval (%8.3f sec)\n", NIStime/1000000.0);
-        fflush(stderr);
+        gasneti_console_message("HSL USAGE WARNING","held an HSL for a long interval (%8.3f sec)", NIStime/1000000.0);
       }
     }
     hsl->islocked = 0;

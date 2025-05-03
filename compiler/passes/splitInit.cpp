@@ -1,5 +1,5 @@
 /*
- * Copyright 2020-2022 Hewlett Packard Enterprise Development LP
+ * Copyright 2020-2025 Hewlett Packard Enterprise Development LP
  * Copyright 2004-2019 Cray Inc.
  * Other additional copyright holders may be indicated within.
  *
@@ -316,22 +316,26 @@ static found_init_t doFindInitPoints(Symbol* sym,
         return FOUND_USE;
 
       // if there are any catches, check them for uses;
-      // also a catch block prevents initialization in the try body
-      for_alist(elt, tr->_catches) {
-        if (CatchStmt* ctch = toCatchStmt(elt)) {
-          std::vector<CallExpr*> inits;
-          Expr* use = NULL;
-          Expr* start = ctch->body()->body.first();
-          found_init_t foundCatch = doFindInitPoints(sym, start, inits,
-                                                     use, allowReturns,
-                                                     ignoreFirstEndInBlock);
-          if (foundCatch == FOUND_USE || foundCatch == FOUND_INIT) {
-            // Consider even an assignment in a catch block as a use
-            usePreventingSplitInit = findSymExprFor(ctch, sym);
-            return FOUND_USE;
-          } else if (foundCatch != FOUND_RET && foundCatch != FOUND_THROW) {
-            allCatchesRet = false;
-            nonReturningCatch = ctch;
+      // also a catch block prevents initialization in the try body.
+      // but, don't worry about the compiler-generated catch blocks
+      // for a sync block's 'try'.
+      if (!tr->isSyncTry()) {
+        for_alist(elt, tr->_catches) {
+          if (CatchStmt* ctch = toCatchStmt(elt)) {
+            std::vector<CallExpr*> inits;
+            Expr* use = NULL;
+            Expr* start = ctch->body()->body.first();
+            found_init_t foundCatch = doFindInitPoints(sym, start, inits,
+                                                       use, allowReturns,
+                                                       ignoreFirstEndInBlock);
+            if (foundCatch == FOUND_USE || foundCatch == FOUND_INIT) {
+              // Consider even an assignment in a catch block as a use
+              usePreventingSplitInit = findSymExprFor(ctch, sym);
+              return FOUND_USE;
+            } else if (foundCatch != FOUND_RET && foundCatch != FOUND_THROW) {
+              allCatchesRet = false;
+              nonReturningCatch = ctch;
+            }
           }
         }
       }
@@ -702,9 +706,9 @@ static void noteUse(VarSymbol* var, VarToCopyElisionState& map) {
 }
 
 static void noteUses(Expr* e, VarToCopyElisionState& map) {
-  std::vector<SymExpr*> symExprs;
+  llvm::SmallVector<SymExpr*, 16> symExprs;
   collectSymExprs(e, symExprs);
-  for_vector (SymExpr, se, symExprs) {
+  for (SymExpr* se : symExprs) {
     if (VarSymbol* var = toVarSymbol(se->symbol())) {
       noteUse(var, map);
     }
@@ -920,7 +924,7 @@ static bool doFindCopyElisionPoints(Expr* start,
       if (ifRet && elseRet) {
         return true;
 
-      // Neither if nor else block returns. Promote elision points from 
+      // Neither if nor else block returns. Promote elision points from
       // each block into the parent copy elision map. If a variable is
       // declared in a higher scope and is not copied in both blocks, then
       // we cannot promote it. The elision points for local variables from
@@ -970,7 +974,7 @@ static bool doFindCopyElisionPoints(Expr* start,
           }
         }
 
-      // One block hasn't returned. Figure out which one it is, and promote 
+      // One block hasn't returned. Figure out which one it is, and promote
       // all its elision points into the parent map.
       } else {
         VarToCopyElisionState::iterator it, end;

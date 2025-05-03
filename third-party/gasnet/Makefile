@@ -28,6 +28,11 @@ else
 CHPL_GASNET_CFG_OPTIONS += --disable-pshm
 endif
 
+# Turn off the runtime warning that occurs when there are co-locales and PSHM
+# is disabled. This should be removed once PSHM is enabled by default.
+
+GASNET_CFLAGS += -DGASNET_NO_PSHM_WARNING
+
 ifneq ($(CHPL_MAKE_COMM_SEGMENT),everything)
 CHPL_GASNET_CFG_OPTIONS += --disable-aligned-segments
 endif
@@ -54,6 +59,11 @@ CHPL_GASNET_CFG_OPTIONS += --disable-aries --disable-smp --disable-ofi
 endif
 endif
 
+# Disable hugepages on EX systems, initial results showed worse NUMA affinity
+ifeq ($(CHPL_MAKE_TARGET_PLATFORM),hpe-cray-ex)
+CHPL_GASNET_CFG_OPTIONS += --disable-hugetlbfs
+endif
+
 # The cross-configure scripts used on Crays ignore our CC and always use CC=cc
 # (the PrgEnv wrappers.) Use PrgEnv-gnu to produce something that is ABI and
 # compiler option compatible with llvm-clang.
@@ -72,7 +82,7 @@ endif
 # built for the target platform. Note that this uses an "unofficial" target
 # that the gasnet team has provided for us.
 ifeq ($(CHPL_MAKE_LAUNCHER),amudprun)
-XTRA_POST_BUILD_COMMAND=cd $(GASNET_BUILD_DIR)/other/amudp && $(MAKE) amudprun-host && mv amudprun-host amudprun
+XTRA_POST_BUILD_COMMAND=cd $(GASNET_BUILD_DIR)/other/amudp && $(MAKE) CC='$(CHPL_MAKE_HOST_CC)' CXX='$(CHPL_MAKE_HOST_CXX)' amudprun-host && mv amudprun-host amudprun
 endif
 
 
@@ -86,11 +96,25 @@ GASNET_CFLAGS += $(SHARED_LIB_CFLAGS)
 MPI_CC += $(SHARED_LIB_CFLAGS)
 endif
 
-# Disable hwloc until https://github.com/chapel-lang/chapel/issues/18050
+ifeq ($(CHPL_MAKE_HWLOC),bundled)
+CHPL_GASNET_CFG_OPTIONS += --with-hwloc-home=$(HWLOC_INSTALL_DIR)
+endif
+ifeq ($(CHPL_MAKE_HWLOC),system)
+CHPL_GASNET_CFG_OPTIONS += --with-hwloc-home=$(shell $(CHPL_MAKE_PYTHON) $(CHPL_MAKE_HOME)/util/chplenv/chpl_hwloc.py --prefix)
+endif
+ifeq ($(CHPL_MAKE_HWLOC),none)
 CHPL_GASNET_CFG_OPTIONS += --disable-hwloc
+endif
 
 # Disable IBV ODP due to https://upc-bugs.lbl.gov/bugzilla/show_bug.cgi?id=4008
 CHPL_GASNET_CFG_OPTIONS += --disable-ibv-odp
+
+ifeq ($(CHPL_MAKE_TARGET_COMPILER),llvm)
+# If we are using LLVM 15+, it defaults to -fPIE, so use that here as well
+ifeq ($(shell test $(CHPL_MAKE_LLVM_VERSION) -ge 15; echo "$$?"),0)
+GASNET_CFLAGS += -fPIE
+endif
+endif
 
 CHPL_GASNET_ENV_VARS:= CC='$(CC)' CXX='$(CXX)' MPI_CC='$(MPI_CC)' CFLAGS='$(GASNET_CFLAGS)' CXXFLAGS='$(GASNET_CFLAGS)'
 
@@ -116,7 +140,7 @@ gasnet-config: FORCE
 	mkdir -p $(GASNET_BUILD_DIR)
 	cd $(GASNET_SUBDIR) && ./Bootstrap -T
 	$(XTRA_CONFIG_COMMAND)
-	$(ENSURE_GASNET_COMPATIBLE_COMPILER) cd $(GASNET_BUILD_DIR) && $(CHPL_GASNET_ENV_VARS) $(GASNET_SUBDIR)/$(CHPL_GASNET_CFG_SCRIPT) --prefix=$(GASNET_INSTALL_DIR) $(CHPL_GASNET_CFG_OPTIONS) --disable-seq --enable-par --disable-parsync $(CHPL_GASNET_CFG_OPTIONS)
+	$(ENSURE_GASNET_COMPATIBLE_COMPILER) cd $(GASNET_BUILD_DIR) && $(CHPL_GASNET_ENV_VARS) $(GASNET_SUBDIR)/$(CHPL_GASNET_CFG_SCRIPT) --prefix=$(GASNET_INSTALL_DIR) --disable-seq --enable-par --disable-parsync --with-max-pthreads-per-node=65535 $(CHPL_GASNET_CFG_OPTIONS)
 
 gasnet-build: FORCE
 	$(ENSURE_GASNET_COMPATIBLE_COMPILER) cd $(GASNET_BUILD_DIR) && $(MAKE) all
@@ -138,5 +162,7 @@ post-install: FORCE
 gasnet: gasnet-config gasnet-build gasnet-install
 
 FORCE:
+
+.PHONY: FORCE
 
 .NOTPARALLEL:

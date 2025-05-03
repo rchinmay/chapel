@@ -8,7 +8,7 @@ use Time;
 config const timing = false;
 
 proc main(args: [] string) {
-  var clock:Timer;
+  var clock:stopwatch;
   var paths:domain(string);
 
   if timing {
@@ -19,7 +19,7 @@ proc main(args: [] string) {
     if isFile(arg) {
       paths += relativeRealPath(arg);
     } else if isDir(arg) {
-      for path in findfiles(arg, recursive=true) {
+      for path in findFiles(arg, recursive=true) {
         paths += relativeRealPath(path);
       }
     } else {
@@ -60,10 +60,10 @@ proc main(args: [] string) {
   // stumbling block: associative array key+value iteration
   // stumbling block: associative array key+value iteration in sorted order
   writeln("Duplicate files found:");
-  for hash in hashes.sorted() {
+  for hash in sorted(hashes) {
     if hashesToPaths[hash].size > 1 {
       writeln(hash);
-      for path in hashesToPaths[hash].sorted() {
+      for path in sorted(hashesToPaths[hash]) {
         writeln("  ", path);
       }
     }

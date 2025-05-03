@@ -1,5 +1,5 @@
 /*
- * Copyright 2020-2022 Hewlett Packard Enterprise Development LP
+ * Copyright 2020-2025 Hewlett Packard Enterprise Development LP
  * Copyright 2004-2019 Cray Inc.
  * Other additional copyright holders may be indicated within.
  *
@@ -39,6 +39,8 @@
 #include "symbol.h"
 #include "wellknown.h"
 
+#include "global-ast-vecs.h"
+
 #include <vector>
 
 // last mention map:
@@ -68,6 +70,8 @@ void addAutoDestroyCalls() {
   LastMentionMap lmm;
 
   forv_Vec(FnSymbol, fn, gFnSymbols) {
+    if (fn->hasFlag(FLAG_RESOLVED_EARLY)) continue;
+
     if (fn->hasFlag(FLAG_EXTERN))
       continue; // no need to add auto-destroy in extern fn prototypes
 
@@ -174,6 +178,7 @@ static Expr* walkBlockStmt(FnSymbol*         fn,
                            LabelSymbol*      retLabel,
                            bool              isDeadCode,
                            bool              inScopelessBlock,
+                           bool              isEarlyVisitForGotoError,
                            Expr*             stmt,
                            std::set<VarSymbol*>& ignoredVariables,
                            LastMentionMap&   lmm) {
@@ -205,7 +210,7 @@ static Expr* walkBlockStmt(FnSymbol*         fn,
 
     // Consider the catch blocks now
     for (Expr* cur = stmt->next; cur != NULL; cur = cur->next) {
-      cur = walkBlockStmt(fn, scope, retLabel, false, false, cur,
+      cur = walkBlockStmt(fn, scope, retLabel, false, false, false, cur,
                           ignoredVariables, lmm);
       ret = cur;
     }
@@ -254,7 +259,7 @@ static Expr* walkBlockStmt(FnSymbol*         fn,
       if (isCheckErrorStmt(stmt->next)) {
         // Visit the check-error block now - do not consider
         // the variables initialized when running that check-error block.
-        ret = walkBlockStmt(fn, scope, retLabel, false, false, stmt->next,
+        ret = walkBlockStmt(fn, scope, retLabel, false, false, true, stmt->next,
                             ignoredVariables, lmm);
       }
 
@@ -368,7 +373,7 @@ static Expr* walkBlockStmt(FnSymbol*         fn,
     }
   }
 
-  if (isDeadCode == false) {
+  if (isDeadCode == false && isEarlyVisitForGotoError == false) {
     // Destroy the variable after this statement if it's the last mention
     // Since this adds the destroy immediately after this statement,
     // it ends up destroying multiple variables to be destroyed here
@@ -398,7 +403,7 @@ static void walkBlockScopelessBlock(AutoDestroyScope& scope,
                                     std::set<VarSymbol*>& ignoredVariables,
                                     LastMentionMap&   lmm) {
   for (Expr* stmt = block->body.first(); stmt != NULL; stmt = stmt->next) {
-    stmt = walkBlockStmt(fn, scope, retLabel, isDeadCode, true, stmt,
+    stmt = walkBlockStmt(fn, scope, retLabel, isDeadCode, true, false, stmt,
                          ignoredVariables, lmm);
   }
 }
@@ -538,11 +543,23 @@ static void walkBlockWithScope(AutoDestroyScope& scope,
   LabelSymbol*     retLabel   = (parent == NULL) ? findReturnLabel(fn) : NULL;
   bool             isDeadCode = false;
 
+  // If the body is empty, the scope may still have variables to be
+  // auto-destroyed; one key example is loop index variables in a forall.
+  // We need an anchor to call 'insertAutoDestroys', so if we do need to
+  // insert them, create a noop.
+  if (block->body.empty() && scope.numLocalsAndDefers() > 0) {
+    SET_LINENO(block);
+    auto noop = new CallExpr(PRIM_NOOP);
+    block->body.insertAtTail(noop);
+    scope.insertAutoDestroys(fn, noop, ignoredVariables);
+    noop->remove();
+  }
+
   for (Expr* stmt = block->body.first(); stmt != NULL; stmt = stmt->next) {
     //
     // Handle the current statement
     //
-    stmt = walkBlockStmt(fn, scope, retLabel, isDeadCode, false, stmt,
+    stmt = walkBlockStmt(fn, scope, retLabel, isDeadCode, false, false, stmt,
                          ignoredVariables, lmm);
 
     //
@@ -926,7 +943,7 @@ static Expr* findLastExprInStatement(Expr* e, VarSymbol* v) {
     }
   }
 
-  // Check if the early deinit point is the same as the the
+  // Check if the early deinit point is the same as the
   // usual (end of block) deinit point. If it is, treat the variable
   // as end-of-block to simplify matters.
   GotoStmt* gotoStmt = toGotoStmt(stmt);

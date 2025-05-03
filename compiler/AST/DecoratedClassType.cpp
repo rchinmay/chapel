@@ -1,5 +1,5 @@
 /*
- * Copyright 2020-2022 Hewlett Packard Enterprise Development LP
+ * Copyright 2020-2025 Hewlett Packard Enterprise Development LP
  * Copyright 2004-2019 Cray Inc.
  * Other additional copyright holders may be indicated within.
  *
@@ -25,6 +25,8 @@
 #include "symbol.h"
 #include "expr.h"
 #include "iterator.h"
+
+#include "global-ast-vecs.h"
 
 static const char* nameForUser(const char* className) {
   if (!strcmp(className, "_owned") || !strcmp(className, "_shared"))
@@ -400,68 +402,9 @@ static Type* convertToCanonical(Type* a) {
   return canonicalDecoratedClassType(a);
 }
 
-
-static void convertClassTypes(Type* (*convert)(Type*)) {
-
-  forv_Vec(VarSymbol, var, gVarSymbols) {
-    Type* newT = convert(var->type);
-    if (newT != var->type) var->type = newT;
-  }
-
-  forv_Vec(ArgSymbol, arg, gArgSymbols) {
-    Type* newT = convert(arg->type);
-    if (newT != arg->type) arg->type = newT;
-  }
-
-  forv_Vec(ShadowVarSymbol, sv, gShadowVarSymbols) {
-    Type* newT = convert(sv->type);
-    if (newT != sv->type) sv->type = newT;
-  }
-
-  forv_Vec(TypeSymbol, ts, gTypeSymbols) {
-    Type* newT = convert(ts->type);
-    if (newT != ts->type) {
-      TypeSymbol* newTS = newT->symbol;
-      for_SymbolSymExprs(se, ts) {
-        se->setSymbol(newTS);
-      }
-    }
-
-    size_t n = ts->type->substitutionsPostResolve.size();;
-    for (size_t i = 0; i < n; i++) {
-      NameAndSymbol& ns = ts->type->substitutionsPostResolve[i];
-      if (TypeSymbol* ets = toTypeSymbol(ns.value)) {
-        Type* newT = convert(ets->type);
-        if (newT != ets->type) {
-          TypeSymbol* newTS = newT->symbol;
-          ns.value = newTS;
-        }
-      }
-    }
-  }
-
-  forv_Vec(FnSymbol, fn, gFnSymbols) {
-    Type* newRetT = convert(fn->retType);
-    if (newRetT != fn->retType) fn->retType = newRetT;
-
-    if (fn->iteratorInfo) {
-      Type* newYieldT = convert(fn->iteratorInfo->yieldedType);
-      if (newYieldT != fn->iteratorInfo->yieldedType)
-        fn->iteratorInfo->yieldedType = newYieldT;
-    }
-
-    size_t n = fn->substitutionsPostResolve.size();
-    for (size_t i = 0; i < n; i++) {
-      NameAndSymbol& ns = fn->substitutionsPostResolve[i];
-      if (TypeSymbol* ets = toTypeSymbol(ns.value)) {
-        Type* newT = convert(ets->type);
-        if (newT != ets->type) {
-          TypeSymbol* newTS = newT->symbol;
-          ns.value = newTS;
-        }
-      }
-    }
-  }
+static void convertClassTypes(void) {
+  AdjustTypeFn adjustTypeFn = convertToCanonical;
+  adjustAllSymbolTypes(adjustTypeFn);
 }
 
 void convertClassTypesToCanonical() {
@@ -469,7 +412,7 @@ void convertClassTypesToCanonical() {
 
   // Anything that has unmanaged pointer type should be using the canonical
   // type instead.
-  convertClassTypes(convertToCanonical);
+  convertClassTypes();
 
   // At this point the TypeSymbols for the unmanaged types should
   // be removed from the tree. Using these would be an error.

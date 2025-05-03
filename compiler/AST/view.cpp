@@ -1,5 +1,5 @@
 /*
- * Copyright 2020-2022 Hewlett Packard Enterprise Development LP
+ * Copyright 2020-2025 Hewlett Packard Enterprise Development LP
  * Copyright 2004-2019 Cray Inc.
  * Other additional copyright holders may be indicated within.
  *
@@ -25,7 +25,6 @@
 #include "view.h"
 
 #include "AstDump.h"
-#include "AstDumpToNode.h"
 #include "CForLoop.h"
 #include "CatchStmt.h"
 #include "DecoratedClassType.h"
@@ -42,9 +41,12 @@
 #include "stlUtil.h"
 #include "stmt.h"
 #include "stringutil.h"
+#include "TemporaryConversionThunk.h"
 #include "TryStmt.h"
 #include "virtualDispatch.h"
 #include "WhileStmt.h"
+
+#include "global-ast-vecs.h"
 
 #include <inttypes.h>
 
@@ -414,7 +416,7 @@ static const char* aidNotFoundError(const char* callerMsg, int id) {
 }
 static const char* aidIgnoreError(const char* callerMsg, int id) {
   return aidErrorMessage(callerMsg, id,
-                         " is small, use aid09(id) to examine it");
+                         "is small, use aid09(id) to examine it");
 }
 
 // This version of aid*() does not exclude any id.
@@ -656,13 +658,66 @@ void print_view_noline(BaseAST* ast) {
   fflush(stdout);
 }
 
+template <typename T>
+void nprint_dyno_type(const T* t) {
+  if (t == nullptr) {
+    printf("<NULL>");
+  } else {
+    t->dump();
+  }
+  fflush(stdout);
+}
+
+template <typename T>
+void nprint_dyno_type(const T& t) {
+  t.dump();
+  fflush(stdout);
+}
+
+// TODO: A nice one-liner we can use to force instantiation for a type?
+void nprint_view(const chpl::uast::AstNode* x) {
+  nprint_dyno_type(x);
+}
+
+void nprint_view(const chpl::types::Type* x) {
+  nprint_dyno_type(x);
+}
+
+void nprint_view(const chpl::types::QualifiedType& x) {
+  nprint_dyno_type(x);
+}
+
+void nprint_view(const chpl::resolution::CallInfo& x) {
+  nprint_dyno_type(x);
+}
+
+void nprint_view(const chpl::resolution::ResolvedExpression* x) {
+  nprint_dyno_type(x);
+}
+
+void nprint_view(const chpl::resolution::TypedFnSignature* x) {
+  nprint_dyno_type(x);
+}
+
+void nprint_view(const chpl::resolution::UntypedFnSignature* x) {
+  nprint_dyno_type(x);
+}
+
+void nprint_view(const chpl::ID& x) {
+  nprint_dyno_type(x);
+}
+
+void nprint_view(const chpl::UniqueString& x) {
+  nprint_dyno_type(x);
+}
+
 void nprint_view(int id) {
   if (BaseAST* ast = aidWithError(id, "nprint_view"))
     nprint_view(ast);
 }
 
 void nprint_view(BaseAST* ast) {
-  if (ast==NULL) {
+  if (ast == nullptr) {
     printf("<NULL>");
   } else {
     type_nprint_view(ast);
@@ -707,24 +762,6 @@ void astDump_view(BaseAST* ast) {
     printf("<NULL>");
   } else {
     AstDump logger(stdout);
-    ast->accept(&logger);
-  }
-  printf("\n\n");
-  fflush(stdout);
-}
-
-
-// feel free to propose a better name
-void astDumpToNode_view(int id) {
-  if (BaseAST* ast = aidWithError(id, "astDumpToNode_view"))
-    astDumpToNode_view(ast);
-}
-
-void astDumpToNode_view(BaseAST* ast) {
-  if (ast==NULL) {
-    printf("<NULL>");
-  } else {
-    AstDumpToNode logger(stdout);
     ast->accept(&logger);
   }
   printf("\n\n");
@@ -945,7 +982,7 @@ static const char* summarySymbolKind(Symbol* sym) {
 }
 static void summarySymbolPrint(Symbol* sym, const char* prefix = NULL,
                                const char* suffix = NULL) {
-  printf("%s%s %s[%d] %s", prefix ? prefix : "", 
+  printf("%s%s %s[%d] %s", prefix ? prefix : "",
          summarySymbolKind(sym), sym->name, sym->id, suffix ? suffix : "");
 }
 void blockSummary(BlockStmt* block, Symbol* sym) {
@@ -1313,10 +1350,10 @@ static char* parentMsg(Expr* expr, int* cntInTreeP, int* cntNonTreeP) {
   static char result[128];
   if (expr->inTree()) {
     (*cntInTreeP)++;
-    sprintf(result, "psym %d", expr->parentSymbol->id);
+    snprintf(result, sizeof(result), "psym %d", expr->parentSymbol->id);
   } else {
     (*cntNonTreeP)++;
-    sprintf(result, "<not in tree>");
+    snprintf(result, sizeof(result), "<not in tree>");
   }
   return result;
 }
@@ -1334,7 +1371,7 @@ static void whocalls(int id, Symbol* sym) {
   else
     printf("whocalls [%d]  ignoring %s %s[%d]\n",
            id, sym->astTagAsString(), sym->name, sym->id);
-  
+
   int callAll = 0, callMatch = 0, callNonTreeMatch = 0;
   forv_Vec(CallExpr, call, gCallExprs) {
     if (SymExpr* se = toSymExpr(call->baseExpr)) {

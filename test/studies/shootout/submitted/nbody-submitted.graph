@@ -1,5 +1,5 @@
-perfkeys: real, real
-graphkeys: release, submitted
-files: nbody.dat, nbody-submitted.dat
+perfkeys: real, real, real, real
+graphkeys: release, submitted (2), submitted (3), submitted (4)
+files: nbody.dat, nbody-submitted.dat, nbody3.dat, nbody4.dat
 graphtitle: Submitted N-body Shootout Benchmark
 ylabel: Time (seconds)

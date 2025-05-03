@@ -88,8 +88,6 @@ extern void gasneti_legacy_segment_attach_hook(gasneti_EP_t ep) {
 /* ------------------------------------------------------------------------------------ */
 // Legacy gasnet_attach()
 
-extern int gasnetc_attach_primary(void);
-
 extern int gasneti_attach( gex_TM_t               _tm,
                            gasnet_handlerentry_t  *table,
                            int                    numentries,
@@ -116,7 +114,7 @@ extern int gasneti_attach( gex_TM_t               _tm,
   #endif
 
   /*  primary attach  */
-  if (GASNET_OK != gasnetc_attach_primary())
+  if (GASNET_OK != gasnetc_attach_primary(0))
     GASNETI_RETURN_ERRR(RESOURCE,"Error in primary attach");
 
   #if GASNET_SEGMENT_FAST || GASNET_SEGMENT_LARGE
@@ -187,7 +185,7 @@ SHORT_HANDLER(gasneti_legacy_memset_reqreph,4,7,
 
 extern gex_Event_t gasneti_legacy_memset_nb(gex_Rank_t node, void *dest, int val, size_t nbytes GASNETI_THREAD_FARG) {
   GASNETI_TRACE_MEMSET(node,dest,val,nbytes); 
-  gasneti_assert_reason(gasneti_legacy_handlers_registered, "gasnet_memset* requires gasnet_attach() or GEX_FLAG_USES_GASNET1");
+  gasneti_assert_reason(gasneti_legacy_handlers_registered, "gasnet_memset*() calls require gasnet_attach() or gex_Client_Init(..., GEX_FLAG_USES_GASNET1)");
   if_pf (!nbytes) return 0;
   gasneti_boundscheck(gasneti_thunk_tm,node,dest,nbytes);
   GASNETI_CHECKLOCAL_MEMSET(gasneti_thunk_tm,node,dest,val,nbytes);
@@ -201,7 +199,7 @@ extern gex_Event_t gasneti_legacy_memset_nb(gex_Rank_t node, void *dest, int val
 
 extern int gasneti_legacy_memset_nbi(gex_Rank_t node, void *dest, int val, size_t nbytes GASNETI_THREAD_FARG) {
   GASNETI_TRACE_MEMSET(node,dest,val,nbytes); 
-  gasneti_assert_reason(gasneti_legacy_handlers_registered, "gasnet_memset* requires gasnet_attach() or GEX_FLAG_USES_GASNET1");
+  gasneti_assert_reason(gasneti_legacy_handlers_registered, "gasnet_memset*() calls require gasnet_attach() or gex_Client_Init(..., GEX_FLAG_USES_GASNET1)");
   if_pf (!nbytes) return 0;
   gasneti_boundscheck(gasneti_thunk_tm,node,dest,nbytes);
   GASNETI_CHECKLOCAL_MEMSET(gasneti_thunk_tm,node,dest,val,nbytes);

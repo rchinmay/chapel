@@ -1,40 +1,40 @@
+proc RootClass.myName: string do return "object";
+proc RootClass.ddName(): string { return "object"; }
+
 class A {
-  var name: string = "A";
-  override proc ddName() { return name; }
+  override proc myName { return "A"; }
+  override proc ddName() { return myName; }
 }
 
 class B:A {
-  var name: string = "B";
-  override proc ddName() { return name; }
+  override proc myName { return "B"; }
+  override proc ddName() { return myName; }
 }
 
 class C:B {
-  var name: string = "C";
-  override proc ddName() { return name; }
+  override proc myName { return "C"; }
+  override proc ddName() { return myName; }
 }
 
 class C2:C {
-  var name: string = "C2";
-  override proc ddName() { return name; }
+  override proc myName { return "C2"; }
+  override proc ddName() { return myName; }
 }
 
 class D:C {
-  var name: string = "D";
-  override proc ddName() { return name; }
+  override proc myName { return "D"; }
+  override proc ddName() { return myName; }
 }
 
 class E:C {
-  var name: string = "E";
-  override proc ddName() { return name; }
+  override proc myName { return "E"; }
+  override proc ddName() { return myName; }
 }
 
 class F {
-  var name: string = "F";
-  override proc ddName() { return name; }
+  override proc myName { return "F"; }
+  override proc ddName() { return myName; }
 }
-
-proc object.name: string return "object";
-proc object.ddName(): string { return "object"; }
 
 //
 // Begin interesting code
@@ -46,7 +46,7 @@ proc get_cdr(type car, type cdr...?k) type {
 
 proc getSuperType(type t) type {
   proc st(v:t? = nil) type {
-    if (t == object) then
+    if (t == RootClass) then
       return t;
     else
       return v!.super.type;
@@ -71,10 +71,12 @@ proc nearestMutualParentClass(type car, type cdr...?k) type where k != 1 {
 }
 
 proc main {
-  var c: nearestMutualParentClass(borrowed E, borrowed D, borrowed C, borrowed C2, borrowed F) = new borrowed E();
-  var d: nearestMutualParentClass(borrowed E, borrowed D, borrowed C) = new borrowed E();
-  writeln(c.name);
+  var ownCE = new owned E();
+  var c: nearestMutualParentClass(borrowed E, borrowed D, borrowed C, borrowed C2, borrowed F) = ownCE.borrow();
+  var ownDE = new owned E();
+  var d: nearestMutualParentClass(borrowed E, borrowed D, borrowed C) = ownDE.borrow();
+  writeln(c.myName);
   writeln(c.ddName());
-  writeln(d.name);
+  writeln(d.myName);
   writeln(d.ddName());
 }

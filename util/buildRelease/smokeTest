@@ -7,12 +7,13 @@
 # This should fail as soon as something goes awry.
 set -e
 
-CWD=$(cd $(dirname $0) ; pwd)
+CWD=$(cd $(dirname ${BASH_SOURCE[0]}) ; pwd)
 
 MASON=0
 DOCS=0
 CHPL=0
 LINT=0
+CHAPEL_PY=0
 QUICKSTART=0
 TARGETS_SET=0
 
@@ -44,12 +45,17 @@ while [[ $# -gt 0 ]]; do
             TARGETS_SET=1
             shift
             ;;
+        chapel-py)
+            CHAPEL_PY=1
+            TARGETS_SET=1
+            shift
+            ;;
         quickstart)
             QUICKSTART=1
             shift
             ;;
         *)
-            echo "Usage: smokeTest [mason] [docs] [chpl] [lint] [quickstart]"
+            echo "Usage: smokeTest [mason] [docs] [chpl] [lint] [chapel-py] [quickstart]"
             exit 1
             ;;
         esac
@@ -71,24 +77,7 @@ if [ $TARGETS_SET -eq 0 ]; then
     LINT=1
 fi
 
-echo "Running with MASON=$MASON DOCS=$DOCS CHPL=$CHPL LINT=$LINT QUICKSTART=$QUICKSTART"
-
-# Ensure CC is respected, since it is typically ignored by chplenv/.
-if [ -n "${CC}" ] ; then
-    case $CC in
-        gcc)
-            # Deal with a frequent chapel stumbling block...
-            echo "Setting CHPL_HOST_COMPILER and CHPL_TARGET_COMPILER to: gnu"
-            export CHPL_HOST_COMPILER=gnu
-            export CHPL_TARGET_COMPILER=gnu
-            ;;
-        *)
-            echo "Setting CHPL_HOST_COMPILER and CHPL_TARGET_COMPILER to: ${CC}"
-            export CHPL_HOST_COMPILER=$CC
-            export CHPL_TARGET_COMPILER=$CC
-            ;;
-    esac
-fi
+echo "Running with MASON=$MASON DOCS=$DOCS CHPL=$CHPL LINT=$LINT CHAPEL_PY=$CHAPEL_PY QUICKSTART=$QUICKSTART"
 
 # Ensure environment is correctly configured to run chpl.
 export CHPL_HOME=$(cd "$CWD/../.." ; pwd)
@@ -105,21 +94,21 @@ echo ""
 if [ $LINT -eq 1 ]; then
     # Check for tabs.
     echo "Checking for tabs"
-    num_tabs=$($CHPL_HOME/util/devel/lookForTabs | wc -l)
-    if (( $num_tabs > 0 )) ; then
+    $CHPL_HOME/util/devel/lookForTabs
+    if [ $? -ne 0 ] ; then
         echo "Found tabs :-("
-        echo $($CHPL_HOME/util/devel/lookForTabs)
         exit 1
     fi
 
+
     # Need to clean up all of the trailing spaces before adding this
     # Check for trailing spaces
-    #num_trailing_space_lines=$($CHPL_HOME/util/devel/lookForTrailingSpaces | wc -l)
-    #if (( $num_trailing_space_lines > 0 )) ; then
-    #    echo "Found $num_trailing_space_lines lines with trailing spaces :-("
-    #    echo $($CHPL_HOME/util/devel/lookForTrailingSpaces)
-    #    exit 1
-    #fi
+    echo "Checking for trailing spaces"
+    $CHPL_HOME/util/devel/lookForTrailingSpaces
+    if [ $? -ne 0 ] ; then
+       echo "Found trailing spaces :-("
+       exit 1
+    fi
 
     # Check for standard C headers.
     echo "Checking standard C headers"
@@ -133,9 +122,8 @@ if [ $LINT -eq 1 ]; then
 
     # Ensure nightly does not have syntax errors.
     echo "Checking nightly scripts"
-    perl -c $CHPL_HOME/util/buildRelease/gen_release
+    $($CHPL_HOME/util/config/find-python.sh) -m py_compile $CHPL_HOME/util/buildRelease/gen_release
     perl -c $CHPL_HOME/util/cron/nightly
-    perl -c $CHPL_HOME/util/tokencount/tokctnightly
 
 
     # Check copyrights in source files.
@@ -159,10 +147,14 @@ fi
 
 # Source common.bash, which sets up a bunch of environment variables that are
 # required for nightly testing.
-source $CHPL_HOME/util/cron/common.bash
+if [ "$GITHUB_ACTIONS" != "true" ]; then
+  source $CHPL_HOME/util/cron/common.bash
+fi
 
 # Disable GMP and re2 to speed up build.
-export CHPL_GMP=none
+if [ "$ARKOUDA_SMOKE_TEST" != "true" ]; then
+    export CHPL_GMP=none
+fi
 
 # mason currently requires CHPL_COMM=none -- https://github.com/chapel-lang/chapel/issues/12626
 COMM=`$CHPL_HOME/util/chplenv/chpl_comm.py`
@@ -216,11 +208,16 @@ if [ $CHPL -eq 1 ]; then
         CHPL_CHECK_DEBUG=1 make $chpl_make_args check || exit 2
 fi
 
+if [ $CHAPEL_PY -eq 1 ]; then
+    # Build chapel-py-venv
+    make -j${num_procs} chapel-py-venv || exit 2
+fi
+
 if [ $DOCS -eq 1 ]; then
     # Build chpldoc, make sure the chpldoc primer runs, and the docs build.
     make -j${num_procs} $chpl_make_args chpldoc && \
         make $chpl_make_args check-chpldoc && \
-        make docs || exit 2
+        make $chpl_make_args docs || exit 2
 fi
 
 if [ $MASON -eq 1 ]; then

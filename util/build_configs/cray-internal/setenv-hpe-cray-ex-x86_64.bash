@@ -93,14 +93,6 @@ if [ -z "$BUILD_CONFIGS_CALLBACK" ]; then
     export CHPL_LLVM=bundled       # llvm requires py27 and cmake
     export CHPL_AUX_FILESYS=none
 
-    # We default to CHPL_LIBFABRIC=system for EX.  We need to point to
-    # a libfabric install for the builds.  On EX a module will supply
-    # this but on XC we have to reference a private build.
-    if ! pkg-config --exists libfabric ; then
-      private_libfab_dir=/cray/css/users/chapelu/libfabric/install
-      export PKG_CONFIG_PATH=${PKG_CONFIG_PATH:+${PKG_CONFIG_PATH}:}${private_libfab_dir}/cray-xc/lib/pkgconfig
-    fi
-
     # As a general rule, more CPUs --> faster make.
     # To use all available CPUs, export CHPL_MAKE_MAX_CPU_COUNT=0 before running this setenv.
 
@@ -140,7 +132,7 @@ if [ -z "$BUILD_CONFIGS_CALLBACK" ]; then
         launchers=none,pals,slurm-srun
         substrates=none
         locale_models=flat
-        auxfs=none,lustre
+        auxfs=none
         libpics=none,pic
 
         log_info "Start build_configs $dry_run $verbose # no make target"
@@ -157,17 +149,6 @@ if [ -z "$BUILD_CONFIGS_CALLBACK" ]; then
 
         # NOTE: don't rebuild compiler above (or else problems with switching GCC versions)
         # NOTE: "--target-compiler" values shown above will be discarded by the setenv callback.
-
-        if [ $private_libfab_dir ] ; then
-          # Remove references to our private libfabric directory from
-          # the list* files in the built runtime library subdirs.  Our
-          # private dir won't be present in that environment and we'll
-          # be using the system libfabric module anyway.
-          log_info "Wipe $private_libfab_dir refs in $CHPL_HOME/lib/.../list-*"
-          find $CHPL_HOME/lib/. -type f -name list-\* \
-            | grep '\(list-includes-and-defines\|list-libraries\)$' \
-            | xargs sed --in-place "s= *[^ ]*${private_libfab_dir}/[^ ]*==g"
-        fi
         ;;
     ( * )
         log_info "NO building Chapel component: runtime"
@@ -326,9 +307,9 @@ else
         list_loaded_modules
     fi
 
-    gen_version_gcc=10.3.0
+    #gen_version_gcc=10.3.0
     #[TODO] gen_version_intel=16.0.3.210
-    gen_version_cce=12.0.2
+    #gen_version_cce=15.0.1
 
     target_cpu_module=craype-x86-rome
 
@@ -336,42 +317,45 @@ else
 
         local target_prgenv="PrgEnv-gnu"
         local target_compiler="gcc"
-        local target_version=$gen_version_gcc
+        #local target_version=$gen_version_gcc
+
+        # unload cce, let the PrgEnv module load it if necessary
+        unload_module_re cce
 
         # unload any existing PrgEnv
         unload_module_re PrgEnv-
 
         # load target PrgEnv with compiler version
         load_module $target_prgenv
-        load_module_version $target_compiler $target_version
+        #load_module_version $target_compiler $target_version
     }
 
     function load_prgenv_intel() {
 
         local target_prgenv="PrgEnv-intel"
         local target_compiler="intel"
-        local target_version=$gen_version_intel
+        #local target_version=$gen_version_intel
 
         # unload any existing PrgEnv
         unload_module_re PrgEnv-
 
         # load target PrgEnv with compiler version
         load_module $target_prgenv
-        load_module_version $target_compiler $target_version
+        #load_module_version $target_compiler $target_version
     }
 
     function load_prgenv_cray() {
 
         local target_prgenv="PrgEnv-cray"
         local target_compiler="cce"
-        local target_version=$gen_version_cce
+        #local target_version=$gen_version_cce
 
         # unload any existing PrgEnv
         unload_module_re PrgEnv-
 
         # load target PrgEnv with compiler version
         load_module $target_prgenv
-        load_module_version $target_compiler $target_version
+        #load_module_version $target_compiler $target_version
     }
 
     function load_target_cpu() {

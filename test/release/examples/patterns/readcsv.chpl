@@ -57,7 +57,7 @@ config const approach2FileName = "readcsv-out2.csv";
 config const debug = true;
 
 // Open up a file to work with.
-var f = open(inFileName, iomode.r);
+var f = open(inFileName, ioMode.r);
 
 // Now read the in the csv data. 
 // Approach 1: formatted input into a list of maps
@@ -66,7 +66,9 @@ var f = open(inFileName, iomode.r);
   writeln();
   writeln("Approach 1: formatted input into a list of maps");
 
-  var reader = f.reader();
+  // Open a fileReader to the file. Here, 'locking=false' is used because
+  // the reader is only accessed by one task at a time.
+  var reader = f.reader(locking=false);
 
   // Read the first line to get the column names.
   // Assuming the following format, where the number of columns (ncol) is not 
@@ -74,7 +76,7 @@ var f = open(inFileName, iomode.r);
   //    col_name_1,col_name_2,...,col_name_ncol\n
   var line : string;
 
-  if (!reader.readline(line)) then
+  if (!reader.readLine(line)) then
     halt("ERROR: ", inFileName, " appears to be empty");
 
   var colNames = createListOfColNames(line);
@@ -86,7 +88,7 @@ var f = open(inFileName, iomode.r);
   // Create a list of maps with one map per row of data.
   var dataRows : list(map(string, string));
   // Read individual lines from the file until the end of the file.
-  while (reader.readline(line)) {
+  while (reader.readLine(line)) {
     // Create a new map per line.
     var aRowMap = new map(string, string);
     var start = 0;      // index into the line string
@@ -99,7 +101,7 @@ var f = open(inFileName, iomode.r);
       // Next field of data will start after the comma.
       start = nextCommaIdx + 1; 
     }
-    dataRows.append(aRowMap);
+    dataRows.pushBack(aRowMap);
   }
   reader.close();
 
@@ -112,8 +114,8 @@ var f = open(inFileName, iomode.r);
   // temporary csv file from the stored data.  It should be the same as the 
   // input csv file.
   if debug {
-    var outfile = open(approach1FileName, iomode.cw);
-    var writer = outfile.writer();
+    var outfile = open(approach1FileName, ioMode.cw);
+    var writer = outfile.writer(locking=false);
 
     // First write to the output file the column names separated by commas.
     for colIdx in 0..colNames.size-2 {
@@ -144,13 +146,13 @@ var f = open(inFileName, iomode.r);
   writeln("and values are arrays of row values"); 
 
   // Create another reader of the input csv file
-  var reader = f.reader();
+  var reader = f.reader(locking=false);
 
   // Read the first line to get the column names.
   // Note: this portion is the same as in Approach 1
   var line : string;
 
-  if (!reader.readline(line)) then
+  if (!reader.readLine(line)) then
     writeln("ERROR: ", inFileName, " appears to be empty");
 
   var colNames = createListOfColNames(line);
@@ -167,8 +169,8 @@ var f = open(inFileName, iomode.r);
   var dataRows : list(string);
 
   // Reading all of the lines of the file into a list.
-  while (reader.readline(line)) {
-    dataRows.append(line);
+  while (reader.readLine(line)) {
+    dataRows.pushBack(line);
   }
 
   // Declaring an associative array, where the value type is a 1D array 
@@ -205,8 +207,8 @@ var f = open(inFileName, iomode.r);
   // temporary csv file from the stored data.  It should be the same as the 
   // input csv file.
   if debug {
-    var outfile = open(approach2FileName, iomode.cw);
-    var writer = outfile.writer();
+    var outfile = open(approach2FileName, ioMode.cw);
+    var writer = outfile.writer(locking=false);
 
     // First write to the output file the column names separated by commas.
     for colIdx in 0..colNames.size-2 {
@@ -275,9 +277,8 @@ proc createListOfColNames(line : string) {
   var start = 0;
   while (start<line.size) {
     var (nextVal,commaIdx) = nextField(line,start);
-    colNames.append(nextVal);
+    colNames.pushBack(nextVal);
     start = commaIdx+1;
   }
   return colNames;
 } 
-

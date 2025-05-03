@@ -1,4 +1,4 @@
-use Time, SysCTypes;
+use Time, CTypes;
 
 extern proc chpl_cache_print();
 extern proc chpl_task_getId():c_int;
@@ -7,8 +7,8 @@ config const verbose=false;
 
 proc doit(a:locale, b:locale, c:locale)
 {
-  extern proc printf(fmt: c_string, vals...?numvals): int;
- 
+  extern proc printf(fmt: c_ptrConst(c_char), vals...?numvals): int;
+
   on a {
     if verbose then printf("on %d\n", here.id:c_int);
     var x = 17;

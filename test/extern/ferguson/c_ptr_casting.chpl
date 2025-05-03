@@ -1,5 +1,5 @@
-use CPtr;
-use SysCTypes;
+
+use CTypes;
 
 extern proc printarr(x:c_ptr(c_int), n:c_int);
 
@@ -13,7 +13,7 @@ proc go() {
   for i in 1..10 do a[i] = new R(i:c_int);
 
   writeln(a);
-  printarr(c_ptrTo(a[1]):c_ptr(c_int), 10);
+  printarr(c_ptrTo(a[1]):c_ptr(void):c_ptr(c_int), 10);
 }
 
 go();

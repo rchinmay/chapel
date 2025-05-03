@@ -18,28 +18,20 @@ def get(flag='host'):
         if not platform_val:
             platform_val = get('host')
     else:
-        raise error("Invalid flag: '{0}'".format(flag), ValueError)
+        error("Invalid flag: '{0}'".format(flag), ValueError)
 
     if not platform_val:
-        # Check for cray platform. It is a cray platform if there is a
-        # cle-release/CLEinfo config file with a known network value in it.
-        cle_info_file = os.path.abspath('/etc/opt/cray/release/cle-release') # CLE >= 6
-        if not os.path.exists(cle_info_file):
-            cle_info_file = os.path.abspath('/etc/opt/cray/release/CLEinfo') # CLE <= 5
-
-        if os.path.exists(cle_info_file):
-            with open(cle_info_file, 'r') as fp:
-                cle_info = fp.read()
-            net_pattern = re.compile('^NETWORK=(?P<net>[a-zA-Z]+)$', re.MULTILINE)
-            net_match = net_pattern.search(cle_info)
-            if net_match is not None and len(net_match.groups()) == 1:
-                net = net_match.group('net')
-                if net.lower() == 'ari':
-                    platform_val = 'cray-xc'
-
-    if not platform_val:
-        network = os.environ.get('CRAYPE_NETWORK_TARGET', '')
-        if network.startswith("slingshot") or network == "ofi":
+        import chpl_comm
+        network = chpl_comm.get_network()
+        if network == 'aries':
+            platform_val = 'cray-xc'
+        elif network == 'ibv':
+            # it could be cray-cs, hpe-apollo, or hpe-cray-xd
+            # do nothing for now
+            pass
+        elif network == 'cxi':
+            # it could also be hpe-cray-xd, but we can't tell
+            # this is good enough, EX is close enough for auto-detection
             platform_val = 'hpe-cray-ex'
 
     if not platform_val:
@@ -58,7 +50,7 @@ def get(flag='host'):
                     platform_val = "linux64_32"
                 else:
                     platform_val = "linux64"
-            elif machine == 'aarch64':
+            elif machine == 'aarch64' or machine == 'arm64':
                 platform_val = "linux64"
             else:
                 platform_val = "linux32"
@@ -77,22 +69,39 @@ def get(flag='host'):
 
 
 @memoize
+def is_wsl():
+    name = (platform.uname().release).lower()
+    if name.endswith('-microsoft') or name.endswith('-microsoft-standard-wsl2'):
+        return True
+
+@memoize
+def is_hpe_cray(flag='host'):
+    platform = get(flag)
+    return platform in ('hpe-cray-ex', 'hpe-cray-xd')
+
+@memoize
+def is_cray(flag='host'):
+    platform = get(flag)
+    return platform.startswith('cray') or is_hpe_cray(flag)
+
+@memoize
+def is_hpe_apollo(flag='host'):
+    platform = get(flag)
+    return platform == 'hpe-apollo'
+
+@memoize
+def is_cluster(flag='host'):
+    return is_cray(flag) or is_hpe_apollo(flag)
+
+@memoize
 def get_mac_os_version():
     release, version, machine = platform.mac_ver()
     return release
 
-# if running on a system with homebrew, return the homebrew prefix
-# if not, return None
 @memoize
-def get_homebrew_prefix():
-    # Check to see if Homebrew is installed. If it is, return the prefix.
-    exists, retcode, my_out, my_err = try_run_command(['brew', '--prefix'])
-    if exists and retcode == 0:
-        # Make sure to include homebrew search path
-        homebrew_prefix = my_out.strip()
-        return homebrew_prefix
-
-    return None
+def is_arch_linux():
+    arch_file = "/etc/arch-release"
+    return os.path.exists(arch_file)
 
 def _main():
     parser = optparse.OptionParser(usage='usage: %prog [--host|target])')

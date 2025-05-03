@@ -10,19 +10,19 @@ understand Chapel's configuration options, build process, and
 installation more thoroughly, please refer to :ref:`readme-chplenv`
 and :ref:`readme-building` instead.
 
-These instructions first have you build a minimal, stripped-down
-version of Chapel to reduce build times and the potential for
-third-party portability issues.  Once you are interested in a
-full-featured version of Chapel, refer to
-:ref:`using-a-more-full-featured-chapel` below.
+These instructions first have you build a minimal, low-performance
+configuration of Chapel to reduce build times and the potential for
+third-party portability issues.  Once you are interested in getting
+better performance or using a full-featured version of Chapel, refer
+to :ref:`using-a-more-full-featured-chapel` below.
 
 
 0) See :ref:`readme-prereqs` for information about system tools and
    packages you should have available to build and run Chapel.
 
 
-1) If you don't already have the Chapel 1.25 source release, see
-   https://chapel-lang.org/download.html.
+1) If you don't already have the Chapel 2.4 source release, see
+   https://chapel-lang.org/download/
 
 
 2) Build Chapel in its 'Quickstart' configuration:
@@ -31,14 +31,14 @@ full-featured version of Chapel, refer to
 
       .. code-block:: bash
 
-         tar xzf chapel-1.25.1.tar.gz
+         tar xzf chapel-2.4.0.tar.gz
 
    b. Make sure that you are in the directory that was created when
       unpacking the source release, for example:
 
       .. code-block:: bash
 
-         cd chapel-1.25.1
+         cd chapel-2.4.0
 
    c. Set up your environment for Chapel's Quickstart mode.
       If you are using a shell other than ``bash`` or ``zsh``,
@@ -89,27 +89,33 @@ rebuild Chapel from source in a different configuration:
 * Open up a new shell to avoid inheriting the previous environment
   settings.
 
-* The Quickstart configuration described above sets ``CHPL_LLVM=none``
-  for simplicity and to save time.  This causes the Chapel compiler to
-  use its C back-end, which is not the preferred option; as of Chapel
-  1.25, LLVM is the default back-end, which needs to be available for
+* The Quickstart configuration attempts to detect if you have a compatible
+  system installation of LLVM and clang. If you do not, it will set
+  ``CHPL_LLVM=none`` for simplicity and to save time.  This causes
+  the Chapel compiler to use its C back-end, which is not the preferred
+  option; LLVM is the default back-end, which needs to be available for
   full functionality.  There are a few options for using LLVM:
 
-  - ensure that you have a version of LLVM 11 installed on your system
-    and set ``CHPL_LLVM=system`` (or leave it unset and Chapel should
-    find it if it's in your path)
+  - Ensure that you have a compatible version of LLVM installed on your
+    system and enable it with ``export CHPL_LLVM=system``.  Once you have
+    it working, you can leave ``CHPL_LLVM`` unset and Chapel should
+    detect it if it is in your path. See :ref:`readme-prereqs` for
+    details on the currently supported LLVM versions.
 
-  - set ``CHPL_LLVM=bundled`` to have Chapel build and use the bundled
-    version of LLVM (note that building the bundled version of LLVM
-    can take a long time)
+  - Or, use ``export CHPL_LLVM=bundled`` to have Chapel build and use the
+    bundled version of LLVM. Note that building the bundled version of
+    LLVM can take a long time.
 
-  - set ``CHPL_LLVM=none`` to continue using the C back-end rather
+  - Use ``export CHPL_LLVM=none`` to continue using the C back-end rather
     than LLVM
+
+  Please see :ref:`readme-chplenv.CHPL_LLVM` for more information about
+  ``CHPL_LLVM`` and related configuration.
 
 * If you are interested in building Chapel to support multiple compute
   nodes (locales), refer to :ref:`readme-multilocale` for other
   settings to enable that.
-    
+
 * Repeat steps 2-5 above, but in step 2, source
   ``util/setchplenv.bash`` instead of
   ``util/quickstart/setchplenv.bash``.  This will set up your
@@ -204,7 +210,7 @@ Executing Chapel programs:   :ref:`executing.rst <readme-executing>`
 Debugging Chapel programs:   :ref:`debugging.rst <readme-debugging>`
 Reporting bugs:              :ref:`bugs.rst <readme-bugs>`
 Performance:                 https://chapel-lang.org/performance.html
-Chapel modes for emacs/vim:  ``$CHPL_HOME/highlight/README.md``
+Chapel Editor Support:       :ref:`editor-support.rst <readme-editor-support>`
 Chapel's file/dir structure: ``$CHPL_HOME/README.files``
 Changes since last release:  ``$CHPL_HOME/CHANGES.md``
 ============================ ==================================================

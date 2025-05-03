@@ -1,5 +1,5 @@
 /*
- * Copyright 2020-2022 Hewlett Packard Enterprise Development LP
+ * Copyright 2020-2025 Hewlett Packard Enterprise Development LP
  * Copyright 2004-2019 Cray Inc.
  * Other additional copyright holders may be indicated within.
  *
@@ -18,6 +18,11 @@
  * limitations under the License.
  */
 
+/* Support for round-robin distribution of domains/arrays to target locales. */
+
+@chplcheck.ignore("IncorrectIndentation")
+module CyclicDist {
+
 private use DSIUtil;
 private use ChapelLocks;
 
@@ -32,7 +37,9 @@ proc _determineIdxTypeFromStartIdx(startIdx) type {
 config param debugCyclicDist = false;
 config param verboseCyclicDistWriters = false;
 config param debugCyclicDistBulkTransfer = false;
+config param disableCyclicDistArrayViewElision = false;
 
+private config param allowDuplicateTargetLocales = false;
 //
 // If the testFastFollowerOptimization flag is set to true, the
 // follower will write output to indicate whether the fast follower is
@@ -53,19 +60,30 @@ config param disableCyclicLazyRAD = defaultDisableLazyRADOpt;
 //   disableCyclicLazyRAD
 //
 /*
-This Cyclic distribution maps indices to locales in a round-robin pattern
-starting at a given index.
 
-Formally, consider a Cyclic distribution with:
+The ``cyclicDist`` distribution uses a round-robin partitioning to map
+d-dimensional indices to a d-dimensional array of locales, starting
+from a given index.
+
+.. Warning::
+
+  The ``cyclicDist`` distribution was, until recently, a class named
+  ``Cyclic``.  Today, ``Cyclic`` is still supported in a deprecated
+  form, yet is an alias to the ``cyclicDist`` record here.  In our
+  experience, most uses of ``Cyclic`` in distribution contexts should
+  continue to work, but updating to ``cyclicDist`` is requested going
+  forward due to the deprecation.
+
+More precisely, for a ``cyclicDist`` distribution with:
 
   =============  ====================================================
   rank           ``d``
   start index    ``(s_1, ...., s_d)``
-  over locales   ``targetLocales: [0..N_1-1, ...., 0..N_d-1] locale``
+  over locales   ``targetLocales: [0..<N_1, ...., 0..<N_d] locale``
   =============  ====================================================
 
-It maps an index ``(i_1, ...., i_d)``
-to the locale ``targetLocales[j_1, ...., j_d]``
+Each index ``(i_1, ...., i_d)``
+is mapped to the locale ``targetLocales[j_1, ...., j_d]``
 where, for each ``k`` in ``1..d``,
 we have:
 
@@ -75,7 +93,7 @@ we have:
 **Example**
 
 The following code declares a domain ``D`` distributed
-using a Cyclic distribution with a start index of ``(1,1)``,
+using a ``cyclicDist`` distribution with a start index of ``(1,1)``,
 and declares an array ``A`` over that domain.
 The `forall` loop sets each array element
 to the ID of the locale to which it is mapped.
@@ -84,12 +102,12 @@ to the ID of the locale to which it is mapped.
 
     use CyclicDist;
 
-    const Space = {1..8, 1..8};
-    const D: domain(2) dmapped Cyclic(startIdx=Space.low) = Space;
+    const Dist = new cyclicDist(startIdx=(1,1));
+    const D = Dist.createDomain({1..8, 1..8});
     var A: [D] int;
 
     forall a in A do
-      a = a.locale.id;
+      a = here.id;
 
     writeln(A);
 
@@ -107,20 +125,27 @@ When run on 6 locales, the output is:
     2 3 2 3 2 3 2 3
 
 
+**Data-Parallel Iteration**
+
+As demonstrated by the above example, a `forall` loop over a
+``cyclicDist``-distributed domain or array executes each iteration on
+the locale owning the index in question.
+
+By default, parallelism within each locale is applied to that locale's
+local, strided block of indices by creating a task for each available
+processor core (or the number of local indices if it is less than the
+number of cores). The local domain indices are then statically divided
+as evenly as possible between those tasks.
+
 **Initializer Arguments**
 
-The ``Cyclic`` class initializer is defined as follows:
+The ``cyclicDist`` initializer is defined as follows:
 
   .. code-block:: chapel
 
-    proc Cyclic.init(
+    proc cyclicDist.init(
       startIdx,
-      targetLocales: [] locale = Locales,
-      dataParTasksPerLocale     = // value of  dataParTasksPerLocale      config const,
-      dataParIgnoreRunningTasks = // value of  dataParIgnoreRunningTasks  config const,
-      dataParMinGranularity     = // value of  dataParMinGranularity      config const,
-      param rank: int  = // inferred from startIdx argument,
-      type idxType     = // inferred from startIdx argument )
+      targetLocales: [] locale = Locales)
 
 The argument ``startIdx`` is a tuple of integers defining an index that
 will be distributed to the first locale in ``targetLocales``.
@@ -135,55 +160,212 @@ heuristic is used to reshape the array of target locales so that it
 matches the rank of the distribution and each dimension contains an
 approximately equal number of indices.
 
-The arguments ``dataParTasksPerLocale``, ``dataParIgnoreRunningTasks``,
-and ``dataParMinGranularity`` set the knobs that are used to
-control intra-locale data parallelism for Cyclic-distributed domains
-and arrays in the same way that the like-named config constants
-control data parallelism for ranges and default-distributed domains
-and arrays.
+**Convenience Factory Methods**
 
-The ``rank`` and ``idxType`` arguments are inferred from the
-``startIdx`` argument unless explicitly set.
-They must match the rank and index type of the domains
-"dmapped" using that Cyclic instance.
+It is common for a ``cyclicDist``-distributed domain or array to use
+its first index as the start Index in a Cyclic distribution.  It is
+also common not to override any of the other defaulted initializer
+arguments.  In such cases, factory methods are provided for
+convenience.
 
-
-**Convenience Initializer Functions**
-
-It is common for a ``Cyclic`` distribution to distribute its indices
-across all locales. In this case, a convenience function can be used to
-declare variables of cyclic-distributed domain or array type.  These functions
-take a domain or list of ranges as arguments and return a cyclic-distributed
-domain or array.
+These methods take a domain or series of ranges as arguments and
+return a cyclic-distributed domain or array.  For example, the
+following declarations create new ``5 x 5`` cyclic-distributed domains
+and arrays using `(1, 1)` as the starting index:
 
   .. code-block:: chapel
 
     use CyclicDist;
 
-    var CyclicDom1 = newCyclicDom({1..5, 1..5});
-    var CyclicArr1 = newCyclicArr({1..5, 1..5}, real);
-    var CyclicDom2 = newCyclicDom(1..5, 1..5);
-    var CyclicArr2 = newCyclicArr(1..5, 1..5, real);
+    var CyclicDom1 = cyclicDist.createDomain({1..5, 1..5});
+    var CyclicArr1 = cyclicDist.createArray({1..5, 1..5}, real);
+    var CyclicDom2 = cyclicDist.createDomain(1..5, 1..5);
+    var CyclicArr2 = cyclicDist.createArray(1..5, 1..5, real);
 
+The helper methods on ``Cyclic`` have the following signatures:
 
-**Data-Parallel Iteration**
+  .. function:: proc type cyclicDist.createDomain(dom: domain(?), targetLocales = Locales)
 
-A `forall` loop over a Cyclic-distributed domain or array
-executes each iteration on the locale where that iteration's index
-is mapped to.
+    Create a cyclic-distributed domain. The lower bounds of the domain are used
+    as the starting indices.
 
-Parallelism within each locale is guided by the values of
-``dataParTasksPerLocale``, ``dataParIgnoreRunningTasks``, and
-``dataParMinGranularity`` of the respective Cyclic instance.
-Updates to these values, if any, take effect only on the locale
-where the updates are made.
+  .. function:: proc type cyclicDist.createDomain(rng: range(?)..., targetLocales = Locales)
 
+    Create a cyclic-distributed domain from a series of ranges. The lower
+    bounds of the ranges are used as the starting indices.
+
+  .. function:: proc type cyclicDist.createArray(dom: domain(?), type eltType, targetLocales = Locales)
+
+    Create a default-initialized cyclic-distributed array whose indices
+    match those of the given domain.
+
+  .. function:: proc type cyclicDist.createArray(rng: range(?)..., type eltType, targetLocales = Locales)
+
+    Create a default-initialized cyclic-distributed array using a
+    domain constructed from the series of ranges.
+
+  .. function:: proc type cyclicDist.createArray(dom: domain(?), type eltType, initExpr, targetLocales = Locales)
+
+    Create a cyclic-distributed array whose indices match those of the
+    given domain.
+
+    The array's values are initialized using ``initExpr`` which can be any of
+    the following:
+
+    * a value coercible to ``eltType`` — all elements of the array will be
+      assigned with this value
+    * an iterator expression with compatible size and type — the array elements
+      will be initialized with the values yielded by the iterator
+    * an array of compatible size and type — the array will be assigned into
+      the distributed array
+
+  .. function:: proc type cyclicDist.createArray(rng: range(?)..., type eltType, initExpr, targetLocales = Locales)
+
+    Create a cyclic-distributed array using a domain constructed from
+    the series of ranges.
+
+    The array's values are initialized using ``initExpr`` which can be any of
+    the following:
+
+    * a value coercible to ``eltType`` — all elements of the array will be
+      assigned with this value
+    * an iterator expression with compatible size and type — the array elements
+      will be initialized with the values yielded by the iterator
+    * an array of compatible size and type — the array will be assigned into
+      the distributed array
+
+  .. function:: proc cyclicDist.createDomain(dom: domain(?))
+
+    Create a cyclic-distributed domain over an existing ``cyclicDist`` by copying
+    the index space from the passed domain.
+
+  .. function:: proc cyclicDist.createDomain(rng: range(?)...)
+
+    Create a cyclic-distributed domain from a series of ranges over an existing
+    ``cyclicDist``.
 
 **Limitations**
 
 This distribution has not been tuned for performance.
 */
-class Cyclic: BaseDist {
+
+pragma "ignore noinit"
+record cyclicDist : writeSerializable {
+  param rank: int;
+  type idxType = int;
+
+
+  forwarding const chpl_distHelp: chpl_PrivatizedDistHelper(unmanaged CyclicImpl(rank, idxType));
+
+  pragma "last resort"
+  @unstable("passing arguments other than 'boundingBox' and 'targetLocales' to 'cyclicDist' is currently unstable")
+  proc init(startIdx,
+            targetLocales: [] locale = Locales,
+            dataParTasksPerLocale=getDataParTasksPerLocale(),
+            dataParIgnoreRunningTasks=getDataParIgnoreRunningTasks(),
+            dataParMinGranularity=getDataParMinGranularity(),
+            param rank = _determineRankFromStartIdx(startIdx),
+            type idxType = _determineIdxTypeFromStartIdx(startIdx))
+    where isTuple(startIdx) || isIntegral(startIdx)
+  {
+    const value = new unmanaged CyclicImpl(startIdx, targetLocales,
+                                           dataParTasksPerLocale,
+                                           dataParIgnoreRunningTasks,
+                                           dataParMinGranularity,
+                                           rank, idxType
+                                          );
+    this.rank = rank;
+    this.idxType = idxType;
+
+    this.chpl_distHelp = new chpl_PrivatizedDistHelper(
+                          if _isPrivatized(value)
+                            then _newPrivatizedClass(value)
+                            else nullPid,
+                          value);
+  }
+
+  proc init(startIdx,
+            targetLocales: [] locale = Locales)
+    where isTuple(startIdx) || isIntegral(startIdx)
+  {
+    this.init(startIdx, targetLocales,
+              /* by specifying even one unstable argument, this should select
+                 the whole unstable constructor, which has defaults for everything
+                 else. */
+              dataParTasksPerLocale=getDataParTasksPerLocale());
+  }
+
+  proc init(_pid : int, _instance, _unowned : bool) {
+    this.rank = _instance.rank;
+    this.idxType = _instance.idxType;
+
+    this.chpl_distHelp = new chpl_PrivatizedDistHelper(_pid,
+                                                       _instance,
+                                                       _unowned);
+  }
+
+  proc init(value) {
+    this.rank = value.rank;
+    this.idxType = value.idxType;
+
+    this.chpl_distHelp = new chpl_PrivatizedDistHelper(
+                           if _isPrivatized(value)
+                             then _newPrivatizedClass(value)
+                             else nullPid,
+                           _to_unmanaged(value));
+  }
+
+  // Note: This does not handle the case where the desired type of 'this'
+  // does not match the type of 'other'. That case is handled by the compiler
+  // via coercions.
+  proc init=(const ref other : cyclicDist(?)) {
+    this.init(other._value.dsiClone());
+  }
+
+  proc clone() {
+    return new cyclicDist(this._value.dsiClone());
+  }
+
+  @chpldoc.nodoc
+  inline operator ==(d1: cyclicDist(?), d2: cyclicDist(?)) {
+    if (d1._value == d2._value) then
+      return true;
+    return d1._value.dsiEqualDMaps(d2._value);
+  }
+
+  @chpldoc.nodoc
+  inline operator !=(d1: cyclicDist(?), d2: cyclicDist(?)) {
+    return !(d1 == d2);
+  }
+
+  proc serialize(writer, ref serializer) throws {
+    chpl_distHelp.serialize(writer, serializer);
+  }
+}
+
+
+@chpldoc.nodoc
+@unstable(category="experimental", reason="assignment between distributions is currently unstable due to lack of testing")
+operator =(ref a: cyclicDist(?), b: cyclicDist(?)) {
+  if a._value == nil {
+    __primitive("move", a, chpl__autoCopy(b.clone(), definedConst=false));
+  } else {
+    if a._value.type != b._value.type then
+      compilerError("type mismatch in distribution assignment");
+    if a._value == b._value {
+      // do nothing
+    } else
+        a._value.dsiAssign(b._value);
+    if _isPrivatized(a._instance) then
+      _reprivatize(a._value);
+  }
+}
+
+@deprecated("'Cyclic' is deprecated, please use 'cyclicDist' instead")
+type Cyclic = cyclicDist;
+
+@chpldoc.nodoc
+class CyclicImpl: BaseDist, writeSerializable {
   param rank: int;
   type idxType = int;
 
@@ -212,7 +394,14 @@ class Cyclic: BaseDist {
     const ranges = setupTargetLocRanges(rank, targetLocales);
     this.targetLocDom = {(...ranges)};
     this.targetLocs = reshape(targetLocales, this.targetLocDom);
-
+    if !allowDuplicateTargetLocales {
+      var checkArr: [LocaleSpace] bool;
+      for loc in targetLocs {
+        if checkArr[loc.id] then
+          halt("CyclicDist does not allow duplicate targetLocales");
+        checkArr[loc.id] = true;
+      }
+    }
     var startIdxTemp: rank*idxType;
     for param i in 0..rank-1 {
       const startIdxI = if isTuple(startIdx) then startIdx(i) else startIdx;
@@ -224,7 +413,7 @@ class Cyclic: BaseDist {
     const dummyLC = new unmanaged LocCyclic(rank, idxType, dummy=true);
     var locDistTemp: [targetLocDom] unmanaged LocCyclic(rank, idxType)
           = dummyLC;
-    coforall locid in targetLocDom do
+    coforall locid in targetLocDom with (ref locDistTemp) do
       on targetLocs(locid) do
        locDistTemp(locid) =
          new unmanaged LocCyclic(rank, idxType, locid, startIdxTemp, ranges);
@@ -241,7 +430,7 @@ class Cyclic: BaseDist {
     this.dataParIgnoreRunningTasks = dataParIgnoreRunningTasks;
     this.dataParMinGranularity = dataParMinGranularity;
 
-    this.complete();
+    init this;
 
     if debugCyclicDist then
       for loc in locDist do writeln(loc);
@@ -262,7 +451,7 @@ class Cyclic: BaseDist {
         locDist(locid) = new unmanaged LocCyclic(rank, idxType, locid, this);
   }
 
-  proc dsiEqualDMaps(that: Cyclic(?)) {
+  proc dsiEqualDMaps(that: CyclicImpl(?)) {
     return (this.startIdx == that.startIdx &&
             this.targetLocs.equals(that.targetLocs));
   }
@@ -272,14 +461,14 @@ class Cyclic: BaseDist {
   }
 
   proc dsiClone() {
-    return new unmanaged Cyclic(startIdx, targetLocs,
+    return new unmanaged CyclicImpl(startIdx, targetLocs,
                       dataParTasksPerLocale,
                       dataParIgnoreRunningTasks,
                       dataParMinGranularity);
   }
 
   override proc dsiDestroyDist() {
-    coforall ld in locDist do {
+    coforall ld in locDist {
       on ld do
         delete ld;
     }
@@ -287,19 +476,19 @@ class Cyclic: BaseDist {
 
 }
 
-proc Cyclic.chpl__locToLocIdx(loc: locale) {
+proc CyclicImpl.chpl__locToLocIdx(loc: locale) {
   for locIdx in targetLocDom do
     if (targetLocs[locIdx] == loc) then
       return (true, locIdx);
   return (false, targetLocDom.first);
 }
 
-proc Cyclic.getChunk(inds, locid) {
+proc CyclicImpl.getChunk(inds, locid) {
   const chunk = locDist(locid).myChunk((...inds.getIndices()));
   return chunk;
 }
 
-override proc Cyclic.dsiDisplayRepresentation() {
+override proc CyclicImpl.dsiDisplayRepresentation() {
   writeln("startIdx = ", startIdx);
   writeln("targetLocDom = ", targetLocDom);
   writeln("targetLocs = ", for tl in targetLocs do tl.id);
@@ -312,7 +501,11 @@ override proc Cyclic.dsiDisplayRepresentation() {
 
 override proc CyclicDom.dsiSupportsAutoLocalAccess() param { return true; }
 
-proc Cyclic.init(other: Cyclic, privateData,
+override proc CyclicDom.dsiSupportsArrayViewElision() param {
+  return !disableCyclicDistArrayViewElision;
+}
+
+proc CyclicImpl.init(other: CyclicImpl, privateData,
                  param rank = other.rank,
                  type idxType = other.idxType) {
   this.rank = rank;
@@ -325,22 +518,22 @@ proc Cyclic.init(other: Cyclic, privateData,
   dataParIgnoreRunningTasks = privateData[3];
   dataParMinGranularity = privateData[4];
 }
-                 
-override proc Cyclic.dsiSupportsPrivatization() param return true;
 
-proc Cyclic.dsiGetPrivatizeData() return (startIdx,
+override proc CyclicImpl.dsiSupportsPrivatization() param do return true;
+
+proc CyclicImpl.dsiGetPrivatizeData() do return (startIdx,
                                           targetLocDom.dims(),
                                           dataParTasksPerLocale,
                                           dataParIgnoreRunningTasks,
                                           dataParMinGranularity);
 
-proc Cyclic.dsiPrivatize(privatizeData) {
-  return new unmanaged Cyclic(_to_unmanaged(this), privatizeData);
+proc CyclicImpl.dsiPrivatize(privatizeData) {
+  return new unmanaged CyclicImpl(_to_unmanaged(this), privatizeData);
 }
 
-proc Cyclic.dsiGetReprivatizeData() return 0;
+proc CyclicImpl.dsiGetReprivatizeData() do return 0;
 
-proc Cyclic.dsiReprivatize(other, reprivatizeData) {
+proc CyclicImpl.dsiReprivatize(other, reprivatizeData) {
   targetLocDom = other.targetLocDom;
   targetLocs = other.targetLocs;
   locDist = other.locDist;
@@ -350,24 +543,24 @@ proc Cyclic.dsiReprivatize(other, reprivatizeData) {
   dataParMinGranularity = other.dataParMinGranularity;
 }
 
-override proc Cyclic.dsiNewRectangularDom(param rank: int, type idxType, param stridable: bool, inds) {
+override proc CyclicImpl.dsiNewRectangularDom(param rank: int, type idxType, param strides: strideKind, inds) {
   if idxType != this.idxType then
     compilerError("Cyclic domain index type does not match distribution's");
   if rank != this.rank then
     compilerError("Cyclic domain rank does not match distribution's");
-  const whole = createWholeDomainForInds(rank, idxType, stridable, inds);
+  const whole = createWholeDomainForInds(rank, idxType, strides, inds);
 
   const dummyLCD = new unmanaged LocCyclicDom(rank, idxType);
   var locDomsTemp: [this.targetLocDom] unmanaged LocCyclicDom(rank, idxType)
         = dummyLCD;
-  coforall localeIdx in this.targetLocDom do
+  coforall localeIdx in this.targetLocDom with (ref locDomsTemp) do
     on this.targetLocs(localeIdx) do
       locDomsTemp(localeIdx) = new unmanaged LocCyclicDom(rank, idxType,
-                                              this.getChunk(whole, localeIdx));
+             this.getChunk(whole, localeIdx): myBlockType(rank, idxType));
   delete dummyLCD;
 
-  var dom = new unmanaged CyclicDom(rank, idxType, stridable,
-                                    this: unmanaged, locDomsTemp, whole);
+  var dom = new unmanaged CyclicDom(rank, idxType, strides,
+                                    this:unmanaged, locDomsTemp, whole);
   return dom;
 }
 
@@ -394,15 +587,15 @@ proc _cyclic_matchArgsShape(type rangeType, type scalarType, args) type {
   return helper(0);
 }
 
-proc Cyclic.writeThis(x) throws {
-  x <~> this.type:string <~> "\n";
-  x <~> "------\n";
+override proc CyclicImpl.serialize(writer, ref serializer) throws {
+  writer.writeln("cyclicDist");
+  writer.writeln("----------");
   for locid in targetLocDom do
-    x <~> " [" <~> locid <~> "=" <~> targetLocs(locid) <~> "] owns chunk: " <~>
-      locDist(locid).myChunk <~> "\n";
+    writer.writeln(" [", locid, "=", targetLocs(locid), "] owns chunk: ",
+      locDist(locid).myChunk);
 }
 
-proc Cyclic.targetLocsIdx(i: idxType) {
+proc CyclicImpl.targetLocsIdx(i: idxType) {
   const numLocs:idxType = targetLocDom.sizeAs(idxType);
   // this is wrong if i is less than startIdx
   //return ((i - startIdx(0)) % numLocs):int;
@@ -410,7 +603,7 @@ proc Cyclic.targetLocsIdx(i: idxType) {
   return chpl__diffMod(i, startIdx(0), numLocs):idxType;
 }
 
-proc Cyclic.targetLocsIdx(ind: rank*idxType) {
+proc CyclicImpl.targetLocsIdx(ind: rank*idxType) {
   var x: rank*int;
   for param i in 0..rank-1 {
     var dimLen = targetLocDom.dim(i).sizeAs(int);
@@ -423,25 +616,24 @@ proc Cyclic.targetLocsIdx(ind: rank*idxType) {
     return x;
 }
 
-proc Cyclic.dsiIndexToLocale(i: idxType) where rank == 1 {
+proc CyclicImpl.dsiIndexToLocale(i: idxType) where rank == 1 {
   return targetLocs(targetLocsIdx(i));
 }
 
-proc Cyclic.dsiIndexToLocale(i: rank*idxType) {
+proc CyclicImpl.dsiIndexToLocale(i: rank*idxType) {
   return targetLocs(targetLocsIdx(i));
 }
-
 
   proc chpl__computeCyclicDim(type idxType, lo, myloc, numlocs) {
     const lower = min(idxType)..(lo+myloc) by -numlocs;
     const upper = lo+myloc..max(idxType) by numlocs;
-    return lower.last..upper.last by numlocs;
+    return lower.last..upper.last by numlocs:uint;
   }
 
 proc chpl__computeCyclic(type idxType, locid, targetLocBox, startIdx) {
     type strType = chpl__signedType(idxType);
     param rank = targetLocBox.size;
-    var inds: rank*range(idxType, stridable=true);
+    var inds: rank*range(idxType, strides=strideKind.positive);
     for param i in 0..rank-1 {
       // NOTE: Not bothering to check to see if these can fit into idxType
       const lo = chpl__tuplify(startIdx)(i): idxType;
@@ -457,7 +649,7 @@ class LocCyclic {
   param rank: int;
   type idxType;
 
-  const myChunk: domain(rank, idxType, true);
+  const myChunk: domain(rank, idxType, strideKind.positive);
 
   proc init(param rank, type idxType, locid,
             distStartIdx: rank*idxType, distLocDims) {
@@ -473,7 +665,7 @@ class LocCyclic {
     else
       for param i in 0..rank-1 do locidx(i) = locid(i):idxType;
 
-    var inds: rank*range(idxType, stridable=true);
+    var inds: rank*range(idxType, strides=strideKind.positive);
 
     inds = chpl__computeCyclic(idxType, locid, distLocDims, startIdx);
     myChunk = {(...inds)};
@@ -487,12 +679,12 @@ class LocCyclic {
 }
 
 
-class CyclicDom : BaseRectangularDom {
-  const dist: unmanaged Cyclic(rank, idxType);
+class CyclicDom : BaseRectangularDom(?) {
+  const dist: unmanaged CyclicImpl(rank, idxType);
 
   var locDoms: [dist.targetLocDom] unmanaged LocCyclicDom(rank, idxType);
 
-  var whole: domain(rank, idxType, stridable);
+  var whole: domain(rank, idxType, strides);
 }
 
 proc CyclicDom.setup() {
@@ -502,6 +694,13 @@ proc CyclicDom.setup() {
         locDoms(localeIdx).myBlock = chunk;
       }
     }
+}
+
+proc CyclicDom.dsiGetDist() {
+  if _isPrivatized(dist) then
+    return new cyclicDist(dist.pid, dist, _unowned=true);
+  else
+    return new cyclicDist(nullPid, dist, _unowned=true);
 }
 
 override proc CyclicDom.dsiDestroyDom() {
@@ -522,7 +721,7 @@ proc CyclicDom.dsiBuildArray(type eltType, param initElts:bool) {
   var myLocArrTemp: unmanaged LocCyclicArr(eltType, rank, idxType)?;
 
   // formerly in CyclicArr.setup()
-  coforall localeIdx in dom.dist.targetLocDom with (ref myLocArrTemp) {
+  coforall localeIdx in dom.dist.targetLocDom with (ref locArrTemp, ref myLocArrTemp) {
     on dom.dist.targetLocs(localeIdx) {
       const LCA = new unmanaged LocCyclicArr(eltType, rank, idxType,
                                              dom.locDoms(localeIdx),
@@ -535,7 +734,7 @@ proc CyclicDom.dsiBuildArray(type eltType, param initElts:bool) {
   delete dummyLCA, dummyLCD;
 
   var arr = new unmanaged CyclicArr(eltType=eltType, rank=rank,
-                                    idxType=idxType, stridable=stridable,
+                                    idxType=idxType, strides=strides,
          dom=_to_unmanaged(dom), locArr=locArrTemp, myLocArr=myLocArrTemp);
 
   // formerly in CyclicArr.setup()
@@ -551,35 +750,30 @@ override proc CyclicDom.dsiDisplayRepresentation() {
   dist.dsiDisplayRepresentation();
 }
 
-proc CyclicDom.dsiLow return whole.low;
-
-proc CyclicDom.dsiHigh return whole.high;
-
-proc CyclicDom.dsiAlignedLow return whole.alignedLow;
-
-proc CyclicDom.dsiAlignedHigh return whole.alignedHigh;
-
-proc CyclicDom.dsiAlignment return whole.alignment;
-
-proc CyclicDom.dsiStride return whole.stride;
-
-proc CyclicDom.dsiMember(i) return whole.contains(i);
-
-proc CyclicDom.dsiIndexOrder(i) return whole.indexOrder(i);
-
-proc CyclicDom.dsiDims() return whole.dims();
-
-proc CyclicDom.dsiDim(d: int) return whole.dim(d);
-
-proc CyclicDom.getLocDom(localeIdx) return locDoms(localeIdx);
-
-override proc CyclicDom.dsiMyDist() return dist;
-
-
-
-proc CyclicDom.dsiGetIndices() {
-  return whole.getIndices();
+// common redirects
+proc CyclicDom.parSafe param {
+  compilerError("this domain type does not support 'parSafe'");
 }
+override proc CyclicDom.dsiLow do           return whole.lowBound;
+override proc CyclicDom.dsiHigh do          return whole.highBound;
+override proc CyclicDom.dsiAlignedLow do    return whole.low;
+override proc CyclicDom.dsiAlignedHigh do   return whole.high;
+override proc CyclicDom.dsiFirst do         return whole.first;
+override proc CyclicDom.dsiLast do          return whole.last;
+override proc CyclicDom.dsiStride do        return whole.stride;
+override proc CyclicDom.dsiAlignment do     return whole.alignment;
+proc CyclicDom.dsiNumIndices do    return whole.sizeAs(uint);
+proc CyclicDom.dsiDim(d) do        return whole.dim(d);
+proc CyclicDom.dsiDim(param d) do  return whole.dim(d);
+proc CyclicDom.dsiDims() do        return whole.dims();
+proc CyclicDom.dsiGetIndices() do  return whole.getIndices();
+proc CyclicDom.dsiMember(i) do     return whole.contains(i);
+proc CyclicDom.doiToString() do    return whole:string;
+proc CyclicDom.dsiLocalSlice(param strides, ranges) do return whole((...ranges));
+override proc CyclicDom.dsiIndexOrder(i) do              return whole.indexOrder(i);
+override proc CyclicDom.dsiMyDist() do                   return dist;
+
+proc CyclicDom.getLocDom(localeIdx) do return locDoms(localeIdx);
 
 proc CyclicDom.dsiSetIndices(x: domain) {
   whole = x;
@@ -595,24 +789,18 @@ proc CyclicDom.dsiAssignDomain(rhs: domain, lhsPrivate:bool) {
   chpl_assignDomainWithGetSetIndices(this, rhs);
 }
 
-proc CyclicDom.dsiSerialWrite(x) {
+proc CyclicDom.dsiSerialWrite(x) throws {
   if verboseCyclicDistWriters {
-    x <~> this.type:string <~> "\n";
-    x <~> "------\n";
+    x.writeln(this.type:string);
+    x.writeln("------");
     for loc in dist.targetLocDom {
-      x <~> "[" <~> loc <~> "=" <~> dist.targetLocs(loc) <~> "] owns " <~>
-        locDoms(loc).myBlock <~> "\n";
+      x.writeln("[", loc, "=", dist.targetLocs(loc), "] owns ",
+        locDoms(loc).myBlock);
     }
   } else {
-    x <~> whole;
+    x.write(whole);
   }
 }
-
-proc CyclicDom.doiToString() {
-  return whole:string;
-}
-
-proc CyclicDom.dsiNumIndices return whole.sizeAs(uint);
 
 iter CyclicDom.these() {
   for i in whole do
@@ -623,7 +811,7 @@ iter CyclicDom.these(param tag: iterKind) where tag == iterKind.leader {
   const maxTasks = dist.dataParTasksPerLocale;
   const ignoreRunning = dist.dataParIgnoreRunningTasks;
   const minSize = dist.dataParMinGranularity;
-  const wholeLow = whole.low;
+  const wholeLow = whole.lowBound;
   const wholeStride = whole.stride;
 
   // If this is the only task running on this locale, we don't want to
@@ -646,7 +834,7 @@ iter CyclicDom.these(param tag: iterKind) where tag == iterKind.leader {
 
     // Forward to defaultRectangular to iterate over the indices we own locally
     for followThis in locDom.myBlock.these(iterKind.leader, maxTasks,
-                                           myIgnoreRunning, minSize) do {
+                                           myIgnoreRunning, minSize) {
       // translate the 0-based indices yielded back to our indexing scheme
       const newFollowThis = chpl__followThisToOrig(idxType, followThis, locDom.myBlock);
 
@@ -656,12 +844,15 @@ iter CyclicDom.these(param tag: iterKind) where tag == iterKind.leader {
       // distribution (at least, I couldn't figure out a way to not go
       // back and forth without breaking tests)
       const zeroShift = {(...newFollowThis)}.chpl__unTranslate(wholeLow);
-      var result: rank*range(idxType=idxType, stridable=true);
+      var result: rank*range(idxType=idxType, strides=chpl_strideProduct(
+                              whole.strides, chpl_strideUnion(zeroShift) ));
       type strType = chpl__signedType(idxType);
       for param i in 0..rank-1 {
         const wholestride = chpl__tuplify(wholeStride)(i);
         const ref dim = zeroShift.dim(i);
-        result(i) = (dim.first / wholestride:idxType)..(dim.last / wholestride:idxType) by (dim.stride:strType / wholestride);
+        result(i).chpl_setFields(dim.first / wholestride:idxType,
+                                 dim.last / wholestride:idxType,
+                                 dim.stride:strType / wholestride);
       }
       yield result;
     }
@@ -672,14 +863,14 @@ iter CyclicDom.these(param tag: iterKind) where tag == iterKind.leader {
 // of 'whole'
 private proc chpl__followThisToOrig(type idxType, followThis, whole) {
   param rank = followThis.size;
-  var t: rank*range(idxType, stridable=true);
+  var t: rank*range(idxType, strides=strideKind.any);
   if debugCyclicDist then
     writeln(here.id, ": follower whole is: ", whole,
                      " follower is: ", followThis);
   for param i in 0..rank-1 {
     // NOTE: unsigned idxType with negative stride will not work
     const wholestride = whole.dim(i).stride:chpl__signedType(idxType);
-    t(i) = ((followThis(i).low*wholestride:idxType)..(followThis(i).high*wholestride:idxType) by (followThis(i).stride*wholestride)) + whole.dim(i).alignedLow;
+    t(i) = ((followThis(i).lowBound*wholestride:idxType)..(followThis(i).highBound*wholestride:idxType) by (followThis(i).stride*wholestride)) + whole.dim(i).low;
   }
   return t;
 }
@@ -703,29 +894,25 @@ proc CyclicDom.chpl__serialize() {
 proc type CyclicDom.chpl__deserialize(data) {
   return chpl_getPrivatizedCopy(unmanaged CyclicDom(rank=this.rank,
                                                     idxType=this.idxType,
-                                                    stridable=this.stridable),
+                                                    strides=this.strides),
                                 data);
 }
 
-override proc CyclicDom.dsiSupportsPrivatization() param return true;
+override proc CyclicDom.dsiSupportsPrivatization() param do return true;
 
-proc CyclicDom.dsiGetPrivatizeData() return 0;
+proc CyclicDom.dsiGetPrivatizeData() do return 0;
 
 proc CyclicDom.dsiPrivatize(privatizeData) {
   var privdist = chpl_getPrivatizedCopy(dist.type, dist.pid);
-  return new unmanaged CyclicDom(rank, idxType, stridable,
+  return new unmanaged CyclicDom(rank, idxType, strides,
                                  privdist, locDoms, whole);
 }
 
-proc CyclicDom.dsiGetReprivatizeData() return 0;
+proc CyclicDom.dsiGetReprivatizeData() do return 0;
 
 proc CyclicDom.dsiReprivatize(other, reprivatizeData) {
   locDoms = other.locDoms;
   whole = other.whole;
-}
-
-proc CyclicDom.dsiLocalSlice(param stridable: bool, ranges) {
-  return whole((...ranges));
 }
 
 
@@ -735,18 +922,21 @@ class LocCyclicDom {
 
   // The local block type is always stridable
   // (because that's inherent to the cyclic distribution)
-  var myBlock: domain(rank, idxType, stridable=true);
+  var myBlock: myBlockType(rank, idxType);
 }
+
+private proc myBlockType(param rank, type idxType) type do
+  return domain(rank, idxType, strides=strideKind.any);
 
 //
 // Added as a performance stopgap to avoid returning a domain
 //
-proc LocCyclicDom.contains(i) return myBlock.contains(i);
+proc LocCyclicDom.contains(i) do return myBlock.contains(i);
 
 
-class CyclicArr: BaseRectangularArr {
+class CyclicArr: BaseRectangularArr(?) {
   var doRADOpt: bool = defaultDoRADOpt;
-  var dom: unmanaged CyclicDom(rank, idxType, stridable);
+  var dom: unmanaged CyclicDom(rank, idxType, strides);
 
   var locArr: [dom.dist.targetLocDom] unmanaged LocCyclicArr(eltType, rank, idxType);
   var myLocArr: unmanaged LocCyclicArr(eltType=eltType, rank=rank, idxType=idxType)?;
@@ -757,7 +947,7 @@ pragma "no copy return"
 proc CyclicArr.dsiLocalSlice(ranges) {
   var low: rank*idxType;
   for param i in 0..rank-1 {
-    low(i) = ranges(i).alignedLow;
+    low(i) = ranges(i).low;
   }
 
   return locArr(dom.dist.targetLocsIdx(low)).myElems((...ranges));
@@ -772,7 +962,7 @@ override proc CyclicArr.dsiDisplayRepresentation() {
   dom.dsiDisplayRepresentation();
 }
 
-override proc CyclicArr.dsiGetBaseDom() return dom;
+override proc CyclicArr.dsiGetBaseDom() do return dom;
 
 override proc CyclicArr.dsiIteratorYieldsLocalElements() param {
   return true;
@@ -784,7 +974,7 @@ override proc CyclicArr.dsiIteratorYieldsLocalElements() param {
 // the RAD cache.
 //
 proc CyclicArr.setupRADOpt() {
-  if !stridable { // for now, no support for strided cyclic arrays
+  if hasUnitStride() { // for now, no support for strided cyclic arrays
     for localeIdx in dom.dist.targetLocDom {
       on dom.dist.targetLocs(localeIdx) {
         const myLocArr = locArr(localeIdx);
@@ -794,7 +984,7 @@ proc CyclicArr.setupRADOpt() {
         }
         if disableCyclicLazyRAD {
           myLocArr.locRAD = new unmanaged LocRADCache(eltType, rank, idxType,
-              stridable=true, dom.dist.targetLocDom);
+              strideKind.any, dom.dist.targetLocDom);
           myLocArr.locCyclicRAD = new unmanaged LocCyclicRADCache(rank, idxType, dom.dist.startIdx, dom.dist.targetLocDom);
           for l in dom.dist.targetLocDom {
             if l != localeIdx {
@@ -837,7 +1027,7 @@ override proc CyclicArr.dsiDestroyArr(deinitElts:bool) {
   }
 }
 
-proc CyclicArr.chpl__serialize() 
+proc CyclicArr.chpl__serialize()
     where !(isDomainType(eltType) || isArrayType(eltType)) {
   return pid;
 }
@@ -845,19 +1035,19 @@ proc CyclicArr.chpl__serialize()
 proc type CyclicArr.chpl__deserialize(data) {
   return chpl_getPrivatizedCopy(unmanaged CyclicArr(rank=this.rank,
                                                     idxType=this.idxType,
-                                                    stridable=this.stridable,
+                                                    strides=this.strides,
                                                     eltType=this.eltType),
                                 data);
 }
 
-override proc CyclicArr.dsiSupportsPrivatization() param return true;
+override proc CyclicArr.dsiSupportsPrivatization() param do return true;
 
-proc CyclicArr.dsiGetPrivatizeData() return 0;
+proc CyclicArr.dsiGetPrivatizeData() do return 0;
 
 proc CyclicArr.dsiPrivatize(privatizeData) {
   var privdom = chpl_getPrivatizedCopy(dom.type, dom.pid);
   var c = new unmanaged CyclicArr(eltType=eltType, rank=rank, idxType=idxType,
-                              stridable=stridable, dom=privdom, locArr=locArr);
+                              strides=strides, dom=privdom, locArr=locArr);
   for localeIdx in dom.dist.targetLocDom do
     if c.locArr(localeIdx).locale == here then
       c.myLocArr = c.locArr(localeIdx);
@@ -866,17 +1056,17 @@ proc CyclicArr.dsiPrivatize(privatizeData) {
 
 
 inline proc _remoteAccessData.getDataIndex(
-    param stridable,
+    param strides,
     myStr: rank*chpl__signedType(idxType),
     ind: rank*idxType,
     startIdx,
     dimLen) {
   // modified from DefaultRectangularArr
   var sum = origin;
-  if stridable {
-    halt("RADOpt not supported for strided cyclic arrays.");
+  if ! strides.isOne() {
+    compilerError("RADOpt not supported for strided cyclic arrays.");
   } else {
-    for param i in 0..rank-1 do {
+    for param i in 0..rank-1 {
       sum += (((ind(i) - off(i)):int * blk(i))-startIdx(i):int)/dimLen(i);
     }
   }
@@ -884,16 +1074,17 @@ inline proc _remoteAccessData.getDataIndex(
 }
 
 inline proc CyclicArr.dsiLocalAccess(i: rank*idxType) ref {
-  return _to_nonnil(myLocArr).this(i);
+  return if allowDuplicateTargetLocales then this.dsiAccess(i)
+                                        else _to_nonnil(myLocArr)(i);
 }
 
 proc CyclicArr.dsiAccess(i:rank*idxType) ref {
   local {
     if const myLocArrNN = myLocArr then
       if myLocArrNN.locDom.contains(i) then
-        return myLocArrNN.this(i);
+        return myLocArrNN(i);
   }
-  if doRADOpt && !stridable {
+  if hasUnitStride() && doRADOpt {
     if const myLocArr = this.myLocArr {
       var rlocIdx = dom.dist.targetLocsIdx(i);
       if !disableCyclicLazyRAD {
@@ -901,7 +1092,7 @@ proc CyclicArr.dsiAccess(i:rank*idxType) ref {
           myLocArr.locRADLock.lock();
           if myLocArr.locRAD == nil {
             var tempLocRAD = new unmanaged LocRADCache(eltType, rank, idxType,
-                stridable=true, dom.dist.targetLocDom);
+                strideKind.any, dom.dist.targetLocDom);
             if myLocArr.locCyclicRAD != nil {
               delete myLocArr.locCyclicRAD;
               myLocArr.locCyclicRAD = nil;
@@ -933,7 +1124,7 @@ proc CyclicArr.dsiAccess(i:rank*idxType) ref {
           pragma "no copy" pragma "no auto destroy" var whole = dom.whole;
           str(i) = whole.dim(i).stride;
         }
-        var dataIdx = radata(rlocIdx).getDataIndex(stridable, str, i, startIdx, dimLength);
+        var dataIdx = radata(rlocIdx).getDataIndex(strides, str, i, startIdx, dimLength);
         return radata(rlocIdx).dataElem(dataIdx);
       }
     }
@@ -941,7 +1132,7 @@ proc CyclicArr.dsiAccess(i:rank*idxType) ref {
   return locArr(dom.dist.targetLocsIdx(i))(i);
 }
 
-proc CyclicArr.dsiAccess(i: idxType...rank) ref
+proc CyclicArr.dsiAccess(i: idxType...rank) ref do
   return dsiAccess(i);
 
 proc CyclicArr.dsiBoundsCheck(i: rank*idxType) {
@@ -967,32 +1158,35 @@ override proc CyclicArr.dsiStaticFastFollowCheck(type leadType) param {
   }
 }
 
-proc CyclicArr.dsiDynamicFastFollowCheck(lead: [])
+proc CyclicArr.dsiDynamicFastFollowCheck(lead: []) do
   return this.dsiDynamicFastFollowCheck(lead.domain);
 
 proc CyclicArr.dsiDynamicFastFollowCheck(lead: domain) {
-  return lead.dist.dsiEqualDMaps(this.dom.dist) && lead._value.whole == this.dom.whole;
+  return lead.distribution.dsiEqualDMaps(this.dom.dist) && lead._value.whole == this.dom.whole;
 }
 
 iter CyclicArr.these(param tag: iterKind, followThis, param fast: bool = false) ref where tag == iterKind.follower {
   if testFastFollowerOptimization then
     writeln((if fast then "fast" else "regular") + " follower invoked for Cyclic array");
 
-  var t: rank*range(idxType=idxType, stridable=true);
+  var t: rank*range(idxType=idxType, strides=chpl_strideProduct(
+                      chpl_strideUnion(followThis), dom.whole.strides));
   for param i in 0..rank-1 {
     type strType = chpl__signedType(idxType);
-    const wholestride = dom.whole.dim(i).stride:chpl__signedType(idxType);
-    if wholestride < 0 && idxType != strType then
+    const wholestride = dom.whole.dim(i).stride;
+    if !dom.whole.strides.isPositive() && idxType != strType then
+     if wholestride < 0 then
       halt("negative stride with unsigned idxType not supported");
     const iStride = wholestride:idxType;
-    const      lo = (followThis(i).low * iStride):idxType,
-               hi = (followThis(i).high * iStride):idxType,
+    const      lo = (followThis(i).lowBound * iStride):idxType,
+               hi = (followThis(i).highBound * iStride):idxType,
            stride = (followThis(i).stride*wholestride):strType;
-    t(i) = (lo..hi by stride) + dom.whole.dim(i).alignedLow;
+    t(i).chpl_setFields(lo, hi, stride);
+    t(i) = t(i) + dom.whole.dim(i).low;
   }
   const myFollowThisDom = {(...t)};
   if fast {
-    const arrSection = locArr(dom.dist.targetLocsIdx(myFollowThisDom.low));
+    const arrSection = locArr(dom.dist.targetLocsIdx(myFollowThisDom.lowBound));
 
     //
     // Slicing arrSection.myElems will require reference counts to be updated.
@@ -1016,7 +1210,7 @@ iter CyclicArr.these(param tag: iterKind, followThis, param fast: bool = false) 
     proc accessHelper(i) ref {
       if const myLocArrNN = myLocArr then local {
         if myLocArrNN.locDom.contains(i) then
-          return myLocArrNN.this(i);
+          return myLocArrNN(i);
       }
       return dsiAccess(i);
     }
@@ -1027,15 +1221,16 @@ iter CyclicArr.these(param tag: iterKind, followThis, param fast: bool = false) 
   }
 }
 
-proc CyclicArr.dsiSerialRead(f) {
+proc CyclicArr.dsiSerialRead(f) throws {
   chpl_serialReadWriteRectangular(f, this);
 }
 
-proc CyclicArr.dsiSerialWrite(f) {
+proc CyclicArr.dsiSerialWrite(f) throws {
   chpl_serialReadWriteRectangular(f, this);
 }
 
-override proc CyclicArr.dsiReallocate(bounds:rank*range(idxType,BoundedRangeType.bounded,stridable)) {
+override proc CyclicArr.dsiReallocate(bounds:rank*range(
+                                        idxType, boundKind.both, strides)) {
   // The reallocation happens when the LocCyclicDom.myBlock field is changed
   // in CyclicDom.setup(). Nothing more needs to happen here.
 }
@@ -1050,14 +1245,14 @@ proc CyclicArr.setRADOpt(val=true) {
   if doRADOpt then setupRADOpt();
 }
 
-class LocCyclicArr {
+class LocCyclicArr : writeSerializable {
   type eltType;
   param rank: int;
   type idxType;
 
   const locDom: unmanaged LocCyclicDom(rank, idxType);
 
-  var locRAD: unmanaged LocRADCache(eltType, rank, idxType, stridable=true)?; // non-nil if doRADOpt=true
+  var locRAD: unmanaged LocRADCache(eltType, rank, idxType, strideKind.any)?; // non-nil if doRADOpt=true
   var locCyclicRAD: unmanaged LocCyclicRADCache(rank, idxType)?; // see below for why
   pragma "local field" pragma "unsafe"
   // may be initialized separately
@@ -1087,8 +1282,8 @@ class LocCyclicArr {
   // guard against dynamic dispatch resolution trying to resolve
   // write()ing out an array of sync vars and hitting the sync var
   // type's compilerError()
-  override proc writeThis(f) throws {
-    halt("LocCyclicArr.writeThis() is not implemented / should not be needed");
+  override proc serialize(writer, ref serializer) throws {
+    halt("LocCyclicArr.serialize() is not implemented / should not be needed");
   }
 }
 
@@ -1115,7 +1310,7 @@ class LocCyclicRADCache /* : LocRADCache */ {
     this.rank = rank;
     this.idxType = idxType;
 
-    this.complete();
+    init this;
 
     for param i in 0..rank-1 do
       // NOTE: Not bothering to check to see if length can fit into idxType
@@ -1139,6 +1334,8 @@ private proc canDoAnyToCyclic(A, aView, B, bView) param : bool {
 // DefaultRectangular
 proc CyclicArr.doiBulkTransferFromAny(destDom, Src, srcDom) : bool
 where canDoAnyToCyclic(this, destDom, Src, srcDom) {
+  if !chpl_allStridesArePositive(this, destDom, Src, srcDom) then return false;
+
   if debugCyclicDistBulkTransfer then
     writeln("In CyclicDist.doiBulkTransferFromAny");
 
@@ -1154,8 +1351,8 @@ where canDoAnyToCyclic(this, destDom, Src, srcDom) {
         const end = bulkCommConvertCoordinate(regionDest.last, destDom, srcDom);
         const sb  = chpl__tuplify(regionSrc.stride);
 
-        var r1,r2: rank * range(idxType = el,stridable = true);
-        r2 = regionDest.dims();
+        var r1: rank * range(idxType = el, strides = strideKind.any);
+        const r2 = regionDest.dims();
         //In the case that the number of elements in dimension t for r1 and r2
         //were different, we need to calculate the correct stride in r1
         for param t in 0..rank-1 {
@@ -1178,6 +1375,7 @@ where canDoAnyToCyclic(this, destDom, Src, srcDom) {
 // For assignments of the form: DefaultRectangular = Cyclic
 proc CyclicArr.doiBulkTransferToKnown(srcDom, Dest:DefaultRectangularArr, destDom) : bool
 where useBulkTransferDist {
+  if !chpl_allStridesArePositive(this, srcDom, Dest, destDom) then return false;
 
   if debugCyclicDistBulkTransfer then
     writeln("In CyclicDist.doiBulkTransferToKnown(DefaultRectangular)");
@@ -1195,8 +1393,8 @@ where useBulkTransferDist {
 
         //r2 is the domain to refer the elements of A in locale j
         //r1 is the domain to refer the corresponding elements of Dest
-        var r1,r2: rank * range(idxType = el,stridable = true);
-        r2 = inters.dims();
+        var r1: rank * range(idxType = el, strides = strideKind.any);
+        const r2 = inters.dims();
 
         //In the case that the number of elements in dimension t for r1 and r2
         //were different, we need to calculate the correct stride in r1
@@ -1221,6 +1419,7 @@ where useBulkTransferDist {
 // For assignments of the form: Cyclic = DefaultRectangular
 proc CyclicArr.doiBulkTransferFromKnown(destDom, Src:DefaultRectangularArr, srcDom) : bool
 where useBulkTransferDist {
+  if !chpl_allStridesArePositive(this, destDom, Src, srcDom) then return false;
 
   if debugCyclicDistBulkTransfer then
     writeln("In CyclicArr.doiBulkTransferFromKnown(DefaultRectangular)");
@@ -1236,8 +1435,8 @@ where useBulkTransferDist {
         const end = bulkCommConvertCoordinate(inters.last, destDom, srcDom);
         const sb  = chpl__tuplify(srcDom.stride);
 
-        var r1,r2: rank * range(idxType = el,stridable = true);
-        r2 = inters.dims();
+        var r1: rank * range(idxType = el, strides = strideKind.any);
+        const r2 = inters.dims();
         //In the case that the number of elements in dimension t for r1 and r2
         //were different, we need to calculate the correct stride in r1
         for param t in 0..rank-1 {
@@ -1258,20 +1457,152 @@ where useBulkTransferDist {
   return true;
 }
 
+
 proc CyclicArr.dsiTargetLocales() const ref {
   return dom.dist.targetLocs;
 }
 proc CyclicDom.dsiTargetLocales() const ref {
   return dist.targetLocs;
 }
-proc Cyclic.dsiTargetLocales() const ref {
+proc CyclicImpl.dsiTargetLocales() const ref {
   return targetLocs;
+}
+
+// create a domain over an existing Cyclic Distribution
+proc cyclicDist.createDomain(dom: domain(?)) {
+  return dom dmapped this;
+}
+
+// create a domain over an existing Cyclic Distribution constructed from a series of ranges
+proc cyclicDist.createDomain(rng: range(?)...) {
+  return this.createDomain({(...rng)});
+}
+
+// create a domain over a Cyclic Distribution
+proc type cyclicDist.createDomain(dom: domain(?), targetLocales: [] locale = Locales)
+{
+  return dom dmapped new cyclicDist(startIdx=dom.lowBound, targetLocales);
+}
+
+// create a domain over a Cyclic Distribution constructed from a series of ranges
+pragma "last resort"
+proc type cyclicDist.createDomain(rng: range(?)..., targetLocales: [] locale = Locales) {
+  return createDomain({(...rng)}, targetLocales);
+}
+
+proc type cyclicDist.createDomain(rng: range(?)...) {
+  return createDomain({(...rng)});
+}
+
+
+// create an array over a Cyclic Distribution, default initialized
+pragma "no copy return"
+proc type cyclicDist.createArray(
+  dom: domain(?),
+  type eltType,
+  targetLocales: [] locale = Locales
+) {
+  var D = createDomain(dom, targetLocales);
+  var A: [D] eltType;
+  return A;
+}
+
+// create an array over a Cyclic Distribution, initialized with the given value or iterator
+pragma "no copy return"
+proc type cyclicDist.createArray(
+  dom: domain(?),
+  type eltType,
+  initExpr: ?t,
+  targetLocales: [] locale = Locales
+) where isSubtype(t, _iteratorRecord) || isCoercible(t, eltType)
+{
+  var D = createDomain(dom, targetLocales);
+  var A: [D] eltType;
+  A = initExpr;
+  return A;
+}
+
+// create an array over a Cyclic Distribution, initialized from the given array
+pragma "no copy return"
+proc type cyclicDist.createArray(
+  dom: domain(?),
+  type eltType,
+  initExpr: [?arrayDom] ?arrayEltType,
+  targetLocales: [] locale = Locales
+) where dom.rank == arrayDom.rank && isCoercible(arrayEltType, eltType)
+{
+  if boundsChecking then
+    for (d, ad, i) in zip(dom.dims(), arrayDom.dims(), 0..) do
+      if d.size != ad.size then halt("Domain size mismatch in 'cyclicDist.createArray' dimension " + i:string);
+  var D = createDomain(dom, targetLocales);
+  var A: [D] eltType;
+  A = initExpr;
+  return A;
+}
+
+// create an array over a Cyclic Distribution constructed from a series of ranges, default initialized
+pragma "no copy return"
+pragma "last resort"
+proc type cyclicDist.createArray(
+  rng: range(?)...,
+  type eltType,
+  targetLocales: [] locale = Locales
+) {
+  return createArray({(...rng)}, eltType, targetLocales);
+}
+
+pragma "no copy return"
+proc type cyclicDist.createArray(rng: range(?)..., type eltType) {
+  return createArray({(...rng)}, eltType);
+}
+
+// create an array over a Cyclic Distribution constructed from a series of ranges, initialized with the given value or iterator
+pragma "no copy return"
+pragma "last resort"
+proc type cyclicDist.createArray(
+  rng: range(?)...,
+  type eltType,
+  initExpr: ?t,
+  targetLocales: [] locale = Locales
+) where isSubtype(t, _iteratorRecord) || isCoercible(t, eltType)
+{
+  return createArray({(...rng)}, eltType, initExpr, targetLocales);
+}
+
+pragma "no copy return"
+proc type cyclicDist.createArray(rng: range(?)..., type eltType, initExpr: ?t)
+  where isSubtype(t, _iteratorRecord) || isCoercible(t, eltType)
+{
+  return createArray({(...rng)}, eltType, initExpr);
+}
+
+// create an array over a Cyclic Distribution constructed from a series of ranges, initialized from the given array
+pragma "no copy return"
+pragma "last resort"
+proc type cyclicDist.createArray(
+  rng: range(?)...,
+  type eltType,
+  initExpr: [?arrayDom] ?arrayEltType,
+  targetLocales: [] locale = Locales
+) where rng.size == arrayDom.rank && isCoercible(arrayEltType, eltType)
+{
+  return createArray({(...rng)}, eltType, initExpr, targetLocales);
+}
+
+pragma "no copy return"
+proc type cyclicDist.createArray(
+  rng: range(?)...,
+  type eltType,
+  initExpr: [?arrayDom] ?arrayEltType
+) where rng.size == arrayDom.rank && isCoercible(arrayEltType, eltType)
+{
+  return createArray({(...rng)}, eltType, initExpr);
 }
 
 // Cyclic subdomains are represented as a single domain
 
-proc CyclicArr.dsiHasSingleLocalSubdomain() param return true;
-proc CyclicDom.dsiHasSingleLocalSubdomain() param return true;
+proc CyclicArr.dsiHasSingleLocalSubdomain() param do return !allowDuplicateTargetLocales;
+proc CyclicDom.dsiHasSingleLocalSubdomain() param do return !allowDuplicateTargetLocales;
 
 proc CyclicArr.dsiLocalSubdomain(loc: locale) {
   if (loc == here) {
@@ -1279,7 +1610,7 @@ proc CyclicArr.dsiLocalSubdomain(loc: locale) {
     if const myLocArrNN = myLocArr then
       return myLocArrNN.locDom.myBlock;
     // if not, we must not own anything
-    var d: domain(rank, idxType, stridable=true);
+    var d: myBlockType(rank, idxType);
     return d;
   } else {
     return dom.dsiLocalSubdomain(loc);
@@ -1288,27 +1619,73 @@ proc CyclicArr.dsiLocalSubdomain(loc: locale) {
 proc CyclicDom.dsiLocalSubdomain(loc: locale) {
   const (gotit, locid) = dist.chpl__locToLocIdx(loc);
   if (gotit) {
-    return whole[(...(chpl__computeCyclic(this.idxType, locid, dist.targetLocDom.dims(), dist.startIdx)))];
+    return whole[(...(chpl__computeCyclic(idxType, locid, dist.targetLocDom.dims(), dist.startIdx)))] : myBlockType(rank, idxType);
   } else {
-    var d: domain(rank, idxType, stridable=true);
+    var d: myBlockType(rank, idxType);
     return d;
   }
 }
 
-proc newCyclicDom(dom: domain) {
-  return dom dmapped Cyclic(startIdx=dom.low);
+proc CyclicArr.canDoOptimizedSwap(other) {
+  var domsMatch = true;
+
+  if this.dom != other.dom { // no need to check if this is true
+    for param i in 0..this.dom.rank-1 {
+      if this.dom.whole.dim(i) != other.dom.whole.dim(i) {
+        domsMatch = false;
+      }
+    }
+  }
+
+  if domsMatch {
+    // distributions must be equal, too
+    return this.dom.dist.dsiEqualDMaps(other.dom.dist);
+  }
+  return false;
 }
 
-proc newCyclicArr(dom: domain, type eltType) {
-  var D = newCyclicDom(dom);
-  var A: [D] eltType;
-  return A;
+// A helper routine that will perform a pointer swap on an array
+// instead of doing a deep copy of that array. Returns true
+// if used the optimized swap, false otherwise
+//
+// TODO: stridability causes issues with RAD swap, and somehow isn't captured by
+// the formal type when we check whether this resolves.
+proc CyclicArr.doiOptimizedSwap(other: this.type)
+  where this.strides == other.strides {
+
+  if(canDoOptimizedSwap(other)) {
+    if debugOptimizedSwap {
+      writeln("CyclicArr doing optimized swap. Domains: ",
+              this.dom.whole, " ", other.dom.whole, " Bounding boxes: ",
+              this.dom.dist.startIdx, " ", other.dom.dist.startIdx);
+    }
+    coforall (locarr1, locarr2) in zip(this.locArr, other.locArr) {
+      on locarr1 {
+        locarr1.myElems <=> locarr2.myElems;
+        locarr1.locRAD <=> locarr2.locRAD;
+      }
+    }
+    return true;
+  } else {
+    if debugOptimizedSwap {
+      writeln("CyclicArr doing unoptimized swap. Domains: ",
+              this.dom.whole, " ", other.dom.whole, " Bounding boxes: ",
+              this.dom.dist.startIdx, " ", other.dom.dist.startIdx);
+    }
+    return false;
+  }
 }
 
-proc newCyclicDom(rng: range...) {
-  return newCyclicDom({(...rng)});
+
+// The purpose of this overload is to provide debugging output in the event that
+// debugOptimizedSwap is on and the main routine doesn't resolve (e.g., due to a
+// type, stridability, or rank mismatch in the other argument). When
+// debugOptimizedSwap is off, this overload will be ignored due to its where
+// clause.
+pragma "last resort"
+proc CyclicArr.doiOptimizedSwap(other) where debugOptimizedSwap {
+  writeln("CyclicArr doing unoptimized swap. Type mismatch");
+  return false;
 }
 
-proc newCyclicArr(rng: range..., type eltType) {
-  return newCyclicArr({(...rng)}, eltType);
-}
+}  // module CyclicDist

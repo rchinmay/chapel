@@ -15,8 +15,8 @@ proc lowerBound(arr: [?d] int, target: int, out result:int ): bool {
   return false;
 }
 
-proc doTest(arr: [?d] int) {
-  var s1 = new sortedSet(int, false, defaultComparator);
+proc doTest(ref arr: [?d] int) {
+  var s1 = new sortedSet(int, false, new defaultComparator());
 
   for x in arr {
     s1.add(x);

@@ -1,16 +1,16 @@
 /*
- * Copyright 2020-2022 Hewlett Packard Enterprise Development LP
+ * Copyright 2020-2025 Hewlett Packard Enterprise Development LP
  * Copyright 2004-2019 Cray Inc.
  * Other additional copyright holders may be indicated within.
- * 
+ *
  * The entirety of this work is licensed under the Apache License,
  * Version 2.0 (the "License"); you may not use this file except
  * in compliance with the License.
- * 
+ *
  * You may obtain a copy of the License at
- * 
+ *
  *     http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -55,8 +55,9 @@ void chpl_comm_ofi_oob_init(void) {
   MPI_CHK(MPI_Comm_size(MPI_COMM_WORLD, &size));
   chpl_numNodes = (int32_t) size;
 
-  DBG_PRINTF(DBG_OOB, "OOB init: node %" PRI_c_nodeid_t " of %" PRId32,
-             chpl_nodeID, chpl_numNodes);
+  chpl_comm_oob = "MPI";
+  DBG_PRINTF(DBG_OOB, "OOB %s init: node %" PRI_c_nodeid_t " of %" PRId32,
+             chpl_comm_oob, chpl_nodeID, chpl_numNodes);
 }
 
 
@@ -97,7 +98,7 @@ void chpl_comm_ofi_oob_bcast(void* buf, size_t size) {
   MPI_CHK(MPI_Bcast(buf, size, MPI_BYTE, 0, MPI_COMM_WORLD));
 }
 
-int chpl_comm_ofi_oob_locales_on_node(void) {
+int chpl_comm_ofi_oob_locales_on_node(int *rank) {
   //
   // The MPI_Comm_split_type() call splits the specified input communicator
   // (MPI_COMM_WORLD) into one or more output communicators which, because of the
@@ -116,6 +117,9 @@ int chpl_comm_ofi_oob_locales_on_node(void) {
   int nodeSize;
   MPI_CHK(MPI_Comm_size(nodeComm, &nodeSize));
   MPI_CHK(MPI_Comm_free(&nodeComm));
-  DBG_PRINTF(DBG_OOB, "OOB locales on node: %d", nodeSize);
+  DBG_PRINTF(DBG_OOB, "MPI OOB locales on node: %d", nodeSize);
+  if (rank != NULL) {
+    *rank = -1;  // not implemented
+  }
   return nodeSize;
 }

@@ -1,9 +1,8 @@
 Initialize from string
 A Chapel string
-A Chapel string
-A Chapel string
+A local Chapel string
 
-Initialize from c_string
+Initialize from c_ptrConst(c_char)
 ABC
 ABC
 ABC
@@ -17,6 +16,22 @@ A C
 A C
 
 Initialize from c_ptr(c_char)
+ABC
+ABC
+ABC
+ABC
+A C
+A C
+
+Initialize from c_ptrConst(c_uchar)
+ABC
+ABC
+ABC
+ABC
+A C
+A C
+
+Initialize from c_ptrConst(c_char)
 ABC
 ABC
 ABC

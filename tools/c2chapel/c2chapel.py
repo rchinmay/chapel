@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 
 #
-# Copyright 2020-2022 Hewlett Packard Enterprise Development LP
+# Copyright 2020-2025 Hewlett Packard Enterprise Development LP
 # Copyright 2004-2019 Cray Inc.
 # Other additional copyright holders may be indicated within.
 #
@@ -43,7 +43,7 @@ try:
     from pycparser import c_parser, c_ast, parse_file
     from pycparserext import ext_c_parser
 except ImportError as e:
-    sys.exit("Unable to import pycparser: " + str(e));
+    sys.exit("Unable to import pycparser: " + str(e))
 
 import argparse
 import os.path
@@ -67,7 +67,7 @@ c2chapel["float"]  = "c_float"
 c2chapel["char"]   = "c_char"
 c2chapel["void"]   = ""
 
-# Based on SysCTypes.chpl
+# Based on ChapelSysCTypes.chpl
 c2chapel["int"]                = "c_int"
 c2chapel["unsigned"]           = "c_uint"
 c2chapel["unsigned int"]       = "c_uint"
@@ -83,16 +83,17 @@ c2chapel["unsigned short"]     = "c_ushort"
 c2chapel["intptr_t"]           = "c_intptr"
 c2chapel["uintptr_t"]          = "c_uintptr"
 c2chapel["ptrdiff_t"]          = "c_ptrdiff"
-c2chapel["ssize_t"]            = "ssize_t"
-c2chapel["size_t"]             = "size_t"
+c2chapel["ssize_t"]            = "c_ssize_t"
+c2chapel["size_t"]             = "c_size_t"
+c2chapel["wchar_t"]            = "c_wchar_t"
 c2chapel["long double"]        = "c_longlong"
 c2chapel["signed short"]       = "c_short"
 c2chapel["signed int"]         = "c_int"
 c2chapel["signed long long"]   = "c_longlong"
 c2chapel["signed long"]        = "c_long"
 
-# Note: this mapping is defined by the compiler, not the SysCTypes file
-c2chapel["FILE"] = "_file"
+# Note: this mapping is defined by CTypes, not the ChapelSysCTypes file
+c2chapel["FILE"] = "c_FILE"
 
 __temp = [k for k in c2chapel.keys()]
 for key in __temp:
@@ -121,13 +122,13 @@ chapelKeywords = set(["align","as","atomic","begin","break","by","class",
     "in","index","inline","inout","iter","label","lambda","let","local","module","new",
     "nil","noinit","on","only","otherwise","out","param","private","proc",
     "public","record","reduce","ref","require","return","scan","select",
-    "serial","single","sparse","subdomain","sync","then","type","union","use",
+    "serial","sparse","subdomain","sync","then","type","union","use",
     "var","when","where","while","with","yield","zip", "string", "bytes", "locale"])
 
 
 def getArgs():
     parser = argparse.ArgumentParser(description="Generate C bindings for Chapel", prog="c2chapel")
-    parser.add_argument("file", help="C99 file for which to generate bindings")
+    parser.add_argument("file", help="C99 file for which to generate bindings. Additional arguments are forwarded to the C preprocessor (invoked with 'cc -E')")
     parser.add_argument("--no-typedefs",
                         help="do not generate extern types for C typedefs",
                         action="store_true")
@@ -141,10 +142,13 @@ def getArgs():
                         help="instruct c2chapel to not generate comments",
                         action="store_true")
     parser.add_argument("-V", "--version", action="version", version="%(prog)s " + __version__)
-    parser.add_argument("cppFlags", nargs="*", help="flags forwarded to the C preprocessor (invoked with cc -E)")
     parser.add_argument("--gnu-extensions",
                         help="allow GNU extensions in C99 files",
                         action="store_true")
+
+    usage = parser.format_usage()
+    parser.usage = usage.rstrip().removeprefix("usage: ") + " ..."
+
     return parser.parse_known_args()
 
 # s - string to print out.
@@ -216,8 +220,10 @@ def getIntentInfo(ty):
     if type(curType) == c_ast.PtrDecl:
         ptrType = toChapelType(curType)
 
-    if type(curType) == c_ast.PtrDecl and not (isPointerTo(curType, "char") or isPointerTo(curType, "void") or toChapelType(curType) == "c_fn_ptr"):
-        refIntent = "ref"
+    if type(curType) == c_ast.PtrDecl and not (isPointerTo(curType, "unsigned char") or isPointerTo(curType, "char") or isPointerTo(curType, "void") or toChapelType(curType) == "c_fn_ptr"):
+        if ptrType and "const" in curType.type.quals:
+            refIntent = "const "
+        refIntent += "ref"
         curType = curType.type
     else:
         refIntent = ""
@@ -237,7 +243,7 @@ def computeArgs(pl):
     for (i, arg) in enumerate(pl.params):
         if type(arg) == c_ast.EllipsisParam:
             formals.append(VARARGS_STR)
-            ptrFormals.append(VARARGS_STR);
+            ptrFormals.append(VARARGS_STR)
         else:
             (intent, typeName, ptrTypeName) = getIntentInfo(arg.type)
             argName = computeArgName(arg)
@@ -268,20 +274,31 @@ def isPointerTo(ty, text):
 
 def toChapelType(ty):
     if isPointerTo(ty, "char"):
-        return "c_string"
-    elif isPointerTo(ty, "void"):
-        return "c_void_ptr"
+        if "const" in ty.type.quals:
+            return "c_ptrConst(" + "c_char" + ")"
+        else:
+            return "c_ptr(" + "c_char" + ")"
     elif type(ty) in (c_ast.ArrayDecl, ext_c_parser.ArrayDeclExt):
         eltType = toChapelType(ty.type)
         if eltType is not None:
-            return "c_ptr(" + eltType + ")"
+            if type(ty.type) in (c_ast.ArrayDecl, ext_c_parser.ArrayDeclExt):
+                return eltType
+            elif "const" in ty.type.quals:
+                return "c_ptrConst(" + eltType + ")"
+            else:
+                return "c_ptr(" + eltType + ")"
         else:
             return None
     elif type(ty) == c_ast.PtrDecl:
         if type(ty.type) in (c_ast.FuncDecl, ext_c_parser.FuncDeclExt):
             return "c_fn_ptr"
         else:
-            return "c_ptr(" + toChapelType(ty.type) + ")"
+            eltType = ("void" if isPointerTo(ty, "void")
+                       else toChapelType(ty.type))
+            if "const" in ty.type.quals:
+                return "c_ptrConst(" + eltType + ")"
+            else:
+                return "c_ptr(" + eltType + ")"
     elif type(ty) in (c_ast.TypeDecl, ext_c_parser.TypeDeclExt):
         inner = ty.type
         name = ""
@@ -354,6 +371,9 @@ def getStructOrUnionDef(decl):
         return None
 
 
+def isStructOrUnionForwardDeclared(node):
+    return isStructOrUnionType(node) and not node.decls
+
 def genStructOrUnion(structOrUnion, name="", isAnon=False):
     if name == "":
         if structOrUnion.name is not None:
@@ -379,7 +399,7 @@ def genStructOrUnion(structOrUnion, name="", isAnon=False):
     foundTypes.add(name)
 
     # Forward Declaration
-    if not structOrUnion.decls:
+    if isStructOrUnionForwardDeclared(structOrUnion):
         print()
         return
 
@@ -418,7 +438,7 @@ def genVar(decl):
     name = decl.name
     if name in chapelKeywords:
         name = 'c2chapel_' + name
-    
+
     ty   = toChapelType(decl.type)
     print("extern var " + name + " : " + ty + ";")
     print()
@@ -445,8 +465,14 @@ def genTypeEnum(decl):
 # Simple visitor to all function declarations
 class ChapelVisitor(c_ast.NodeVisitor):
     def visit_StructOrUnion(self, node):
-        typeDefs[node.name] = None
         genStructOrUnion(node, isAnon=False)
+        # If this is not a forward declaration, then preemptively prune this
+        # struct or union from the typedef map (since this is the type's
+        # definition). However, if this _was_ a forward declaration, then we
+        # want to handle the possibility of an embedded definition later.
+        # E.g., 'typedef struct foo { int x; } foo;'
+        if not isStructOrUnionForwardDeclared(node):
+            typeDefs[node.name] = None
 
     def visit_Typedef(self, node):
         if node.name not in typeDefs:
@@ -489,7 +515,7 @@ def genTypeAlias(node):
             print("extern type " + alias + ";")
         else:
             print("extern type " + alias + " = " + typeName + ";")
-        foundTypes.add(alias);
+        foundTypes.add(alias)
         print()
 
 def isPointerToStruct(node):
@@ -520,7 +546,7 @@ def genTypedefs(defs):
                     isUnion = isinstance(node.type.type, c_ast.Union)
                     structOrUnion = "union" if isUnion else "struct"
                     genComment("Opaque " + structOrUnion + "?")
-                    gen = "extern union " if isUnion else "extern record ";
+                    gen = "extern union " if isUnion else "extern record "
                     gen += name + " {};\n"
                     print(gen)
                 else:
@@ -568,7 +594,7 @@ def handleTypedefs(defs, ignores):
 # - bitshift constants (e.g. 1<<3)
 def emit_defines(fname):
     with open(fname, "r") as f:
-        pat = re.compile("^\s*#define\s+([_a-zA-Z0-9]+)\s+[0-9]+$")
+        pat = re.compile("^\\s*#define\\s+([_a-zA-Z0-9]+)\\s+[0-9]+$")
         first = True
         for line in f:
             res = pat.match(line)
@@ -638,17 +664,14 @@ def preamble(args, fakes):
         genComment("Note: Generated with fake std headers")
         print()
 
+    # Needed for C types
     # Arguably we can tighten the use of this module based on what we actually
     # generate, but for now this is good enough
-    print("use CPtr;")
-
-    # Needed for C types
-    print("use SysCTypes;")
-    print("use SysBasic;")
+    print("use CTypes;")
 
 # TODO: accept file from stdin?
 if __name__=="__main__":
-    (args, unknowns)  = getArgs()
+    args, unknown = getArgs()
     fname      = args.file
     noComments = args.no_comments
     DEBUG      = args.debug
@@ -664,10 +687,11 @@ if __name__=="__main__":
         ignores = findIgnores()
 
     try:
+        cpp_args = ["-E"] + fakes + unknown
         if useGnu:
-            ast = parse_file(fname, use_cpp=True, cpp_path="cc", cpp_args=["-E"] + fakes + unknowns, parser=ext_c_parser.GnuCParser())
+            ast = parse_file(fname, use_cpp=True, cpp_path="cc", cpp_args=cpp_args, parser=ext_c_parser.GnuCParser())
         else:
-            ast = parse_file(fname, use_cpp=True, cpp_path="cc", cpp_args=["-E"] + fakes + unknowns)
+            ast = parse_file(fname, use_cpp=True, cpp_path="cc", cpp_args=cpp_args)
     except c_parser.ParseError as e:
         sys.exit("Unable to parse file: " + str(e))
 

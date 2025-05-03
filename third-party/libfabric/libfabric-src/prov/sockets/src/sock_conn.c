@@ -68,7 +68,6 @@ ssize_t sock_conn_send_src_addr(struct sock_ep_attr *ep_attr, struct sock_tx_ctx
 	tx_op.op = SOCK_OP_CONN_MSG;
 	SOCK_LOG_DBG("New conn msg on TX: %p using conn: %p\n", tx_ctx, conn);
 
-	total_len = 0;
 	tx_op.src_iov_len = sizeof(union ofi_sock_ip);
 	total_len = tx_op.src_iov_len + sizeof(struct sock_op_send);
 
@@ -97,12 +96,13 @@ int sock_conn_map_init(struct sock_ep *ep, int init_size)
 {
 	struct sock_conn_map *map = &ep->attr->cmap;
 	int ret;
+
 	map->table = calloc(init_size, sizeof(*map->table));
 	if (!map->table)
 		return -FI_ENOMEM;
 
-	map->epoll_ctxs = calloc(init_size, sizeof(*map->epoll_ctxs));
-	if (!map->epoll_ctxs)
+	map->epoll_events = calloc(init_size, sizeof(*map->epoll_events));
+	if (!map->epoll_events)
 		goto err1;
 
 	ret = ofi_epoll_create(&map->epoll_set);
@@ -113,13 +113,14 @@ int sock_conn_map_init(struct sock_ep *ep, int init_size)
 		goto err2;
 	}
 
-	fastlock_init(&map->lock);
+	ofi_mutex_init(&map->lock);
 	map->used = 0;
 	map->size = init_size;
+	map->epoll_size = init_size;
 	return 0;
 
 err2:
-	free(map->epoll_ctxs);
+	free(map->epoll_events);
 err1:
 	free(map->table);
 	return -FI_ENOMEM;
@@ -153,12 +154,12 @@ void sock_conn_map_destroy(struct sock_ep_attr *ep_attr)
 	}
 	free(cmap->table);
 	cmap->table = NULL;
-	free(cmap->epoll_ctxs);
-	cmap->epoll_ctxs = NULL;
-	cmap->epoll_ctxs_sz = 0;
+	free(cmap->epoll_events);
+	cmap->epoll_events = NULL;
+	cmap->epoll_size = 0;
 	cmap->used = cmap->size = 0;
 	ofi_epoll_close(cmap->epoll_set);
-	fastlock_destroy(&cmap->lock);
+	ofi_mutex_destroy(&cmap->lock);
 }
 
 void sock_conn_release_entry(struct sock_conn_map *map, struct sock_conn *conn)
@@ -274,8 +275,25 @@ static void sock_set_sockopt_reuseaddr(int sock)
 {
 	int optval;
 	optval = 1;
-	if (setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &optval, sizeof(optval)))
+	if (setsockopt(sock, SOL_SOCKET, SO_REUSEADDR,
+		       (const void *) &optval, sizeof(optval)))
 		SOCK_LOG_ERROR("setsockopt reuseaddr failed\n");
+}
+
+static void sock_set_sockopt_bufsize(int sock)
+{
+	int bufsize = 0;
+	socklen_t len = sizeof(int);
+
+	if (sock_buf_sz == 0)
+		return;
+	bufsize = sock_buf_sz;
+
+	if (setsockopt(sock, SOL_SOCKET, SO_RCVBUF, (char *) &bufsize, len))
+		SOCK_LOG_ERROR("setsockopt rcvbuf size failed\n");
+
+	if (setsockopt(sock, SOL_SOCKET, SO_SNDBUF, (char *) &bufsize, len))
+		SOCK_LOG_ERROR("setsockopt sndbuf size failed\n");
 }
 
 void sock_set_sockopts(int sock, int sock_opts)
@@ -286,20 +304,24 @@ void sock_set_sockopts(int sock, int sock_opts)
 	sock_set_sockopt_reuseaddr(sock);
 	if (sock_opts & SOCK_OPTS_KEEPALIVE)
 		sock_set_sockopt_keepalive(sock);
-	if (setsockopt(sock, IPPROTO_TCP, TCP_NODELAY, &optval, sizeof(optval)))
+	if (setsockopt(sock, IPPROTO_TCP, TCP_NODELAY,
+		       (const void *) &optval, sizeof(optval)))
 		SOCK_LOG_ERROR("setsockopt nodelay failed\n");
 
 	if (sock_opts & SOCK_OPTS_NONBLOCK)
 		fd_set_nonblock(sock);
+
+	if (sock_opts & SOCK_OPTS_BUFSIZE)
+		sock_set_sockopt_bufsize(sock);
 }
 
 int sock_conn_stop_listener_thread(struct sock_conn_listener *conn_listener)
 {
 	conn_listener->do_listen = 0;
 
-	fastlock_acquire(&conn_listener->signal_lock);
+	ofi_mutex_lock(&conn_listener->signal_lock);
 	fd_signal_set(&conn_listener->signal);
-	fastlock_release(&conn_listener->signal_lock);
+	ofi_mutex_unlock(&conn_listener->signal_lock);
 
 	if (conn_listener->listener_thread &&
 	    pthread_join(conn_listener->listener_thread, NULL)) {
@@ -308,7 +330,7 @@ int sock_conn_stop_listener_thread(struct sock_conn_listener *conn_listener)
 
 	fd_signal_free(&conn_listener->signal);
 	ofi_epoll_close(conn_listener->epollfd);
-	fastlock_destroy(&conn_listener->signal_lock);
+	ofi_mutex_destroy(&conn_listener->signal_lock);
 
 	return 0;
 }
@@ -317,21 +339,21 @@ static void *sock_conn_listener_thread(void *arg)
 {
 	struct sock_conn_listener *conn_listener = arg;
 	struct sock_conn_handle *conn_handle;
-	void *ep_contexts[SOCK_EPOLL_WAIT_EVENTS];
+	struct ofi_epollfds_event events[SOCK_EPOLL_WAIT_EVENTS];
 	struct sock_ep_attr *ep_attr;
 	int num_fds, i, conn_fd;
 	union ofi_sock_ip remote;
 	socklen_t addr_size;
 
 	while (conn_listener->do_listen) {
-		num_fds = ofi_epoll_wait(conn_listener->epollfd, ep_contexts,
+		num_fds = ofi_epoll_wait(conn_listener->epollfd, events,
 		                        SOCK_EPOLL_WAIT_EVENTS, -1);
 		if (num_fds < 0) {
 			SOCK_LOG_ERROR("poll failed : %s\n", strerror(errno));
 			continue;
 		}
 
-		fastlock_acquire(&conn_listener->signal_lock);
+		ofi_mutex_lock(&conn_listener->signal_lock);
 		if (conn_listener->removed_from_epollfd) {
 			/* The epoll set changed between calling wait and wait
 			 * returning.  Get an updated set of events to avoid
@@ -342,7 +364,7 @@ static void *sock_conn_listener_thread(void *arg)
 		}
 
 		for (i = 0; i < num_fds; i++) {
-			conn_handle = ep_contexts[i];
+			conn_handle = events[i].data.ptr;
 
 			if (conn_handle == NULL) { /* signal event */
 				fd_signal_reset(&conn_listener->signal);
@@ -364,13 +386,13 @@ static void *sock_conn_listener_thread(void *arg)
 			}
 
 			ep_attr = container_of(conn_handle, struct sock_ep_attr, conn_handle);
-			fastlock_acquire(&ep_attr->cmap.lock);
+			ofi_mutex_lock(&ep_attr->cmap.lock);
 			sock_conn_map_insert(ep_attr, &remote, conn_fd, 1);
-			fastlock_release(&ep_attr->cmap.lock);
+			ofi_mutex_unlock(&ep_attr->cmap.lock);
 			sock_pe_signal(ep_attr->domain->pe);
 		}
 skip:
-		fastlock_release(&conn_listener->signal_lock);
+		ofi_mutex_unlock(&conn_listener->signal_lock);
 	}
 
 	return NULL;
@@ -380,7 +402,7 @@ int sock_conn_start_listener_thread(struct sock_conn_listener *conn_listener)
 {
 	int ret;
 
-	fastlock_init(&conn_listener->signal_lock);
+	ofi_mutex_init(&conn_listener->signal_lock);
 
 	ret = ofi_epoll_create(&conn_listener->epollfd);
 	if (ret < 0) {
@@ -418,7 +440,7 @@ err3:
 err2:
 	ofi_epoll_close(conn_listener->epollfd);
 err1:
-	fastlock_destroy(&conn_listener->signal_lock);
+	ofi_mutex_destroy(&conn_listener->signal_lock);
 	return ret;
 }
 
@@ -434,13 +456,13 @@ int sock_conn_listen(struct sock_ep_attr *ep_attr)
 	if (listen_fd == INVALID_SOCKET)
 		return -ofi_sockerr();
 
-	sock_set_sockopts(listen_fd, SOCK_OPTS_NONBLOCK);
+	sock_set_sockopts(listen_fd, SOCK_OPTS_NONBLOCK | SOCK_OPTS_BUFSIZE);
 
 	addr = *ep_attr->src_addr;
 	if (ep_attr->ep_type == FI_EP_MSG)
 		ofi_addr_set_port(&addr.sa, 0);
 
-	ret = bind(listen_fd, &addr.sa, ofi_sizeofaddr(&addr.sa));
+	ret = bind(listen_fd, &addr.sa, (socklen_t) ofi_sizeofaddr(&addr.sa));
 	if (ret) {
 		SOCK_LOG_ERROR("failed to bind listener: %s\n",
 			       strerror(ofi_sockerr()));
@@ -474,11 +496,11 @@ int sock_conn_listen(struct sock_ep_attr *ep_attr)
 	conn_handle->sock = listen_fd;
 	conn_handle->do_listen = 1;
 
-	fastlock_acquire(&ep_attr->domain->conn_listener.signal_lock);
+	ofi_mutex_lock(&ep_attr->domain->conn_listener.signal_lock);
 	ret = ofi_epoll_add(ep_attr->domain->conn_listener.epollfd,
 	                   conn_handle->sock, OFI_EPOLL_IN, conn_handle);
 	fd_signal_set(&ep_attr->domain->conn_listener.signal);
-	fastlock_release(&ep_attr->domain->conn_listener.signal_lock);
+	ofi_mutex_unlock(&ep_attr->domain->conn_listener.signal_lock);
 	if (ret) {
 		SOCK_LOG_ERROR("failed to add fd to pollset: %d\n", ret);
 		goto err;
@@ -513,15 +535,15 @@ int sock_ep_connect(struct sock_ep_attr *ep_attr, fi_addr_t index,
 		addr = *ep_attr->dest_addr;
 		ofi_addr_set_port(&addr.sa, ep_attr->msg_dest_port);
 	} else {
-		fastlock_acquire(&ep_attr->av->table_lock);
+		ofi_mutex_lock(&ep_attr->av->table_lock);
 		addr = ep_attr->av->table[index].addr;
-		fastlock_release(&ep_attr->av->table_lock);
+		ofi_mutex_unlock(&ep_attr->av->table_lock);
 	}
 
 do_connect:
-	fastlock_acquire(&ep_attr->cmap.lock);
+	ofi_mutex_lock(&ep_attr->cmap.lock);
 	*conn = sock_ep_lookup_conn(ep_attr, index, &addr);
-	fastlock_release(&ep_attr->cmap.lock);
+	ofi_mutex_unlock(&ep_attr->cmap.lock);
 
 	if (*conn != SOCK_CM_CONN_IN_PROGRESS)
 		return FI_SUCCESS;
@@ -544,7 +566,7 @@ do_connect:
 
 	ofi_straddr_dbg(&sock_prov, FI_LOG_EP_CTRL, "connecting to addr: ",
 			&addr.sa);
-	ret = connect(conn_fd, &addr.sa, ofi_sizeofaddr(&addr.sa));
+	ret = connect(conn_fd, &addr.sa, (socklen_t) ofi_sizeofaddr(&addr.sa));
 	if (ret < 0) {
 		if (OFI_SOCK_TRY_CONN_AGAIN(ofi_sockerr())) {
 			poll_fd.fd = conn_fd;
@@ -598,21 +620,21 @@ retry:
         goto do_connect;
 
 out:
-	fastlock_acquire(&ep_attr->cmap.lock);
+	ofi_mutex_lock(&ep_attr->cmap.lock);
 	new_conn = sock_conn_map_insert(ep_attr, &addr, conn_fd, 0);
 	if (!new_conn) {
-		fastlock_release(&ep_attr->cmap.lock);
+		ofi_mutex_unlock(&ep_attr->cmap.lock);
 		goto err;
 	}
 	new_conn->av_index = (ep_attr->ep_type == FI_EP_MSG) ?
 			     FI_ADDR_NOTAVAIL : index;
-	*conn = ofi_idm_lookup(&ep_attr->av_idm, index);
+	*conn = ofi_idm_lookup(&ep_attr->av_idm, (int) index);
 	if (*conn == SOCK_CM_CONN_IN_PROGRESS) {
-		if (ofi_idm_set(&ep_attr->av_idm, index, new_conn) < 0)
+		if (ofi_idm_set(&ep_attr->av_idm, (int) index, new_conn) < 0)
 			SOCK_LOG_ERROR("ofi_idm_set failed\n");
 		*conn = new_conn;
 	}
-	fastlock_release(&ep_attr->cmap.lock);
+	ofi_mutex_unlock(&ep_attr->cmap.lock);
 	return FI_SUCCESS;
 
 err:

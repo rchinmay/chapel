@@ -57,10 +57,14 @@ MPI2_TESTS = 			\
 
 MPI_TESTS = $(MPI1_TESTS) $(MPI2_TESTS)
 
+# Tests using pthreads in SEQ builds:
+@HAVE_PTHREAD_TRUE@ PTHREAD_TESTS = \
+@HAVE_PTHREAD_TRUE@        testprogthr
+
 # tests that can be built in any mode
 # in order of most useful execution
 # NOTE: if you add a test here that is expected to pass on all conduits,
-#   please also add it to upcr-harness/gasnet-tests/harness.conf
+#   please also add it to harness/gasnet-tests/harness.conf
 testprograms_seq =      \
         testgasnet      \
         testlegacy      \
@@ -104,8 +108,12 @@ testprograms_seq =      \
         testsegment     \
         testtmpair      \
         testreadonly    \
+        testalltoall    \
+        testtoken       \
         testcudauva     \
         testhip         \
+        testze          \
+        $(PTHREAD_TESTS) \
         $(CONDUIT_TESTS) \
         $(MPI_TESTS_SEQ)
 
@@ -303,8 +311,10 @@ run-tests: force
 	echo "TESTS COMPLETE"
 
 TESTEXIT_SCRIPT=run-testexit
+TESTEXIT_SEQMIN=1
 TESTEXIT_SEQMAX=13
-TESTEXIT_PARMAX=18
+TESTEXIT_PARMIN=51
+TESTEXIT_PARMAX=55
 do-run-testexit: force
 	@echo "Building $(TESTEXIT_SCRIPT) script..."
 	@echo "#!/bin/sh" > $(TESTEXIT_SCRIPT)
@@ -324,8 +334,12 @@ do-run-testexit: force
 	@echo "else"                                              >> $(TESTEXIT_SCRIPT)
 	@echo '  RUNCMD="$$INTERACTIVE_RUNCMD"'                   >> $(TESTEXIT_SCRIPT)
 	@echo "fi"                                                >> $(TESTEXIT_SCRIPT)
+	@if test -z "$$TIMECMD" ; then                                    \
+	   TIMECMD="@TIMECMD@" ;                                          \
+	 fi ;                                                             \
+	 echo "TIMECMD='$$TIMECMD'"                               >> $(TESTEXIT_SCRIPT)
 	@echo "@DEBUGMALLOC_VAR@=$${@DEBUGMALLOC_VAR@-@DEBUGMALLOC_VAL@}; export @DEBUGMALLOC_VAR@" >> $(TESTEXIT_SCRIPT)
-	@if test "`echo ' mpi udp ofi ' | grep ' $(CONDUIT_NAME) '`" != "" ; then \
+	@if test "`echo ' mpi udp ' | grep ' $(CONDUIT_NAME) '`" != "" ; then \
 	   echo "have_interrupt=0"                                >> $(TESTEXIT_SCRIPT) ; \
 	 else                                                                             \
 	   echo "have_interrupt=1"                                >> $(TESTEXIT_SCRIPT) ; \
@@ -334,8 +348,8 @@ do-run-testexit: force
 	@echo 'ID="`hostname`-$$MP_CHILD$$PBS_NODENUM"'           >> $(TESTEXIT_SCRIPT)
 	@echo 'line="----------------------------------"'         >> $(TESTEXIT_SCRIPT)
 	@echo 'line="$$line$$line"'                               >> $(TESTEXIT_SCRIPT)
-	@i=0; \
-	 needinterrupt="5 9 16" ; export needinterrupt ;                        \
+	@i=`expr $(TESTEXIT_SEQMIN) - 1`; \
+	 needinterrupt="5 9 53" ; export needinterrupt ;                        \
 	 while test "$$i" != "$(TESTEXIT_PARMAX)" ; do                       \
            i=`expr $$i + 1`;                                                 \
 	   echo ""                                   >> $(TESTEXIT_SCRIPT) ; \
@@ -345,7 +359,7 @@ do-run-testexit: force
 	   echo 'echo "$$line"'                      >> $(TESTEXIT_SCRIPT) ; \
 	   echo 'echo "$$ID: testexit '$$i'"'        >> $(TESTEXIT_SCRIPT) ; \
 	   echo 'echo "$$RUNCMD"'" $$i"              >> $(TESTEXIT_SCRIPT) ; \
-	   echo '$$RUNCMD'" $$i"                     >> $(TESTEXIT_SCRIPT) ; \
+	   echo '$$TIMECMD $$RUNCMD'" $$i"           >> $(TESTEXIT_SCRIPT) ; \
 	   echo 'echo "$$ID: result=$$?"'            >> $(TESTEXIT_SCRIPT) ; \
 	   echo "sleep 1"                            >> $(TESTEXIT_SCRIPT) ; \
 	   if test "`echo ' '$$needinterrupt' ' | grep ' '$$i' '`" != "" ; then  \
@@ -354,6 +368,7 @@ do-run-testexit: force
 	     echo 'fi'                               >> $(TESTEXIT_SCRIPT) ; \
 	   fi ;                                                              \
 	   if test "$$i" = "$(TESTEXIT_SEQMAX)" ; then                       \
+	     i=`expr $(TESTEXIT_PARMIN) - 1`;                                \
 	     echo 'threadmode=`@PERL@ -n -e '"'"'$(perl_threadscan)'"'"' ' \
                   'testexit@EXESUFFIX@ 2> /dev/null`'      >> $(TESTEXIT_SCRIPT) ; \
 	     echo 'if test "$$threadmode" = "SEQ" -o ' \
@@ -412,6 +427,12 @@ testcudauva_extracflags = @CUDA_UVA_CFLAGS@
 # some tests need hip_runtime.h other related options
 testhip_extracflags = @HIP_CFLAGS@
 
+# some tests need ze_api.h other related options
+testze_extracflags = @ZE_CFLAGS@
+
+# some tests need libpthreads even in a SEQ build
+testprogthr_extralibs = @GASNET_THREAD_LIBS@
+
 # delay function, used by multiple tests
 # need to deliberately exclude and disable optimization for this object file to prevent breaking delay
 NOOPT_FLAG=-O0
@@ -428,7 +449,7 @@ mpi-check: force
 # testmpi must be compiled like an MPI program with GASNet support
 testmpi: mpi-check force
 	$(GASNET_MPI_CC) -I$(srcdir) $(GASNET_CPPFLAGS) @MPI_CFLAGS@ $(KEEPTMP_CFLAGS) $(MANUAL_MPICFLAGS) -c -o $@.o $(srcdir)/$@.c
-	$(GASNET_MPI_LD) $(GASNET_LDFLAGS) @MPI_CFLAGS@ -o $@ $@.o $(GASNET_LIBS) @MPI_LIBS@ $(MANUAL_LIBS)
+	$(GASNET_MPI_LD) $(GASNET_LDFLAGS) @MPI_CFLAGS@ -o $@ $@.o $(GASNET_LIBS) @MPI_LIBS@ $(MANUAL_LIBS) $($@_extralibs)
 	@test -n '$(KEEPTMPS)' || ( cmd="rm -f $@.o"; echo "$$cmd"; eval "$$cmd" )
 
 # the following are just plain MPI programs
@@ -446,13 +467,13 @@ testcxx testlegacycxx: force
 		exit 1; \
 	 fi
 	$(GASNET_CXX) -I$(srcdir) $($@_extraincs) $(GASNET_CXXCPPFLAGS) $(KEEPTMP_CFLAGS) $(GASNET_DEVWARN_CXXFLAGS) $(GASNET_CXXFLAGS) $($@_extracxxflags) -c -o $@.o $(srcdir)/$@.cc
-	$(GASNET_CXX) $(GASNET_CXXFLAGS) $(GASNET_LDFLAGS) -o $@ $@.o $($@_extraobjs) $(GASNET_LIBS)
+	$(GASNET_CXX) $(GASNET_CXXFLAGS) $(GASNET_LDFLAGS) -o $@ $@.o $($@_extraobjs) $(GASNET_LIBS) $($@_extralibs)
 	@test -n '$(KEEPTMPS)' || ( cmd="rm -f $@.o"; echo "$$cmd"; eval "$$cmd" )
 
 # This is a model for how GASNet clients should be built:
 test% : force
 	$(GASNET_CC) -I$(srcdir) $($@_extraincs) $(GASNET_CPPFLAGS) $(KEEPTMP_CFLAGS) $(GASNET_DEVWARN_CFLAGS) $(GASNET_CFLAGS) $($@_extracflags) -c -o $@.o $(srcdir)/$@.c
-	$(GASNET_LD) $(GASNET_LDFLAGS) -o $@ $@.o $($@_extraobjs) $(GASNET_LIBS)
+	$(GASNET_LD) $(GASNET_LDFLAGS) -o $@ $@.o $($@_extraobjs) $(GASNET_LIBS) $($@_extralibs)
 	@test -n '$(KEEPTMPS)' || ( cmd="rm -f $@.o"; echo "$$cmd"; eval "$$cmd" )
 
 force:

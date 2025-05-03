@@ -1,61 +1,62 @@
 /* This example demonstrates how to use formatted I/O to
-   write and read a record stored as a tab-separated
+   write and read a record stored as tab-separated
    fields, with one record per line.
  */
 
 /* MyRecord contains fields of various types in order to demonstrate
    functionality.
  */
-use IO;
+use IO;  // enable access to the features in this primer
 
-record MyRecord {
+record MyRecord : serializable {
   var i: int;
   var r: real;
   var s: string;
 }
 
+// configs to control the output location and whether debugging is enabled
 config const fileName = "test.txt";
 config const debug = true;
 
 // Open up a file to work with.
-var f = open(fileName, iomode.cwr);
+var f = open(fileName, ioMode.cwr);
 
 
 // Let's create a few records and store them in an array.
-var A = [ new MyRecord(1,3.0,"test one"),
-          new MyRecord(6,-1.1,"quick brown"),
+var A = [ new MyRecord(1,3.0,"testone"),
+          new MyRecord(6,-1.1,"quickbrown"),
           new MyRecord(9,1e6,"fox") ];
 
 // We'll read back into B and check that they match...
 var B: [0..#3] MyRecord;
 
+// Create a writer that we'll use to write the data.
 {
-  // Create a writer that we'll use to write the data.
-  var writer = f.writer();
+  var writer = f.writer(locking=false);
 
   // Now let's write the records in a particular format:
   // 1 line per record
   // each field separated by a tab
   for a in A {
     // Depending on the situation, you might do:
-    // writer.writeln(a.i, "\t", a.r, "\t", a.s);
-    // that is equivalent to this (%t means any type):
-    // writer.writef("%t\t%t\t%t\n", a.i, a.r, a.s);
+    // ``writer.writeln(a.i, "\t", a.r, "\t", a.s);``
+    // that is equivalent to this (%? means any type):
+    // ``writer.writef("%?\t%?\t%?\n", a.i, a.r, a.s);``
     // but if you wanted to control precision/width and to
     // handle strings with tabs, you might use:
-    writer.writef("%2i\t%2.2r\t%'S\n", a.i, a.r, a.s);
+    writer.writef("%2i\t%2.2r\t%s\n", a.i, a.r, a.s);
     // (%'S asks for a single-quoted string)
 
     // for debugging purposes, we also output it to stdout
-    if debug then writef("%2i\t%2.2r\t%'S\n", a.i, a.r, a.s);
+    if debug then writef("%2i\t%2.2r\t%s\n", a.i, a.r, a.s);
   }
 
   writer.close();
 }
 
-// Now read the data. Way 1: use formatted I/O
+// Now read the data - Way 1: use formatted I/O
 {
-  var reader = f.reader();
+  var reader = f.reader(locking=false);
 
   var rec:MyRecord;
   var i = 0;
@@ -66,7 +67,7 @@ var B: [0..#3] MyRecord;
   // read until we reach EOF
   // (note: if you want to handle format errors or I/O errors,
   //  you need to use error= versions of the I/O functions)
-  while( reader.readf("%t\t%t\t%'S\n", rec.i, rec.r, rec.s) ) {
+  while( reader.readf("%?\t%?\t%s\n", rec.i, rec.r, rec.s) ) {
     // for debugging purposes, we also output it to stdout
     if debug then writeln("read ", rec);
     B[i] = rec;
@@ -80,37 +81,48 @@ var B: [0..#3] MyRecord;
   reader.close();
 }
 
-// Now read the data. Way 2: provide a readWriteThis method.
-// Note that this didn't work with Chapel 1.11 or earlier.
+// Now read the data - Way 2: provide serialize/deserialize methods.
+// Note that this didn't work with Chapel 1.31 or earlier.
 
-/* notes on readWriteThis (see the language spec):
-   - f is a Writer or a Reader
-   - the compiler will generate readWriteThis for you if you don't
-     provide one
-   - the I/O operator <~> is available to read or write (depending
-     on which situation we are being called in)
+/* notes on serialize/deserialize (see :ref:`serialize-deserialize`):
+
+   - reader is a fileReader, writer is a fileWriter
+
+   - the compiler will generate default serialize/deserialize methods for you if
+     you don't provide one
+
  */
-proc MyRecord.readWriteThis(f) throws {
-  f <~> i;
-  f <~> new ioLiteral("\t");
-  f <~> r;
-  f <~> new ioLiteral("\t");
+proc ref MyRecord.deserialize(reader, ref deserializer) throws {
+  i = reader.read(int);
+  reader.readLiteral("\t");
+  r = reader.read(real);
+  reader.readLiteral("\t");
+  s = reader.read(string);
+  reader.readLiteral("\n");
+}
 
-  // When doing the string I/O, we need to specify that we'd like
-  // the string to be single-quoted. Unfortunately, readf is
-  // not currently available on a Reader, so we have to rely
-  // on the caller setting the string formatting with the channel's
-  // style.
-  // In the future, we hope to allow readf in this situation. 
-  f <~> s;
+proc MyRecord.serialize(writer, ref serializer) throws {
+  writer.write(i);
+  writer.writeLiteral("\t");
+  writer.write(r);
+  writer.writeLiteral("\t");
+  writer.write(s);
+  writer.writeLiteral("\n");
+}
 
-  f <~> new ioLiteral("\n");
+proc MyRecord.init(i: int = 0, r: real = 0.0, s: string = "") {
+  this.i = i;
+  this.r = r;
+  this.s = s;
+}
+
+proc MyRecord.init(r: fileReader(?), ref deserializer: ?dt) throws {
+  this.init();
+  deserialize(r, deserializer);
 }
 
 {
-  // create a reader but specify that we'd like to use single-quoted strings.
-  // 0x27 is ascii for '
-  var reader = f.reader(style=new iostyle(string_format=iostringformat.basic:uint(8), string_start = 0x27, string_end = 0x27));
+  var reader = f.reader(locking=false);
 
   var rec:MyRecord;
   var i = 0;
@@ -133,5 +145,3 @@ proc MyRecord.readWriteThis(f) throws {
 
   reader.close();
 }
-
-

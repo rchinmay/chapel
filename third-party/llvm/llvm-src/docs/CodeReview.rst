@@ -1,3 +1,5 @@
+.. _code_review_policy:
+
 =====================================
 LLVM Code-Review Policy and Practices
 =====================================
@@ -36,13 +38,15 @@ Please note that the developer responsible for a patch is also
 responsible for making all necessary review-related changes, including
 those requested during any post-commit review.
 
+.. _post_commit_review:
+
 Can Code Be Reviewed After It Is Committed?
 -------------------------------------------
 
 Post-commit review is encouraged, and can be accomplished using any of the
 tools detailed below. There is a strong expectation that authors respond
 promptly to post-commit feedback and address it. Failure to do so is cause for
-the patch to be reverted.
+the patch to be :ref:`reverted <revert_policy>`.
 
 If a community member expresses a concern about a recent commit, and this
 concern would have been significant enough to warrant a conversation during
@@ -76,9 +80,8 @@ author, for example, might no longer be an active contributor to the project.
 What Tools Are Used for Code Review?
 ------------------------------------
 
-Code reviews are conducted, in order of preference, on our web-based
-code-review tool (see :doc:`Phabricator`), by email on the relevant project's
-commit mailing list, on the project's development list, or on the bug tracker.
+Pre-commit code reviews are conducted on GitHub with Pull Requests. See
+:ref:`GitHub <github-reviews>` documentation.
 
 When Is an RFC Required?
 ------------------------
@@ -99,6 +102,12 @@ Code review can be an iterative process, which continues until the patch is
 ready to be committed. Specifically, once a patch is sent out for review, it
 needs an explicit approval before it is committed. Do not assume silent
 approval, or solicit objections to a patch with a deadline.
+
+.. note::
+   If you are using a Pull Request for purposes other than review
+   (eg: precommit CI results, convenient web-based reverts, etc)
+   `skip-precommit-approval <https://github.com/llvm/llvm-project/labels?q=skip-precommit-approval>`_
+   label to the PR.
 
 Acknowledge All Reviewer Feedback
 ---------------------------------

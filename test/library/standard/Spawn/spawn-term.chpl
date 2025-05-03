@@ -1,4 +1,5 @@
 use Subprocess;
+use OS.POSIX;
 use Time;
 
 var sub = spawn(["sleep", "60"]);

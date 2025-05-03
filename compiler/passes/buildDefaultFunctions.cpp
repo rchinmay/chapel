@@ -1,5 +1,5 @@
 /*
- * Copyright 2020-2022 Hewlett Packard Enterprise Development LP
+ * Copyright 2020-2025 Hewlett Packard Enterprise Development LP
  * Copyright 2004-2019 Cray Inc.
  * Other additional copyright holders may be indicated within.
  *
@@ -34,6 +34,8 @@
 #include "symbol.h"
 #include "TryStmt.h"
 #include "wellknown.h"
+
+#include "global-ast-vecs.h"
 
 #include <unordered_map>
 #include <array>
@@ -142,10 +144,20 @@ void buildDefaultFunctions() {
     // Here we build default functions that are always generated (even when
     // the type symbol has FLAG_NO_DEFAULT_FUNCTIONS attached).
     if (AggregateType* ct = toAggregateType(type->type)) {
+
+      if (ct->symbol->hasFlag(FLAG_RESOLVED_EARLY)) {
+        if (ct->symbol->hasFlag(FLAG_REF)) {
+          // The frontend will generate '_ref' types early. These types
+          // really shouldn't have 'init=' (etc) generated for them...
+          continue;
+        }
+      }
+
       buildFieldAccessorFunctions(ct);
 
       if (ct->wantsDefaultInitializer()) {
         ct->buildDefaultInitializer();
+        ct->buildReaderInitializer();
       }
 
       if (!ct->hasUserDefinedInitEquals()) {
@@ -182,6 +194,10 @@ void buildDefaultFunctions() {
       }
 
       if (isRecord(ct)) {
+        // Build hash function first so we don't trip over our own
+        // compiler-generated '==' operator
+        buildRecordHashFunction(ct);
+
         if (!isRecordWrappedType(ct)) {
           buildRecordComparisonFunc(ct, "==");
           buildRecordComparisonFunc(ct, "!=");
@@ -191,7 +207,6 @@ void buildDefaultFunctions() {
           buildRecordComparisonFunc(ct, ">=");
         }
 
-        buildRecordHashFunction(ct);
 
         checkNotPod(ct);
       }
@@ -330,6 +345,20 @@ static FnSymbol* functionExists(const char* name,
   return functionExists<4>(name, {{formalType1, formalType2, formalType3, formalType4}}, kind);
 }
 
+static FnSymbol* operatorExists(const char* name,
+                                Type* formalType1,
+                                Type* formalType2,
+                                functionExistsKind kind=FIND_EITHER) {
+  FnSymbol* retval = NULL;
+  // check for operator method
+  retval = functionExists(name, dtMethodToken, dtAny, formalType1, formalType2);
+  if (retval == NULL) {
+    // check for standalone operator
+    retval = functionExists(name, formalType1, formalType2);
+  }
+  return retval;
+}
+
 static void fixupAccessor(AggregateType* ct, Symbol *field,
                            bool fieldIsConst, bool recordLike,
                            FnSymbol* fn)
@@ -439,6 +468,11 @@ FnSymbol* build_accessor(AggregateType* ct, Symbol* field,
     fn->deprecationMsg = field->deprecationMsg;
   }
 
+  if (field->hasFlag(FLAG_UNSTABLE)) {
+    fn->addFlag(FLAG_UNSTABLE);
+    fn->unstableMsg = field->unstableMsg;
+  }
+
   if (!typeMethod) {
     if (fieldIsConst)
       fn->addFlag(FLAG_REF_TO_CONST);
@@ -451,8 +485,10 @@ FnSymbol* build_accessor(AggregateType* ct, Symbol* field,
   fn->setMethod(true);
 
   Type* thisType = ct;
+
   if (chapelClass && (typeMethod || typeOrParam))
     thisType = ct->getDecoratedClass(ClassTypeDecorator::GENERIC);
+
   ArgSymbol* _this = new ArgSymbol(INTENT_BLANK, "this", thisType);
 
   if (typeMethod) {
@@ -709,7 +745,16 @@ static void buildChplEntryPoints() {
   // chpl_user_main is the (user) programmatic portion of the app
   //
   ModuleSymbol* mainModule   = ModuleSymbol::mainModule();
-  chplUserMain = chplGenMainExists();
+  if (chplUserMain == nullptr) {
+    chplUserMain = chplGenMainExists();
+  } else if (chplUserMain->hasFlag(FLAG_RESOLVED_EARLY)) {
+    // set mainReturnsSomething according to the return type of main
+    if (chplUserMain->retType &&
+        chplUserMain->retType != dtUnknown &&
+        chplUserMain->retType != dtVoid) {
+      mainReturnsSomething = true;
+    }
+  }
 
   if (fLibraryCompile == true && chplUserMain != NULL) {
     USR_WARN(chplUserMain,
@@ -740,6 +785,11 @@ static void buildChplEntryPoints() {
   SET_LINENO(chplUserMain);
 
   chplUserMain->cname = astr("chpl_user_main");
+  if (fIdBasedMunging && !mainModule->astloc.id().isEmpty()) {
+    const char* cname = astr(mainModule->astloc.id().symbolPath().c_str(),
+                             ".main");
+    chplUserMain->cname = cname;
+  }
 
   //
   // chpl_gen_main is the entry point for the compiler-generated code.
@@ -788,6 +838,14 @@ static void buildChplEntryPoints() {
   // It will initialize all the modules it uses, recursively.
   if (!fMultiLocaleInterop) {
     chpl_gen_main->insertAtTail(new CallExpr(mainModule->initFn));
+    // also init other modules mentioned on command line
+    forv_Vec(ModuleSymbol, mod, gModuleSymbols) {
+      if (mod->hasFlag(FLAG_MODULE_FROM_COMMAND_LINE_FILE) &&
+          mod != mainModule) {
+        chpl_gen_main->insertAtTail(new CallExpr(mod->initFn));
+      }
+    }
+
   } else {
     // Create an extern definition for the multilocale library server's main
     // function.  chpl_gen_main needs to call it in the course of its run, so
@@ -813,7 +871,7 @@ static void buildChplEntryPoints() {
 
   bool main_ret_set = false;
 
-  if (fLibraryCompile == false) {
+  if (!fLibraryCompile && !fDynoGenStdLib) {
     SET_LINENO(chpl_gen_main);
 
     if (mainHasArgs == true) {
@@ -926,9 +984,7 @@ static FnSymbol* buildRecordIsComparableFunc(AggregateType* ct,
 }
 
 static void buildRecordComparisonFunc(AggregateType* ct, const char* op) {
-  if (functionExists(op, ct, ct)) {
-    return;
-  } else if (functionExists(op, dtMethodToken, dtAny, ct, ct)) {
+  if (operatorExists(op, ct, ct)) {
     return;
   }
 
@@ -1454,9 +1510,7 @@ static void buildEnumOrderFunctions(EnumType* et) {
 
 
 static void buildRecordAssignmentFunction(AggregateType* ct) {
-  if (functionExists("=", ct, ct)) {
-    return;
-  } else if (functionExists("=", dtMethodToken, dtAny, ct, ct)) {
+  if (operatorExists("=", ct, ct)) {
     return;
   }
 
@@ -1517,7 +1571,7 @@ static void buildRecordAssignmentFunction(AggregateType* ct) {
 
 static void buildExternAssignmentFunction(Type* type)
 {
-  if (functionExists("=", type, type))
+  if (operatorExists("=", type, type))
     return;
 
   FnSymbol* fn = new FnSymbol("=");
@@ -1545,7 +1599,7 @@ static void buildExternAssignmentFunction(Type* type)
 
 // TODO: we should know what field is active after assigning unions
 static void buildUnionAssignmentFunction(AggregateType* ct) {
-  if (functionExists("=", ct, ct))
+  if (operatorExists("=", ct, ct))
     return;
 
   FnSymbol* fn = new FnSymbol("=");
@@ -1607,7 +1661,10 @@ static void checkNotPod(AggregateType* at) {
 ************************************** | *************************************/
 
 static void buildRecordHashFunction(AggregateType *ct) {
-  if (functionExists("hash", dtMethodToken, ct))
+  if (functionExists("hash", dtMethodToken, ct) ||
+      (!ct->symbol->hasFlag(FLAG_TUPLE) &&  // tuples already always have ==/!=
+       (operatorExists("==", ct, ct) ||
+        operatorExists("!=", ct, ct))))
     return;
 
   FnSymbol *fn = new FnSymbol("hash");
@@ -1636,7 +1693,7 @@ static void buildRecordHashFunction(AggregateType *ct) {
             field->hasFlag(FLAG_PARAM))) {
         CallExpr *field_access = new CallExpr(field->name, gMethodToken, arg);
         if (first) {
-          call = new CallExpr("hash", gMethodToken, field_access);
+          call = new CallExpr("chpl__defaultHashWrapperInner", field_access);
           first = false;
         } else {
           call = new CallExpr("chpl__defaultHashCombine",
@@ -1732,9 +1789,54 @@ static bool inheritsFromError(Type* t) {
 }
 
 
-// common code to create a writeThis() function without filling in the body
-FnSymbol* buildWriteThisFnSymbol(AggregateType* ct, ArgSymbol** filearg) {
-  FnSymbol* fn = new FnSymbol("writeThis");
+// common code to create a serialize method without filling in the body
+FnSymbol* buildSerializeFnSymbol(AggregateType* ct, ArgSymbol** filearg) {
+  FnSymbol* fn = new FnSymbol("serialize");
+
+  fn->addFlag(FLAG_COMPILER_GENERATED);
+  fn->addFlag(FLAG_LAST_RESORT);
+  if (ct->isClass() && ct != dtObject) {
+    fn->addFlag(FLAG_OVERRIDE);
+  } else {
+    fn->addFlag(FLAG_INLINE);
+  }
+
+  fn->cname = astr("_auto_", ct->symbol->name, "_serialize");
+  fn->_this = new ArgSymbol(INTENT_BLANK, "this", ct);
+  fn->_this->addFlag(FLAG_ARG_THIS);
+
+  ArgSymbol* fileArg = new ArgSymbol(INTENT_BLANK, "writer", dtAny);
+  *filearg = fileArg;
+
+  fileArg->addFlag(FLAG_MARKED_GENERIC);
+
+  fn->setMethod(true);
+
+  fn->insertFormalAtTail(new ArgSymbol(INTENT_BLANK, "_mt", dtMethodToken));
+  fn->insertFormalAtTail(fn->_this);
+  fn->insertFormalAtTail(fileArg);
+
+  ArgSymbol* serializer = new ArgSymbol(INTENT_REF, "serializer", dtAny);
+  fn->insertFormalAtTail(serializer);
+
+  fn->retType = dtVoid;
+
+  DefExpr* def = new DefExpr(fn);
+
+  ct->symbol->defPoint->insertBefore(def);
+
+  fn->setMethod(true);
+  fn->addFlag(FLAG_METHOD_PRIMARY);
+
+  reset_ast_loc(def, ct->symbol);
+
+  ct->methods.add(fn);
+
+  return fn;
+}
+
+static FnSymbol* buildDeserializeFnSymbol(AggregateType* ct, ArgSymbol** filearg) {
+  FnSymbol* fn = new FnSymbol("deserialize");
 
   fn->addFlag(FLAG_COMPILER_GENERATED);
   fn->addFlag(FLAG_LAST_RESORT);
@@ -1743,11 +1845,13 @@ FnSymbol* buildWriteThisFnSymbol(AggregateType* ct, ArgSymbol** filearg) {
   else
     fn->addFlag(FLAG_INLINE);
 
-  fn->cname = astr("_auto_", ct->symbol->name, "_write");
-  fn->_this = new ArgSymbol(INTENT_BLANK, "this", ct);
+  fn->cname = astr("_auto_", ct->symbol->name, "_deserialize");
+
+  auto desIntent = ct->isClass() ? INTENT_BLANK : INTENT_REF;
+  fn->_this = new ArgSymbol(desIntent, "this", ct);
   fn->_this->addFlag(FLAG_ARG_THIS);
 
-  ArgSymbol* fileArg = new ArgSymbol(INTENT_BLANK, "f", dtAny);
+  ArgSymbol* fileArg = new ArgSymbol(INTENT_BLANK, "reader", dtAny);
   *filearg = fileArg;
 
   fileArg->addFlag(FLAG_MARKED_GENERIC);
@@ -1775,10 +1879,13 @@ FnSymbol* buildWriteThisFnSymbol(AggregateType* ct, ArgSymbol** filearg) {
 }
 
 static void buildDefaultReadWriteFunctions(AggregateType* ct) {
-  bool hasReadWriteThis         = false;
-  bool hasReadThis              = false;
-  bool hasWriteThis             = false;
-  bool makeReadThisAndWriteThis = true;
+  bool hasSerialize             = false;
+  bool hasDeserialize           = false;
+  bool AnySerialize             = false;
+  FnSymbol* readerInit          = nullptr;
+
+  // Always build for 'object' to satisfy 'override' keyword in some cases.
+  bool makeSerialize            = ct == dtObject || !fNoIOGenSerialization;
 
   //
   // We have no QIO when compiling with --minimal-modules, so no need
@@ -1798,102 +1905,96 @@ static void buildDefaultReadWriteFunctions(AggregateType* ct) {
   if (isArrayImplType(ct))
     return;
 
-  // If we have a readWriteThis, we'll call it from readThis/writeThis.
-  if (functionExists("readWriteThis", dtMethodToken, ct, dtAny)) {
-    hasReadWriteThis = true;
+  if (functionExists("deserialize", dtMethodToken, ct, dtAny, dtAny)) {
+    hasDeserialize = true;
   }
 
-  if (functionExists("writeThis", dtMethodToken, ct, dtAny)) {
-    hasWriteThis = true;
+  if (functionExists("serialize", dtMethodToken, ct, dtAny, dtAny)) {
+    hasSerialize = true;
   }
 
-  if (functionExists("readThis", dtMethodToken, ct, dtAny)) {
-    hasReadThis = true;
+  forv_Vec(FnSymbol, method, ct->methods) {
+    int n = method ? method->numFormals() : 0;
+    if (method != nullptr &&
+        method->isInitializer() &&
+        n >= 4 &&
+        strcmp(method->getFormal(n-1)->name, "reader") == 0 &&
+        strcmp(method->getFormal(n)->name, "deserializer") == 0) {
+      readerInit = method;
+      break;
+    }
   }
 
-  // We'll make a writeThis and a readThis if neither exist.
-  // If only one exists, we leave just one (as some types
-  // can be written but not read, for example).
-  if (hasWriteThis || hasReadThis) {
-    makeReadThisAndWriteThis = false;
+  if (hasSerialize || hasDeserialize ||
+      (readerInit != nullptr &&
+       readerInit->hasFlag(FLAG_COMPILER_GENERATED) == false &&
+       ct->getModule()->modTag != MOD_INTERNAL)) {
+    // If there's a user-defined 'serialize' method...
+    // Or a user-defined 'deserialize' method...
+    // Or a user-defined 'init'-deserializing method...
+    // Then do not generate anything (except for hinting compiler errors)
+    AnySerialize = true;
   }
 
-  // Make writeThis when appropriate
-  if (makeReadThisAndWriteThis == true && hasWriteThis == false) {
+  if (hasSerialize) {
+    makeSerialize = false;
+  }
+
+  //
+  // Keep generating the 'serialize' method so that the override versions don't
+  // cause errors.
+  //
+  if (makeSerialize && !hasSerialize) {
     ArgSymbol* fileArg = NULL;
-    FnSymbol* fn = buildWriteThisFnSymbol(ct, &fileArg);
+    FnSymbol* fn = buildSerializeFnSymbol(ct, &fileArg);
+    ArgSymbol* serializer = fn->getFormal(fn->numFormals());
 
-    // Compiler generated versions of readThis/writeThis now throw.
     fn->throwsErrorInit();
 
-    if (hasReadWriteThis == true) {
-      Expr* dotReadWriteThis = buildDotExpr(fn->_this, "readWriteThis");
-
-      fn->insertAtTail(new CallExpr(dotReadWriteThis, fileArg));
-
-    } else {
-      fn->insertAtTail(new CallExpr("writeThisDefaultImpl",
-                                    fileArg,
-                                    fn->_this));
+    if (!fNoIOGenSerialization) {
+      if (AnySerialize) {
+        auto msg = new_StringSymbol("'serialize' methods are not compiler-generated when a type has a user-defined 'deserialize' method.");
+        fn->insertAtTail(new CallExpr("compilerError", msg));
+      } else {
+        fn->insertAtTail(new CallExpr("serializeDefaultImpl",
+                                      fileArg,
+                                      serializer,
+                                      fn->_this));
+      }
     }
 
     normalize(fn);
   }
 
-  // Make readThis when appropriate
-  if (makeReadThisAndWriteThis == true && hasReadThis == false) {
-    FnSymbol* fn = new FnSymbol("readThis");
+  bool makeDeserialize = ct == dtObject || !fNoIOGenSerialization;
+  if (makeDeserialize && !hasDeserialize) {
+    ArgSymbol* fileArg = NULL;
+    FnSymbol* fn = buildDeserializeFnSymbol(ct, &fileArg);
 
-    // Compiler generated versions of readThis/writeThis now throw.
     fn->throwsErrorInit();
 
-    fn->addFlag(FLAG_COMPILER_GENERATED);
-    fn->addFlag(FLAG_LAST_RESORT);
-    if (ct->isClass() && ct != dtObject)
-      fn->addFlag(FLAG_OVERRIDE);
-    else
-      fn->addFlag(FLAG_INLINE);
+    ArgSymbol* deserializer = new ArgSymbol(INTENT_REF, "deserializer", dtAny);
+    fn->insertFormalAtTail(deserializer);
 
-    fn->cname = astr("_auto_", ct->symbol->name, "_read");
-
-    fn->_this = new ArgSymbol(INTENT_BLANK, "this", ct);
-    fn->_this->addFlag(FLAG_ARG_THIS);
-
-    ArgSymbol* fileArg = new ArgSymbol(INTENT_BLANK, "f", dtAny);
-
-    fileArg->addFlag(FLAG_MARKED_GENERIC);
-
-    fn->setMethod(true);
-
-    fn->insertFormalAtTail(new ArgSymbol(INTENT_BLANK, "_mt", dtMethodToken));
-    fn->insertFormalAtTail(fn->_this);
-    fn->insertFormalAtTail(fileArg);
-
-    fn->retType = dtVoid;
-
-    if (hasReadWriteThis == true) {
-      Expr* dotReadWriteThis = buildDotExpr(fn->_this, "readWriteThis");
-
-      fn->insertAtTail(new CallExpr(dotReadWriteThis, fileArg));
-
+    if (AnySerialize) {
+      auto msg = new_StringSymbol("'deserialize' methods are not compiler-generated when a type has a user-defined 'serialize' method.");
+      fn->insertAtTail(new CallExpr("compilerError", msg));
     } else {
-      fn->insertAtTail(new CallExpr("readThisDefaultImpl",
+      VarSymbol* temp = newTemp("_deser_temp");
+      fn->insertAtTail(new DefExpr(temp));
+      fn->insertAtTail(new CallExpr(PRIM_MOVE, temp, fn->_this));
+      fn->insertAtTail(new CallExpr("deserializeDefaultImpl",
                                     fileArg,
-                                    fn->_this));
+                                    deserializer,
+                                    temp));
     }
 
-    DefExpr* def = new DefExpr(fn);
-
-    ct->symbol->defPoint->insertBefore(def);
-
-    fn->setMethod(true);
-    fn->addFlag(FLAG_METHOD_PRIMARY);
-
-    reset_ast_loc(def, ct->symbol);
-
     normalize(fn);
+  }
 
-    ct->methods.add(fn);
+  if (ct->builtReaderInit && AnySerialize && readerInit != nullptr) {
+    auto msg = new_StringSymbol("Initializers called by IO for deserialization are not compiler-generated when a user-defined 'serialize' or 'deserialize' method exists");
+    readerInit->insertAtHead(new CallExpr("compilerError", msg));
   }
 }
 
@@ -1903,7 +2004,7 @@ static void buildEnumStringOrBytesCastFunctions(EnumType* et,
   if (otherType != dtString && otherType != dtBytes) {
     INT_FATAL("wrong type was passed to buildEnumStringOrBytesCastFunctions");
   }
-  if (functionExists(astrScolon, otherType, et))
+  if (operatorExists(astrScolon, otherType, et))
     return;
 
   FnSymbol* fn = new FnSymbol(astrScolon);

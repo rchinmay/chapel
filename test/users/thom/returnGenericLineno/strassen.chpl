@@ -7,26 +7,26 @@ module Strassen
     private use IO;
 
     class StrassenFactory : BenchmarkFactory
-    {
+   , writeSerializable {
         var n : int;
 
         override proc getInstance() : unmanaged Strassen  // Error message line# wrong
         {
             return new unmanaged Strassen("name", false, n);
         }
-        override proc writeThis(w) throws
+        override proc serialize(writer, ref serializer) throws
         {
-          w <~> "StrassenFactory " <~> n;
+          writer.write("StrassenFactory ", n);
         }
 
     }
 
     class Strassen : Benchmark
-    {
+   , writeSerializable {
         var n;
-        proc writeThis(w) throws
+        proc serialize(writer, ref serializer) throws
         {
-          w <~> "Strassen " <~> n;
+          writer.write("Strassen ", n);
         }
         override proc runKernel()
         {

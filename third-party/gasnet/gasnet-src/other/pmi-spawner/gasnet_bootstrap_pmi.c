@@ -13,6 +13,10 @@
 #  undef calloc
 #  undef free
 #  undef strdup
+#  undef strndup
+#  undef strcasecmp
+#  undef strncasecmp
+#  undef realloc
 #endif
 
 #if HAVE_PMI_CRAY_H
@@ -389,7 +393,8 @@ extern gasneti_spawnerfn_t const * gasneti_bootstrapInit_pmi(
     (void)strncpy(proc.nspace, myproc.nspace, PMIX_MAX_NSLEN+1);
     proc.rank = PMIX_RANK_WILDCARD;
 
-    if (PMIX_SUCCESS != PMIx_Get(&proc, PMIX_JOB_SIZE,
+    pmix_key_t tmp = PMIX_JOB_SIZE; // this tmp silences a warning on gcc 12.2
+    if (PMIX_SUCCESS != PMIx_Get(&proc, tmp,
                                  NULL, 0, &val)) {
         gasneti_fatalerror("PMIx Get Job Size failed");
     }
@@ -734,7 +739,31 @@ void gasnetc_pmi_allgather_on_smp_init(void) {
 }
 #endif
 
-static void bootstrapSNodeBroadcast(void *src, size_t len, void *dest, int rootnode) {
+// Since every caller extracts the desired rootnode's contribution from an
+// AllGather, the NbrhdBroadcast and HostBroadcast are identical.
+static void bootstrapSubsetBroadcast(void *src, size_t len, void *dest, int rootnode) {
+#ifdef HAVE_PMI_GET_NUMPES_ON_SMP
+    // Cray PMI gives us a means to validate our "host" size.
+    // The first SubsetBroadcast seems as good as place as any to check.
+    // TODO: add a function pointer to gasneti_spawnerfn_t for this type of validation
+    static int once = 0;
+    if (!once) {
+        once = 1;
+        int our_count = gasneti_myhost.node_count;
+        int their_count;
+        int rc = PMI_Get_numpes_on_smp(&their_count);
+        gasneti_assert_always(PMI_SUCCESS == rc);
+        if (our_count != their_count) {
+            gasneti_fatalerror("GASNet and PMI do not agree on the number of processes on "
+                               "this host (%s), seeing %d and %d, respectively.  "
+                               "To make its count, GASNet has used %s as a unique host identifier.  "
+                               "Please see documentation on GASNET_HOST_DETECT in README and "
+                               "consider setting its value to 'hostname' or reconfiguring using "
+                               "'--with-host-detect=hostname' to make that the default value.",
+                               gasneti_gethostname(), our_count, their_count, gasneti_format_host_detect());
+        }
+    }
+#endif
 #if HAVE_PMI_ALLGATHER_ON_SMP
     const int count = gasneti_myhost.node_count;
     uint8_t *tmp = gasneti_malloc(len * count);
@@ -788,7 +817,7 @@ static void bootstrapSNodeBroadcast(void *src, size_t len, void *dest, int rootn
     while (remain) {
         size_t chunk = MIN(remain, max_val_bytes);
 
-        // encoding rootnode allows all SNode's bcast concurrently
+        // encoding rootnode allows all roots to bcast concurrently
         do_kvs_key1('S', counter, rootnode);
 
         if (gasneti_mynode == rootnode) {
@@ -882,7 +911,8 @@ static gasneti_spawnerfn_t const spawnerfn = {
   bootstrapBarrier,
   bootstrapExchange,
   bootstrapBroadcast,
-  bootstrapSNodeBroadcast,
+  bootstrapSubsetBroadcast, // Nbrhd
+  bootstrapSubsetBroadcast, // Host
   bootstrapAlltoall,
   bootstrapAbort,
   bootstrapCleanup,

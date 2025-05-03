@@ -1,4 +1,4 @@
-use GMP, SysCTypes;
+use GMP, CTypes;
 
 inline operator mpz_t.+=(ref x: mpz_t, ref y: mpz_t) {
   mpz_add(x, x, y);
@@ -14,17 +14,6 @@ inline operator mpz_t.>(ref x: mpz_t, ref y: mpz_t) {
 
 inline operator mpz_t.>=(ref x: mpz_t, ref y: mpz_t) {
   return (mpz_cmp(x,y) >= 0);
-}
-
-//
-// TODO: I feel very nervous that 'rhs' is not passed by reference;
-// from past experience, I thought that all mpz_t's had to be passed
-// by reference in order to make the GMP library work correctly.
-// However, if I make it ref here, I get a complaint if I send in the
-// result of another operation like the *() below.
-//
-inline operator mpz_t.=(ref lhs: mpz_t, rhs: mpz_t) {
-  mpz_set(lhs, rhs);
 }
 
 //

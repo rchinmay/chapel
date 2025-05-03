@@ -65,6 +65,10 @@
 #define OFI_MR_BASIC_MAP (FI_MR_ALLOCATED | FI_MR_PROV_KEY | FI_MR_VIRT_ADDR)
 #endif
 
+#ifndef AI_NUMERICSERV
+#define AI_NUMERICSERV 0
+#endif
+
 static const uint64_t TAG = 1234;
 
 enum precision {
@@ -120,6 +124,7 @@ struct pp_opts {
 		__LINE__, ##__VA_ARGS__)
 
 int pp_debug;
+int pp_ipv6;
 
 #define PP_DEBUG(fmt, ...)                                                     \
 	do {                                                                   \
@@ -299,7 +304,7 @@ static int pp_getaddrinfo(char *name, uint16_t port, struct addrinfo **results)
 	char port_s[6];
 
 	struct addrinfo hints = {
-	    .ai_family = AF_INET,       /* IPv4 */
+	    .ai_family = pp_ipv6 ? AF_INET6 : AF_INET,
 	    .ai_socktype = SOCK_STREAM, /* TCP socket */
 	    .ai_protocol = IPPROTO_TCP, /* Any protocol */
 	    .ai_flags = AI_NUMERICSERV /* numeric port is used */
@@ -309,7 +314,7 @@ static int pp_getaddrinfo(char *name, uint16_t port, struct addrinfo **results)
 
 	ret = getaddrinfo(name, port_s, &hints, results);
 	if (ret != 0) {
-		err_msg = gai_strerror(ret);
+		err_msg = (const char *) gai_strerror(ret);
 		PP_ERR("getaddrinfo : %s", err_msg);
 		ret = -EXIT_FAILURE;
 		goto out;
@@ -320,9 +325,22 @@ out:
 	return ret;
 }
 
+static void pp_print_addrinfo(struct addrinfo *ai, char *msg)
+{
+	char s[80] = {0};
+	void *addr;
+
+	if (ai->ai_family == AF_INET6)
+		addr = &((struct sockaddr_in6 *)ai->ai_addr)->sin6_addr;
+	else
+		addr = &((struct sockaddr_in *)ai->ai_addr)->sin_addr;
+
+	inet_ntop(ai->ai_family, addr, s, 80);
+	PP_DEBUG("%s %s\n", msg, s);
+}
+
 static int pp_ctrl_init_client(struct ct_pingpong *ct)
 {
-	struct sockaddr_in in_addr = {0};
 	struct addrinfo *results;
 	struct addrinfo *rp;
 	int errno_save = 0;
@@ -346,13 +364,27 @@ static int pp_ctrl_init_client(struct ct_pingpong *ct)
 		}
 
 		if (ct->opts.src_port != 0) {
-			in_addr.sin_family = AF_INET;
-			in_addr.sin_port = htons(ct->opts.src_port);
-			in_addr.sin_addr.s_addr = htonl(INADDR_ANY);
+			if (pp_ipv6) {
+				struct sockaddr_in6 in6_addr = {0};
 
-			ret =
-			    bind(ct->ctrl_connfd, (struct sockaddr *)&in_addr,
-				 sizeof(in_addr));
+				in6_addr.sin6_family = AF_INET6;
+				in6_addr.sin6_port = htons(ct->opts.src_port);
+				in6_addr.sin6_addr = in6addr_any;
+
+				ret =
+				    bind(ct->ctrl_connfd, (struct sockaddr *)&in6_addr,
+					 sizeof(in6_addr));
+			} else {
+				struct sockaddr_in in_addr = {0};
+
+				in_addr.sin_family = AF_INET;
+				in_addr.sin_port = htons(ct->opts.src_port);
+				in_addr.sin_addr.s_addr = htonl(INADDR_ANY);
+
+				ret =
+				    bind(ct->ctrl_connfd, (struct sockaddr *)&in_addr,
+					 sizeof(in_addr));
+			}
 			if (ret == -1) {
 				errno_save = ofi_sockerr();
 				ofi_close_socket(ct->ctrl_connfd);
@@ -360,7 +392,9 @@ static int pp_ctrl_init_client(struct ct_pingpong *ct)
 			}
 		}
 
-		ret = connect(ct->ctrl_connfd, rp->ai_addr, rp->ai_addrlen);
+		pp_print_addrinfo(rp, "CLIENT: connecting to");
+
+		ret = connect(ct->ctrl_connfd, rp->ai_addr, (socklen_t) rp->ai_addrlen);
 		if (ret != -1)
 			break;
 
@@ -383,12 +417,11 @@ static int pp_ctrl_init_client(struct ct_pingpong *ct)
 
 static int pp_ctrl_init_server(struct ct_pingpong *ct)
 {
-	struct sockaddr_in ctrl_addr = {0};
 	int optval = 1;
 	SOCKET listenfd;
 	int ret;
 
-	listenfd = ofi_socket(AF_INET, SOCK_STREAM, 0);
+	listenfd = ofi_socket(pp_ipv6 ? AF_INET6 : AF_INET, SOCK_STREAM, 0);
 	if (listenfd == INVALID_SOCKET) {
 		ret = -ofi_sockerr();
 		PP_PRINTERR("socket", ret);
@@ -403,12 +436,25 @@ static int pp_ctrl_init_server(struct ct_pingpong *ct)
 		goto fail_close_socket;
 	}
 
-	ctrl_addr.sin_family = AF_INET;
-	ctrl_addr.sin_port = htons(ct->opts.src_port);
-	ctrl_addr.sin_addr.s_addr = htonl(INADDR_ANY);
+	if (pp_ipv6) {
+		struct sockaddr_in6 ctrl6_addr = {0};
 
-	ret = bind(listenfd, (struct sockaddr *)&ctrl_addr,
-		   sizeof(ctrl_addr));
+		ctrl6_addr.sin6_family = AF_INET6;
+		ctrl6_addr.sin6_port = htons(ct->opts.src_port);
+		ctrl6_addr.sin6_addr = in6addr_any;
+
+		ret = bind(listenfd, (struct sockaddr *)&ctrl6_addr,
+			   sizeof(ctrl6_addr));
+	} else {
+		struct sockaddr_in ctrl_addr = {0};
+
+		ctrl_addr.sin_family = AF_INET;
+		ctrl_addr.sin_port = htons(ct->opts.src_port);
+		ctrl_addr.sin_addr.s_addr = htonl(INADDR_ANY);
+
+		ret = bind(listenfd, (struct sockaddr *)&ctrl_addr,
+			   sizeof(ctrl_addr));
+	}
 	if (ret == -1) {
 		ret = -ofi_sockerr();
 		PP_PRINTERR("bind", ret);
@@ -564,7 +610,7 @@ static int pp_send_name(struct ct_pingpong *ct, struct fid *endpoint)
 	}
 
 	PP_DEBUG("Sending name length\n");
-	len = htonl(addrlen);
+	len = htonl((uint32_t) addrlen);
 	ret = pp_ctrl_send(ct, (char *) &len, sizeof(len));
 	if (ret < 0)
 		goto fn;
@@ -878,10 +924,10 @@ static int pp_check_buf(void *buf, int size)
 static void eq_readerr(struct fid_eq *eq)
 {
 	struct fi_eq_err_entry eq_err = { 0 };
-	int rd;
+	ssize_t rd;
 
 	rd = fi_eq_readerr(eq, &eq_err, 0);
-	if (rd != sizeof(eq_err)) {
+	if ((size_t) rd != sizeof(eq_err)) {
 		PP_PRINTERR("fi_eq_readerr", rd);
 	} else {
 		PP_ERR("eq_readerr: %s",
@@ -1152,7 +1198,7 @@ static int pp_get_tx_comp(struct ct_pingpong *ct, uint64_t total)
 		int ret, rc;                                                   \
 									       \
 		while (1) {                                                    \
-			ret = post_fn(__VA_ARGS__);                            \
+			ret = (int) post_fn(__VA_ARGS__);                      \
 			if (!ret)                                              \
 				break;                                         \
 									       \
@@ -1192,7 +1238,7 @@ static ssize_t pp_tx(struct ct_pingpong *ct, struct fid_ep *ep, size_t size)
 	ssize_t ret;
 
 	if (pp_check_opts(ct, PP_OPT_VERIFY_DATA | PP_OPT_ACTIVE))
-		pp_fill_buf((char *)ct->tx_buf + ct->tx_prefix_size, size);
+		pp_fill_buf((char *)ct->tx_buf + ct->tx_prefix_size, (int)size);
 
 	ret = pp_post_tx(ct, ep, size + ct->tx_prefix_size, ct->tx_ctx_ptr);
 	if (ret)
@@ -1221,7 +1267,7 @@ static ssize_t pp_inject(struct ct_pingpong *ct, struct fid_ep *ep, size_t size)
 	ssize_t ret;
 
 	if (pp_check_opts(ct, PP_OPT_VERIFY_DATA | PP_OPT_ACTIVE))
-		pp_fill_buf((char *)ct->tx_buf + ct->tx_prefix_size, size);
+		pp_fill_buf((char *)ct->tx_buf + ct->tx_prefix_size, (int)size);
 
 	ret = pp_post_inject(ct, ep, size + ct->tx_prefix_size);
 	if (ret)
@@ -1252,7 +1298,7 @@ static ssize_t pp_rx(struct ct_pingpong *ct, struct fid_ep *ep, size_t size)
 
 	if (pp_check_opts(ct, PP_OPT_VERIFY_DATA | PP_OPT_ACTIVE)) {
 		ret = pp_check_buf((char *)ct->rx_buf + ct->rx_prefix_size,
-				   size);
+				   (int)size);
 		if (ret)
 			return ret;
 	}
@@ -1379,6 +1425,11 @@ static int pp_alloc_active_res(struct ct_pingpong *ct, struct fi_info *fi)
 {
 	int ret;
 
+	if (fi->tx_attr->mode & FI_MSG_PREFIX)
+		ct->tx_prefix_size = fi->ep_attr->msg_prefix_size;
+	if (fi->rx_attr->mode & FI_MSG_PREFIX)
+		ct->rx_prefix_size = fi->ep_attr->msg_prefix_size;
+
 	ret = pp_alloc_msgs(ct);
 	if (ret)
 		return ret;
@@ -1413,11 +1464,6 @@ static int pp_alloc_active_res(struct ct_pingpong *ct, struct fi_info *fi)
 			return ret;
 		}
 	}
-
-	if (fi->tx_attr->mode & FI_MSG_PREFIX)
-		ct->tx_prefix_size = fi->ep_attr->msg_prefix_size;
-	if (fi->rx_attr->mode & FI_MSG_PREFIX)
-		ct->rx_prefix_size = fi->ep_attr->msg_prefix_size;
 
 	ret = fi_endpoint(ct->domain, fi, &(ct->ep), NULL);
 	if (ret) {
@@ -1970,6 +2016,7 @@ static void pp_pingpong_usage(struct ct_pingpong *ct, char *name, char *desc)
 
 	fprintf(stderr, " %-20s %s\n", "-h", "display this help output");
 	fprintf(stderr, " %-20s %s\n", "-v", "enable debugging output");
+	fprintf(stderr, " %-20s %s\n", "-6", "use IPv6 address");
 }
 
 static void pp_parse_opts(struct ct_pingpong *ct, int op, char *optarg)
@@ -2031,12 +2078,12 @@ static void pp_parse_opts(struct ct_pingpong *ct, int op, char *optarg)
 
 	/* Source Port */
 	case 'B':
-		ct->opts.src_port = parse_ulong(optarg, UINT16_MAX);
+		ct->opts.src_port = (uint16_t) parse_ulong(optarg, UINT16_MAX);
 		break;
 
 	/* Destination Port */
 	case 'P':
-		ct->opts.dst_port = parse_ulong(optarg, UINT16_MAX);
+		ct->opts.dst_port = (uint16_t) parse_ulong(optarg, UINT16_MAX);
 		break;
 
 	case 'm':
@@ -2050,6 +2097,12 @@ static void pp_parse_opts(struct ct_pingpong *ct, int op, char *optarg)
 	case 'v':
 		pp_debug = 1;
 		break;
+
+	/* IPV6 */
+	case '6':
+		pp_ipv6 = 1;
+		break;
+
 	default:
 		/* let getopt handle unknown opts*/
 		break;
@@ -2153,7 +2206,9 @@ static int run_pingpong_dgram(struct ct_pingpong *ct)
 	/* Post an extra receive to avoid lacking a posted receive in the
 	 * finalize.
 	 */
-	ret = fi_recv(ct->ep, ct->rx_buf, ct->rx_size, fi_mr_desc(ct->mr), 0,
+	ret = fi_recv(ct->ep, ct->rx_buf,
+		      MAX(ct->rx_size, PP_MAX_CTRL_MSG) +  ct->rx_prefix_size,
+		      fi_mr_desc(ct->mr), 0,
 		      ct->rx_ctx_ptr);
 	if (ret)
 		return ret;
@@ -2243,7 +2298,7 @@ int main(int argc, char **argv)
 
 	ofi_osd_init();
 
-	while ((op = getopt(argc, argv, "hvd:p:e:I:S:B:P:cm:")) != -1) {
+	while ((op = getopt(argc, argv, "hvd:p:e:I:S:B:P:cm:6")) != -1) {
 		switch (op) {
 		default:
 			pp_parse_opts(&ct, op, optarg);

@@ -55,7 +55,7 @@ class CombiningReduceOp: ReduceScanOp {
     var ret:eltType;
     return ret;
   }
-  proc accumulate(elm:Map) {
+  proc accumulate(elm:Map(?)) {
     state.keys += elm.keys;
     for hash in elm.keys {
       state.values[hash].keys += elm.values[hash].keys;
@@ -67,7 +67,7 @@ class CombiningReduceOp: ReduceScanOp {
     state.keys += hash;
     state.values[hash].keys += path;
   }
-  proc combine(other:CombiningReduceOp) {
+  proc combine(other:CombiningReduceOp(?)) {
     state.keys += other.state.keys;
     for hash in other.state.keys {
       state.values[hash] += other.state.values[hash];
@@ -82,7 +82,7 @@ class CombiningReduceOp: ReduceScanOp {
 }
 
 proc main(args: [] string) {
-  var clock:Timer;
+  var clock:stopwatch;
   var paths:Set(string);
 
   if timing {
@@ -93,7 +93,7 @@ proc main(args: [] string) {
     if isFile(arg) {
       paths.keys += relativeRealPath(arg);
     } else if isDir(arg) {
-      for path in findfiles(arg, recursive=true) {
+      for path in findFiles(arg, recursive=true) {
         paths.keys += relativeRealPath(path);
       }
     } else {
@@ -132,10 +132,10 @@ proc main(args: [] string) {
   // stumbling block: associative array key+value iteration
   // stumbling block: associative array key+value iteration in sorted order
   writeln("Duplicate files found:");
-  for hash in hashesToPaths.keys.sorted() {
+  for hash in sorted(hashesToPaths.keys) {
     if hashesToPaths.values[hash].keys.size > 1 {
       writeln(hash);
-      for path in hashesToPaths.values[hash].keys.sorted() {
+      for path in sorted(hashesToPaths.values[hash].keys) {
         writeln("  ", path);
       }
     }

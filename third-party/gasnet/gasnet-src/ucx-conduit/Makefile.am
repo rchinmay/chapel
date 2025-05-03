@@ -49,6 +49,7 @@ SUBDIRS = contrib
 # include all headers, documentation, etc. 
 # and any subdirectories not containing Makefile.am's
 CONDUIT_FILELIST =           \
+      license.txt            \
       gasnet_core.c          \
       gasnet_core.h          \
       gasnet_core_fwd.h      \
@@ -78,7 +79,7 @@ CONDUIT_EXTRALIBCFLAGS = @UCX_CFLAGS@ $(ssh_defines) $(mpi_defines) $(pmi_cppfla
 CONDUIT_EXTRAHEADERS = 
 
 # headers selected by default rules that should NOT be installed
-CONDUIT_PRIVATEHEADERS =
+CONDUIT_PRIVATEHEADERS = gasnet_ucx_req.h
 
 # additional file dependencies not mentioned elsewhere 
 # that should force libgasnet rebuild on update

@@ -41,6 +41,7 @@ from chplenv import *
 # these are in the test/ directory with us
 import py3_compat
 import re2_supports_valgrind
+import check_perf_graphs
 
 import argparse
 try:
@@ -117,7 +118,7 @@ def run_tests(tests):
                 .format(" ".join(dirs)))
 
     # check for duplicate .graph and .dat files
-    check_for_duplicates()
+    check_perf_graphs.check_for_duplicates(logger, finish, test_dir, args.perflabel, args.performance, args.gen_graphs or args.comp_performance)
 
     # print out Chapel environment
     print_chapel_environment()
@@ -131,6 +132,11 @@ def run_tests(tests):
         os.environ["CHPL_TEST_SINGLES"] = "0"
     else:
         os.environ["CHPL_TEST_SINGLES"] = "1"
+
+    if args.respect_notests:
+        os.environ["CHPL_TEST_NOTESTS"] = "0"
+    else:
+        os.environ["CHPL_TEST_NOTESTS"] = "1"
 
     for test in files:
         test_file(test)
@@ -206,11 +212,10 @@ def test_file(test):
             if args.performance or not args.gen_graphs:
                 error = run_sub_test(test)
 
-            # check for errors - 173 is an internal sub_test error that would
-            # have already reported.
-            if error != 0 and error != 173:
-                logger.write("[Error running sub_test for {0}]"
-                        .format(path_to_test))
+            # check for errors:
+            if error != 0:
+                logger.write("[Error running sub_test (code {1}) for {0}]"
+                        .format(path_to_test, error))
 
             if args.progress:
                 sys.stderr.write("[done]\n")
@@ -271,7 +276,7 @@ def test_directory(test, test_type):
                 skip_file_name = os.path.normpath(skip_file_name)
                 if os.path.isfile(skip_file_name):
                     try:
-                        prune_if = run_command([test_env, skip_file_name]).strip()
+                        prune_if = process_skipif_output(run_command([test_env, skip_file_name]).strip())
                         # check output and skip if true
                         if prune_if == "1" or prune_if == "True":
                             logger.write("[Skipping directory and children bas"
@@ -287,7 +292,7 @@ def test_directory(test, test_type):
                 skip_test = False
                 if os.path.isfile("SKIPIF"):
                     try:
-                        skip_test = run_command([test_env, "SKIPIF"]).strip()
+                        skip_test = process_skipif_output(run_command([test_env, "SKIPIF"]).strip())
                         # check output and skip if true
                         if skip_test == "1" or skip_test == "True":
                             logger.write("[Skipping directory based on SKIPIF "
@@ -313,13 +318,22 @@ def test_directory(test, test_type):
                                    ".test.cpp", ".ml-test.cpp")) :
                         are_tests = True
                         break
+                    # this directory may generate test files
+                    if f == "PRETEST":
+                        are_tests = True
+                        break
                 else:
                     if f.endswith("." + perf_keys):
                         are_tests = True
                         break
 
+            # don't run local 'sub_test's on --performance or --gen-graphs runs
+            run_local_sub_test = False
+            if test_type == "run":
+                run_local_sub_test = os.access(os.path.join(dir, "sub_test"), os.X_OK)
+
             # check a lot of stuff before continuing
-            if are_tests or os.access(os.path.join(dir, "sub_test"), os.X_OK):
+            if are_tests or run_local_sub_test:
                 # cd to dir for clean and run, saving current location
                 with cd(dir):
                     # clean dir
@@ -328,10 +342,9 @@ def test_directory(test, test_type):
                     if not args.clean_only:
                         # run all tests in dir
                         error = run_sub_test()
-                        # check for errors - 173 is an internal sub_test
-                        # error that would have already reported.
-                        if not error == 0 and not error == 173:
-                            logger.write("[Error {1} running sub_test in {0}]"
+                        # check for errors:
+                        if not error == 0:
+                            logger.write("[Error running sub_test (code {1}) in {0}]"
                                     .format(root, error))
 
             # let user know no tests were found
@@ -584,6 +597,9 @@ def check_environment():
     if "CHPL_DEVELOPER" in os.environ: # unset CHPL_DEVELOPER
         del os.environ["CHPL_DEVELOPER"]
 
+    if "CHPL_EXE_NAME" in os.environ:  # unset CHPL_EXE_NAME
+        del os.environ["CHPL_EXE_NAME"]
+        
     if "CHPL_UNWIND" in os.environ:    # squash CHPL_UNWIND output
         os.environ["CHPL_RT_UNWIND"] = "0"
 
@@ -648,11 +664,15 @@ def check_environment_with_args():
     host_platform = chpl_platform.get("host")
     host_bin_subdir = chpl_bin_subdir.get("host")
     tgt_platform = chpl_platform.get("target")
-    if not tgt_platform == "sunos":
-        os.environ["LC_COLLATE"] = "C"
-        os.environ["LANG"] = "en_US.UTF-8"
-        if "LC_ALL" in os.environ:
-            del os.environ["LC_ALL"]
+
+    # Adjust the C environment to UTF-8 with C sorting order
+    # This should not affect Chapel program behavior but it might
+    # affect other elements of the test system (e.g. `sort` called
+    # in a prediff).
+    os.environ["LC_COLLATE"] = "C"
+    os.environ["LANG"] = "en_US.UTF-8"
+    if "LC_ALL" in os.environ:
+        del os.environ["LC_ALL"]
 
     global log_file
     global tmp_log_file
@@ -846,7 +866,13 @@ def set_up_general():
     if args.valgrind or args.valgrind_exe:
         # Stay below valgrind's --max-threads option, which defaults to 500
         if not "CHPL_RT_NUM_THREADS_PER_LOCALE" in os.environ:
-            os.environ["CHPL_RT_NUM_THREADS_PER_LOCALE"] = "450";
+            os.environ["CHPL_RT_NUM_THREADS_PER_LOCALE"] = "450"
+        else:
+            logger.write("[Warning: Deadlock is possible since you set CHPL_RT_NUM_THREADS_PER_LOCALE]")
+
+        # Squash the warning about the potential for deadlock when setting
+        # the number of threads, or all tests will fail with that warning
+        os.environ["CHPL_RT_NUM_THREADS_PER_LOCALE_QUIET"] = "yes"
 
         # Additionally, fail with an error if valgrind testing is running without
         # tasks=fifo, mem=cstdlib, or with re2 built w/o valgrind support
@@ -1057,6 +1083,7 @@ def set_up_executables():
     os.environ["CHPL_LOCALE_MODEL"] = locale_model
 
     os.environ["CHPL_LLVM"] = chpl_llvm.get()
+    os.environ["CHPL_TASKS"] = chpl_tasks.get()
 
     # skip stdin tests for most custom launchers, except for amdprun and slurm
     if (launcher != "none" and launcher != "amudprun" and launcher !=
@@ -1171,79 +1198,6 @@ def print_chapel_environment():
     except:
         pass
     logger.write("##########################")
-
-
-def check_for_duplicates():
-    # check for .dat duplicates
-    if args.performance:
-        logger.write("[Checking for duplicate performance data filenames]")
-
-        dat_files = []
-        error = False
-        for root, dirnames, filenames in os.walk(test_dir):
-            for filename in fnmatch.filter(filenames, "*." + args.perflabel):
-                if filename in dat_files: # duplicate
-                    logger.write("[Error: Duplicate performance data filenames"
-                            " ({0})".format(filename))
-                    error = True
-                else:
-                    dat_files.append(filename)
-
-        if error:
-            finish()
-
-    # check for .graph files, and GRAPHFILES
-    if args.gen_graphs or args.comp_performance:
-        logger.write("[Checking for duplicate .graph files and that all .graph"
-                " files appear in {0}/*GRAPHFILES]".format(test_dir))
-
-        # find GRAPHFILES
-        graph_files = [f for f in os.listdir(test_dir) if
-                f.endswith("GRAPHFILES")]
-
-        # read .graph files from GRAPHFILES
-        GRAPHFILES_graph_files = []
-        for file in graph_files:
-            with open(os.path.join(test_dir, file), "r") as f:
-                for line in f:
-                    if line == "":
-                        continue
-                    if line.strip() == "" or line.strip()[0] == "#":
-                        continue
-                    GRAPHFILES_graph_files.append(line.rstrip())
-
-        # get absolute paths of actual .graph files
-        actual_graph_files = []
-        for root, dirnames, filenames in os.walk(test_dir):
-            for filename in fnmatch.filter(filenames, "*.graph"):
-                actual_graph_files.append(os.path.relpath(
-                    os.path.join(root, filename), test_dir))
-
-        # check that actual .graph files are listed in GRAPHFILES
-        for g in actual_graph_files:
-            filename = g
-            if filename not in GRAPHFILES_graph_files:
-                logger.write("[Warning: {0} is missing from GRAPHFILES]"
-                        .format(filename))
-
-        # check that all .graph files in GRAPHFILES actually exist
-        for g in GRAPHFILES_graph_files:
-            filename = g
-            if filename not in actual_graph_files:
-                logger.write("[Warning: {0} listed in GRAPHFILES does not "
-                        "exist]".format(filename))
-
-        # check for duplicates
-        graph_set = {}
-        for g in actual_graph_files:
-            filename = os.path.basename(g).lower()
-            if filename in graph_set:
-                logger.write("[Warning: graph files must have unique, case "
-                        "insensitive names: {0} and {1} do not]"
-                        .format(g, graph_set[filename]))
-            else:
-                graph_set[filename] = g
-
 
 # END STUFF
 
@@ -1470,7 +1424,12 @@ def parser_setup():
             help=help_all("<prefix> to remove from tests in jUnit report"))
     # respect skipifs
     parser.add_argument("-respect-skipifs", "--respect-skipifs",
-            action="store_true", dest="respect_skipifs")
+            action="store_true", dest="respect_skipifs",
+            help="respect '.skipif' files even when testing individual files")
+    # respect notests
+    parser.add_argument("-respect-notests", "--respect-notests",
+            action="store_true", dest="respect_notests",
+            help="respect '.notest' files even when testing individual files")
     # extra help
     parser.add_argument("-help", action="help", help=argparse.SUPPRESS)
     parser.add_argument("--help-all", action="help",
@@ -1576,6 +1535,15 @@ def run_command(cmd, stderr=None):
     if sys.version_info[0] >= 3 and not isinstance(output, str):
         output = str(output, 'utf-8')
 
+    return output
+
+def process_skipif_output(output):
+    lines = output.splitlines()
+    if len(lines) == 0:
+      return output
+    elif len(lines) > 1:
+      print("\n".join(lines[:-1]))
+    output = lines[-1]
     return output
 
 def run_git_command(command):

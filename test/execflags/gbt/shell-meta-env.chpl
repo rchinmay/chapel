@@ -1,5 +1,5 @@
-use Sys;
+use OS.POSIX, CTypes;
 
-var ev: c_string;
-if sys_getenv('SHELL_META_ENV', ev) != 0 then
-  writeln(createStringWithNewBuffer(ev));
+const evv = getenv("SHELL_META_ENV");
+if evv != nil then
+  writeln(string.createCopyingBuffer(evv));

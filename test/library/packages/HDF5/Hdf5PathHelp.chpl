@@ -1,12 +1,14 @@
-const pathPrefixEnvName = c"CHPL_HDF5_FILE_PREFIX";
+use CTypes;
+const pathPrefixEnvName = "CHPL_HDF5_FILE_PREFIX".c_str();
 
 // The prefix read from the environment variable will be added
 // to the path for HDF5 files. Make sure to include the trailing slash!
 proc readPrefixEnv() {
-  use Sys;
-  var prefix: c_string;
+  extern proc sys_getenv(name:c_ptrConst(c_char), ref string_out:c_ptrConst(c_char)):c_int;
+
+  var prefix: c_ptrConst(c_char);
   if sys_getenv(pathPrefixEnvName, prefix) {
-    return createStringWithNewBuffer(prefix);
+    return string.createCopyingBuffer(prefix);
   } else {
     return "";
   }

@@ -1,5 +1,5 @@
 /*
- * Copyright 2020-2022 Hewlett Packard Enterprise Development LP
+ * Copyright 2020-2025 Hewlett Packard Enterprise Development LP
  * Copyright 2004-2019 Cray Inc.
  * Other additional copyright holders may be indicated within.
  *
@@ -22,7 +22,6 @@
 
 #include "AstDump.h"
 #include "AstDumpToHtml.h"
-#include "AstDumpToNode.h"
 #include "driver.h"
 #include "files.h"
 #include "misc.h"
@@ -34,22 +33,22 @@
 #include <string>
 #include <sys/stat.h>
 
-char             log_dir   [FILENAME_MAX + 1]           = "./log";
-char             log_module[FILENAME_MAX + 1]           =      "";
+std::string           log_dir                                = "./log";
+std::set<std::string> log_modules;
 
 bool             fLog                                   =    false;
 bool             fLogDir                                =    false;
-bool             fLogNode                               =    false;
 bool             fLogIds                                =    true;
+LogFormat        fLogFormat                             =    LogFormat::DEFAULT;
 
 int              fdump_html                             =       0;
-char             fdump_html_chpl_home[FILENAME_MAX + 1] =      "";
+std::string      fdump_html_chpl_home                   =      "";
 bool             fdump_html_include_system_modules      =    true;
 bool             fdump_html_wrap_lines                  =    true;
 bool             fdump_html_print_block_IDs             =   false;
 
 FILE*            deletedIdHandle                        =    NULL;
-char             deletedIdFilename[FILENAME_MAX + 1]    =      "";
+std::string      deletedIdFilename                      =      "";
 
 // Keeping names of available passes
 static bool availableInitialized = false;
@@ -104,9 +103,19 @@ void logSelectPass(const char* arg) {
   clean_exit(1);
 }
 
+void logSelectFormat(const char* arg) {
+  if(!strcmp(arg, "default")) {
+    fLogFormat = LogFormat::DEFAULT;
+  } else if(!strcmp(arg, "nprint")) {
+    fLogFormat = LogFormat::NPRINT;
+  } else {
+    USR_FATAL("Unrecognized log format: %s (may be set to 'default' or 'nprint')\n", arg);
+  }
+}
+
 void setupLogfiles() {
   // Enable logging if --log-module is passed.
-  if (log_module[0] != '\0')
+  if (!log_modules.empty())
     fLog = true;
   // Enable logging if --log-pass is used
   if (logOnlyName.size() > 0)
@@ -115,23 +124,27 @@ void setupLogfiles() {
   if (fLogDir == true)
     fLog = true;
 
-  if (fLog || fdump_html || *deletedIdFilename) {
-    // Remove the log directory to make sure there is no stale data
-    deleteDir(log_dir);
-    ensureDirExists(log_dir, "ensuring directory for log files exists");
+  if (fLog || fdump_html || !deletedIdFilename.empty()) {
+    // Remove the log directory to make sure there is no stale data.
+    // Only do this for the driver compilation phase (or monolithic mode) to
+    // avoid overwriting.
+    if (fDriverDoMonolithic || fDriverCompilationPhase) {
+      deleteDir(log_dir.c_str());
+      ensureDirExists(log_dir.c_str(), "ensuring directory for log files exists");
+    }
   }
 
-  if (log_dir[strlen(log_dir) - 1] != '/') {
-    strcat(log_dir, "/");
+  if (log_dir.back() != '/') {
+    log_dir += "/";
   }
 
   if (fdump_html) {
     AstDumpToHtml::init();
   }
 
-  if (deletedIdFilename[0] != '\0') {
-    if ((deletedIdHandle = fopen(deletedIdFilename, "w")) == 0) {
-      USR_FATAL("cannot open file \"%s\", to log deleted AST ids, for writing", deletedIdFilename);
+  if (!deletedIdFilename.empty()) {
+    if ((deletedIdHandle = fopen(deletedIdFilename.c_str(), "w")) == 0) {
+      USR_FATAL("cannot open file \"%s\", to log deleted AST ids, for writing", deletedIdFilename.c_str());
     }
   }
 }
@@ -141,7 +154,7 @@ void teardownLogfiles() {
     AstDumpToHtml::done();
   }
 
-  if (deletedIdFilename[0] != '\0') {
+  if (!deletedIdFilename.empty()) {
     fclose(deletedIdHandle);
     deletedIdHandle = NULL;
   }
@@ -155,15 +168,11 @@ void logWriteLog(const char* passName, int passNum, char logTag) {
   if (fLog) {
     if ((logAll == true && logTag != LOG_NEVER) ||
         logOnlyName.count(passName) > 0) {
-      bool logNode = (fLogNode);
-      if (logNode)
-        AstDumpToNode::view(passName, passNum);
-      else
-        AstDump::view(passName, passNum);
+      AstDump::view(passName, passNum);
     }
   }
 }
 
 bool deletedIdON() {
-  return (deletedIdFilename[0] != '\0') ? true : false;
+  return (!deletedIdFilename.empty()) ? true : false;
 }

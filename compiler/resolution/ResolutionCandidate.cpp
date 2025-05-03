@@ -1,5 +1,5 @@
 /*
- * Copyright 2020-2022 Hewlett Packard Enterprise Development LP
+ * Copyright 2020-2025 Hewlett Packard Enterprise Development LP
  * Copyright 2004-2019 Cray Inc.
  * Other additional copyright holders may be indicated within.
  *
@@ -35,7 +35,7 @@
 #include "symbol.h"
 
 static ResolutionCandidateFailureReason
-classifyTypeMismatch(Type* actualType, Type* formalType);
+classifyTypeMismatch(Type* actualType, Symbol* formalSym);
 static Type* getInstantiationType(Symbol* actual, ArgSymbol* formal, Expr* ctx);
 static bool shouldAllowCoercions(Symbol* actual, ArgSymbol* formal);
 static bool shouldAllowCoercionsType(Type* actualType, Type* formalType);
@@ -51,6 +51,12 @@ std::map<Type*,std::map<Type*,bool> > actualFormalCoercible;
 ResolutionCandidate::ResolutionCandidate(FnSymbol* function) {
   fn = function;
   isInterimInstantiation = false;
+  anyPromotes = false;
+  nImplicitConversionsComputed = false;
+  anyNegParamToUnsigned = false;
+  nImplicitConversions = 0;
+  nParamNarrowingImplicitConversions = 0;
+  visibilityDistance = -1;
   failingArgument = NULL;
   reason = RESOLUTION_CANDIDATE_MATCH;
 }
@@ -379,7 +385,25 @@ bool ResolutionCandidate::computeSubstitutions(Expr* ctx) {
          formal->type->symbol->hasFlag(FLAG_GENERIC))) {
 
       if (Symbol* actual = formalIdxToActual[i - 1]) {
-        computeSubstitution(formal, actual, ctx);
+        if (actual->type->symbol->hasFlag(FLAG_GENERIC)   == true &&
+            formal->hasFlag(FLAG_ARG_THIS)                == true &&
+            formal->hasFlag(FLAG_DELAY_GENERIC_EXPANSION) == true &&
+            actual->getValType() == formal->getValType()) {
+          // If the "this" arg is generic, we're resolving an initializer, and
+          // the actual being passed is also still generic, don't count this as
+          // a substitution.  Otherwise, we'll end up in an infinite loop if
+          // one of the later generic args has a defaultExpr, as we will always
+          // count the this arg as a substitution and so always approach the
+          // generic arg with a defaultExpr as though a substitution was going
+          // to take place.
+
+          // Note: If we do not ignore this here, then we might return 'false'
+          // from this function when all the other formals are concrete. This
+          // could result in the rejection of a valid initializer.
+          nIgnored++;
+        } else {
+          computeSubstitution(formal, actual, ctx);
+        }
 
       } else if (formal->defaultExpr != NULL) {
         computeSubstitutionForDefaultExpr(formal, ctx);
@@ -430,19 +454,7 @@ void ResolutionCandidate::computeSubstitution(ArgSymbol* formal,
     }
 
   } else if (formal->type->symbol->hasFlag(FLAG_GENERIC) == true) {
-    if (actual->type->symbol->hasFlag(FLAG_GENERIC)   == true &&
-        formal->hasFlag(FLAG_ARG_THIS)                == true &&
-        formal->hasFlag(FLAG_DELAY_GENERIC_EXPANSION) == true &&
-        actual->getValType() == formal->getValType()) {
-      // If the "this" arg is generic, we're resolving an initializer, and
-      // the actual being passed is also still generic, don't count this as
-      // a substitution.  Otherwise, we'll end up in an infinite loop if
-      // one of the later generic args has a defaultExpr, as we will always
-      // count the this arg as a substitution and so always approach the
-      // generic arg with a defaultExpr as though a substitution was going
-      // to take place.
-
-    } else if (Type* type = getInstantiationType(actual, formal, ctx)) {
+    if (Type* type = getInstantiationType(actual, formal, ctx)) {
       // String literal actuals aligned with non-param generic formals of
       // type dtAny will result in an instantiation of dtStringC when the
       // function is extern. In other words, let us write:
@@ -765,7 +777,7 @@ static Type* getBasicInstantiationType(Type* actualType, Symbol* actualSym,
       return actualType;
   }
 
-  if (isSyncType(actualType) || isSingleType(actualType)) {
+  if (isSyncType(actualType)) {
     Type* baseType = actualType->getField("valType")->type;
     if (canInstantiate(baseType, formalType))
       return baseType;
@@ -898,10 +910,8 @@ bool ResolutionCandidate::checkResolveFormalsWhereClauses(CallInfo& info,
                  actual->getValType() != formal->getValType()) {
         // coercions should not generally be allowed for type variables
         failingArgument = actual;
-        reason = classifyTypeMismatch(actual->getValType(),
-                                      formal->getValType());
+        reason = classifyTypeMismatch(actual->getValType(), formal);
         return false;
-
 
       } else if (formal->originalIntent != INTENT_OUT &&
                  (actual->getValType() == dtSplitInitType ||
@@ -924,7 +934,7 @@ bool ResolutionCandidate::checkResolveFormalsWhereClauses(CallInfo& info,
                              formalIsParam) == false &&
                  formal->originalIntent != INTENT_OUT) {
         failingArgument = actual;
-        reason = classifyTypeMismatch(actual->type, formal->type);
+        reason = classifyTypeMismatch(actual->type, formal);
         return false;
 
       } else if (isInitThis || isNewTypeArg) {
@@ -945,6 +955,9 @@ bool ResolutionCandidate::checkResolveFormalsWhereClauses(CallInfo& info,
         reason = RESOLUTION_CANDIDATE_OTHER;
         return false;
       }
+
+      if (promotes)
+        anyPromotes = true;
     }
   }
 
@@ -1008,7 +1021,7 @@ bool ResolutionCandidate::checkGenericFormals(Expr* ctx) {
       if (formalIsTypeAlias == false &&
           isInitThis == false &&
           formal->originalIntent != INTENT_OUT &&
-          (actual->type == dtSplitInitType ||
+          (actual->type->getValType() == dtSplitInitType ||
            actual->type->symbol->hasFlag(FLAG_GENERIC))) {
         failingArgument = actual;
         reason = RESOLUTION_CANDIDATE_ACTUAL_TYPE_NOT_ESTABLISHED;
@@ -1021,7 +1034,7 @@ bool ResolutionCandidate::checkGenericFormals(Expr* ctx) {
           Type* t = getInstantiationType(actual, formal, ctx);
           if (t == NULL) {
             failingArgument = actual;
-            reason = classifyTypeMismatch(actual->type, formal->type);
+            reason = classifyTypeMismatch(actual->type, formal);
             return false;
           }
 
@@ -1044,7 +1057,7 @@ bool ResolutionCandidate::checkGenericFormals(Expr* ctx) {
                           NULL,
                           formalIsParam) == false) {
             failingArgument = actual;
-            reason = classifyTypeMismatch(actual->type, formal->type);
+            reason = classifyTypeMismatch(actual->type, formal);
             return false;
           }
         }
@@ -1071,7 +1084,8 @@ static bool isClassLikeOrPtrOrManaged(Type* t) {
 }
 
 static ResolutionCandidateFailureReason
-classifyTypeMismatch(Type* actualType, Type* formalType) {
+classifyTypeMismatch(Type* actualType, Symbol* formalSym) {
+  Type* formalType = formalSym->type;
   if (actualType == formalType)
     return RESOLUTION_CANDIDATE_MATCH;
 
@@ -1083,6 +1097,10 @@ classifyTypeMismatch(Type* actualType, Type* formalType) {
 
   if (canonicalClassType(actualType) == canonicalClassType(formalType))
     return RESOLUTION_CANDIDATE_TYPE_RELATED;
+
+  // Receiver type mismatch is more severe than other causes
+  if (formalSym->hasFlag(FLAG_ARG_THIS))
+    return RESOLUTION_CANDIDATE_DIFFERENT_RECEIVER_TYPES;
 
   if ((is_bool_type   (actualType) && is_bool_type   (formalType)) ||
       (is_int_type    (actualType) && is_int_type    (formalType)) ||
@@ -1194,6 +1212,7 @@ void explainCandidateRejection(CallInfo& info, FnSymbol* fn) {
     case RESOLUTION_CANDIDATE_TYPE_RELATED:
     case RESOLUTION_CANDIDATE_TYPE_SAME_CATEGORY:
     case RESOLUTION_CANDIDATE_UNRELATED_TYPE:
+    case RESOLUTION_CANDIDATE_DIFFERENT_RECEIVER_TYPES:
       USR_PRINT(call, "because %s with type '%s'",
                     failingActualDesc,
                     toString(failingActual->getValType()));

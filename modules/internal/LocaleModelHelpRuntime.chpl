@@ -1,5 +1,5 @@
 /*
- * Copyright 2020-2022 Hewlett Packard Enterprise Development LP
+ * Copyright 2020-2025 Hewlett Packard Enterprise Development LP
  * Copyright 2004-2019 Cray Inc.
  * Other additional copyright holders may be indicated within.
  *
@@ -28,7 +28,7 @@
 // duplication. If necessary, a locale model using this file
 // should feel free to reimplement them in some other way.
 module LocaleModelHelpRuntime {
-  private use ChapelStandard, SysCTypes, CPtr;
+  private use ChapelStandard, CTypes;
 
   // The chpl_localeID_t type is used internally.  It should not be exposed to
   // the user.  The runtime defines the actual type, as well as a functional
@@ -73,17 +73,19 @@ module LocaleModelHelpRuntime {
   // Compiler (and module code) interface for manipulating global locale IDs..
   pragma "insert line file info"
   pragma "always resolve function"
-  proc chpl_buildLocaleID(node: chpl_nodeID_t, subloc: chpl_sublocID_t)
+  proc chpl_buildLocaleID(node: chpl_nodeID_t, subloc: chpl_sublocID_t) do
     return chpl_rt_buildLocaleID(node, subloc);
 
   pragma "insert line file info"
   pragma "always resolve function"
-  proc chpl_nodeFromLocaleID(in loc: chpl_localeID_t)
+  pragma "codegen for CPU and GPU"
+  proc chpl_nodeFromLocaleID(in loc: chpl_localeID_t) do
     return chpl_rt_nodeFromLocaleID(loc);
 
   pragma "insert line file info"
   pragma "always resolve function"
-  proc chpl_sublocFromLocaleID(in loc: chpl_localeID_t)
+  pragma "codegen for CPU and GPU"
+  proc chpl_sublocFromLocaleID(in loc: chpl_localeID_t) do
     return chpl_rt_sublocFromLocaleID(loc);
 
   //////////////////////////////////////////
@@ -96,16 +98,16 @@ module LocaleModelHelpRuntime {
   //
   pragma "insert line file info"
   extern proc chpl_comm_execute_on(loc_id: int, subloc_id: int, fn: int,
-                                   args: chpl_comm_on_bundle_p, arg_size: size_t);
+                                   args: chpl_comm_on_bundle_p, arg_size: c_size_t);
   pragma "insert line file info"
   extern proc chpl_comm_execute_on_fast(loc_id: int, subloc_id: int, fn: int,
-                                        args: chpl_comm_on_bundle_p, args_size: size_t);
+                                        args: chpl_comm_on_bundle_p, args_size: c_size_t);
   pragma "insert line file info"
   extern proc chpl_comm_execute_on_nb(loc_id: int, subloc_id: int, fn: int,
-                                      args: chpl_comm_on_bundle_p, args_size: size_t);
+                                      args: chpl_comm_on_bundle_p, args_size: c_size_t);
   pragma "insert line file info"
     extern proc chpl_comm_taskCallFTable(fn: int,
-                                         args: chpl_comm_on_bundle_p, args_size: size_t,
+                                         args: chpl_comm_on_bundle_p, args_size: c_size_t,
                                          subloc_id: int): void;
   extern proc chpl_ftable_call(fn: int, args: chpl_comm_on_bundle_p): void;
   extern proc chpl_ftable_call(fn: int, args: chpl_task_bundle_p): void;
@@ -120,9 +122,8 @@ module LocaleModelHelpRuntime {
   //
   pragma "insert line file info"
   extern proc chpl_task_addTask(fn: int,
-                                args: chpl_task_bundle_p, args_size: size_t,
+                                args: chpl_task_bundle_p, args_size: c_size_t,
                                 subloc_id: int);
-  extern proc chpl_task_yield();
 
   //
   // Add a task for a begin statement.
@@ -132,7 +133,7 @@ module LocaleModelHelpRuntime {
   proc chpl_taskAddBegin(subloc_id: int,            // target sublocale
                          fn: int,                   // task body function idx
                          args: chpl_task_bundle_p,  // function args
-                         args_size: size_t          // args size
+                         args_size: c_size_t          // args size
                         ) {
     var tls = chpl_task_getInfoChapel();
     var isSerial = chpl_task_data_getSerial(tls);
@@ -152,7 +153,7 @@ module LocaleModelHelpRuntime {
   proc chpl_taskAddCoStmt(subloc_id: int,            // target sublocale
                           fn: int,                   // task body function idx
                           args: chpl_task_bundle_p,  // function args
-                          args_size: size_t          // args size
+                          args_size: c_size_t          // args size
                          ) {
     var tls = chpl_task_getInfoChapel();
     var isSerial = chpl_task_data_getSerial(tls);
@@ -175,7 +176,7 @@ module LocaleModelHelpRuntime {
     // a correct one for a record type whose members are not known to it.
     pragma "init copy fn"
     pragma "fn synchronization free"
-    extern proc chpl__initCopy_chpl_rt_localeID_t(initial: chpl_localeID_t): chpl_localeID_t;
+    extern proc chpl__initCopy_chpl_rt_localeID_t(in initial: chpl_localeID_t): chpl_localeID_t;
 
     return chpl__initCopy_chpl_rt_localeID_t(initial);
   }

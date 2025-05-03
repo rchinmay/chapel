@@ -4,7 +4,7 @@
 //   test/constrained-generics/hashtable/test-chpl-hashtable.chpl
 
 record my__hashtable {
-  var table: _ddata(int) = _ddata_allocate(int, 2, initElts=true);
+  var table: _ddata(int) = _ddata_allocate(int, 2);
 }
 
 interface chpl_Hashtable(HT) {
@@ -21,10 +21,10 @@ interface chpl_Hashtable(HT) {
 
 my__hashtable implements chpl_Hashtable;
 
-proc my__hashtable.tableType type return _ddata(int);
+proc my__hashtable.tableType type do return _ddata(int);
 
 // We need to support assignment to 'table'.
-proc chpl_Hashtable.updateTable() {
+proc ref chpl_Hashtable.updateTable() {
   var oldTable = table;
   table = oldTable;
 }

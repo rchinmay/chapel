@@ -6,7 +6,7 @@
 **************************************************************************/
 
 /*
- * Copyright 2020-2022 Hewlett Packard Enterprise Development LP
+ * Copyright 2020-2025 Hewlett Packard Enterprise Development LP
  * Copyright 2004-2019 Cray Inc.
  * Other additional copyright holders may be indicated within.
  *
@@ -50,7 +50,7 @@ extern
 #ifdef __cplusplus
 "C"
 #endif
-volatile int chpl_qthread_done_initializing;
+volatile int chpl_qthread_initialized;
 
 #define CHPL_TASK_STD_MODULES_INITIALIZED chpl_task_stdModulesInitialized
 void chpl_task_stdModulesInitialized(void);
@@ -76,25 +76,34 @@ typedef struct chpl_qthread_tls_s {
 } chpl_qthread_tls_t;
 
 extern pthread_t chpl_qthread_process_pthread;
-extern pthread_t chpl_qthread_comm_pthread;
+extern int chpl_qthread_comm_num_pthreads;
+extern pthread_t *chpl_qthread_comm_pthreads;
 
 extern chpl_qthread_tls_t chpl_qthread_process_tls;
-extern chpl_qthread_tls_t chpl_qthread_comm_task_tls;
+extern chpl_qthread_tls_t *chpl_qthread_comm_task_tls;
 
 // Wrap qthread_get_tasklocal().
 static inline chpl_qthread_tls_t* chpl_qthread_get_tasklocal(void)
 {
     chpl_qthread_tls_t* tls;
 
-    if (chpl_qthread_done_initializing) {
+    if (chpl_qthread_initialized) {
         tls = (chpl_qthread_tls_t*)
                qthread_get_tasklocal(sizeof(chpl_qthread_tls_t));
         if (tls == NULL) {
             pthread_t me = pthread_self();
-            if (pthread_equal(me, chpl_qthread_comm_pthread))
-                tls = &chpl_qthread_comm_task_tls;
-            else if (pthread_equal(me, chpl_qthread_process_pthread))
+            // if not process or comm thread, ok to return NULL
+            if (pthread_equal(me, chpl_qthread_process_pthread)) {
                 tls = &chpl_qthread_process_tls;
+            } else {
+                for (int i = 0; i < chpl_qthread_comm_num_pthreads; i++) {
+                    assert(chpl_qthread_comm_pthreads != NULL);
+                    if (pthread_equal(me, chpl_qthread_comm_pthreads[i])) {
+                        tls = &chpl_qthread_comm_task_tls[i];
+                        break;
+                    }
+                }
+            }
         }
     }
     else
@@ -148,7 +157,7 @@ c_sublocid_t chpl_task_getRequestedSubloc(void)
     if (data && data->bundle) {
         return data->bundle->requestedSubloc;
     }
-    return c_sublocid_any;
+    return c_sublocid_none;
 }
 
 #ifdef CHPL_TASK_GETSUBLOC_IMPL_DECL
@@ -173,7 +182,10 @@ void chpl_task_setSubloc(c_sublocid_t full_subloc)
 {
     qthread_shepherd_id_t curr_shep;
 
-    assert(isActualSublocID(full_subloc) || full_subloc == c_sublocid_any);
+    // We allow using c_sublocid_none to represent the CPU in the gpu locale
+    // model. This isn't currently used by the numa (or other locale) models.
+    assert(isActualSublocID(full_subloc) || full_subloc == c_sublocid_none ||
+        !strcmp(CHPL_LOCALE_MODEL, "gpu"));
 
     // Only change sublocales if the caller asked for a particular one,
     // which is not the current one, and we're a (movable) task.
@@ -194,22 +206,28 @@ void chpl_task_setSubloc(c_sublocid_t full_subloc)
             data->bundle->requestedSubloc = full_subloc;
         }
 
-        if (execution_subloc != c_sublocid_any &&
+        if (execution_subloc != c_sublocid_none &&
             (qthread_shepherd_id_t) execution_subloc != curr_shep) {
             qthread_migrate_to((qthread_shepherd_id_t) execution_subloc);
         }
     }
 }
 
-#define CHPL_TASK_IMPL_RESET_SPAWN_ORDER() qthread_chpl_reset_spawn_order()
+#define CHPL_TASK_IMPL_RESET_SPAWN_ORDER() qthread_reset_target_shep()
 
 #define CHPL_TASK_IMPL_GET_FIXED_NUM_THREADS() \
     chpl_task_impl_getFixedNumThreads()
 uint32_t chpl_task_impl_getFixedNumThreads(void);
 
+#define CHPL_TASK_IMPL_HAS_FIXED_NUM_THREADS() \
+    chpl_task_impl_hasFixedNumThreads()
+chpl_bool chpl_task_impl_hasFixedNumThreads(void);
+
 #define CHPL_TASK_IMPL_IS_FIXED_THREAD() (qthread_shep() != NO_SHEPHERD)
 
-#define CHPL_TASK_IMPL_CAN_MIGRATE_THREADS() CHPL_QTHREAD_TASKS_CAN_MIGRATE_THREADS
+// Even if CHPL_QTHREAD_TASKS_CAN_MIGRATE_THREADS returns true, we mark tasks
+// as unstealable once they've started, so running tasks can't migrate
+#define CHPL_TASK_IMPL_CAN_MIGRATE_THREADS() false
 
 #ifdef __cplusplus
 } // end extern "C"

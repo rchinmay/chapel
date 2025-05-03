@@ -1,5 +1,5 @@
 /*
- * Copyright 2020-2022 Hewlett Packard Enterprise Development LP
+ * Copyright 2020-2025 Hewlett Packard Enterprise Development LP
  * Copyright 2004-2019 Cray Inc.
  * Other additional copyright holders may be indicated within.
  *
@@ -21,7 +21,7 @@
 
 /*
 
-Read records using regular expressions.
+Support for reading records using regular expressions.
 
 A general purpose record reader/parser for channels. Uses a regular expression
 to capture portions of the input, and then assigns each capture to each
@@ -52,7 +52,7 @@ Example 1
     var Name: string;
   }
 
-  var f = open("input1.txt", iomode.rw);
+  var f = open("input1.txt", ioMode.rw);
   var fr = f.reader();
 
   var M = new RecordReader(Bar, fr);
@@ -117,8 +117,8 @@ class RecordReader {
   var myReader;
   /* The regular expression to read (using match on the channel) */
   var matchRegex: regex(string);
-  pragma "no doc"
-  param num_fields = numFields(t); // Number of fields in record
+  @chpldoc.nodoc
+  param num_fields = getNumFields(t); // Number of fields in record
 
   /* Create a RecordReader to match an auto-generated regular expression
      for a record created by the :proc:`createRegex` routine.
@@ -130,9 +130,9 @@ class RecordReader {
     this.t = t;
     this.myReader = myReader;
     // TODO: remove the following once we can throw from init() calls
-    this.complete();
+    init this;
     try! {
-      this.matchRegex = compile(createRegex());
+      this.matchRegex = new regex(createRegex());
     }
   }
 
@@ -148,17 +148,10 @@ class RecordReader {
     this.t = t;
     this.myReader = myReader;
     // TODO: remove the following once we can throw from init() calls
-    this.complete();
+    init this;
     try! {
-        this.matchRegex = compile(mRegex);
+        this.matchRegex = new regex(mRegex);
     }
-  }
-
-  pragma "no doc"
-  pragma "last resort"
-  proc init(type t, myReader, mRegexp) /* throws */ {
-    compilerWarning("RecordReader.init(): 'mRegexp' is deprecated; please use 'mRegex'");
-    init(t, myReader, mRegexp);
   }
 
   /* Create a string regular expression for the record type :type:`t` attached to
@@ -171,17 +164,17 @@ class RecordReader {
     // This is a VERY loose regex, and therefore could lead to errors unless the
     // data is very nice... (but hey, the programmer wasn't willing to give us a
     // regex..)
-    var accum: string = "\\s*";
+    var accum: string = "";
     for param n in 0..<num_fields {
-      accum = accum + getFieldName(t, n) + "\\s*(.*?)" + "\\s*";
+      if n == 0 then
+        accum += "\\s*"; // consume spaces at the start, but don't require any
+      else
+        accum += "\\s+"; // require and consume spaces between fields
+      accum += getFieldName(t, n); // match the field name
+      accum += "\\s+"; // match some spaces
+      accum += "(.*\\b)"; // match the value & end at a word boundary
     }
     return accum;
-  }
-
-  pragma "no doc"
-  proc createRegexp() {
-    compilerWarning("RecordReader: 'createRegexp' is deprecated; please use 'createRegex' instead.");
-    return createRegex();
   }
 
   /* Yield records for the range offst..offst+len, but assumes that the
@@ -195,7 +188,10 @@ class RecordReader {
       do {
         var (rec, once) = _get_internal(offst, len);
         if (once == true) {
-          if (myReader.offset() >= offst+len) { // rec.end >= start + len
+          try! myReader.lock();
+          var o = myReader.offset();
+          myReader.unlock();
+          if (o >= offst+len) { // rec.end >= start + len
             // So yield and break
             yield rec;
             break;
@@ -234,14 +230,14 @@ class RecordReader {
      for parallel file IO
 
    */
-  pragma "no doc"
+  @chpldoc.nodoc
   proc _get_internal(offst: int(64) = 0, len: int(64) = -1) throws {
     var rec: t; // create record
     var once = false; // We havent populated yet
     // This will only loop through  at most one time before returning
     // FEATURE REQUEST: Make this so we don't need a for loop here
     for m in myReader.matches(matchRegex, num_fields, 1) {
-      if (((m(0).offset) >= offst+len) && len != -1) { // rec.start >= start + len
+      if (((m(0).byteOffset) >= offst+len) && len != -1) { // rec.start >= start + len
         // Then break and dont return any record
         return (rec, false);
       }

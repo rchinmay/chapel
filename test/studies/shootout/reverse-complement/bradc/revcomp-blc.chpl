@@ -2,102 +2,162 @@
    https://salsa.debian.org/benchmarksgame-team/benchmarksgame/
 
    contributed by Brad Chamberlain
-   based on the C gcc #5 version by Mr Ledrug
-   and the Chapel #2 version by myself and Ben Harshbarger
+   based on the C gcc #8 version by Jeremy Zerfas
 */
 
-param eol = "\n".toByte();      // end-of-line, as an integer
+use IO, CTypes;
 
-const table = createTable();    // create the table of code complements
+config param readSize = 65536,
+             linesPerChunk = 8192;
+
+param eol = '\n'.toByte(),  // end-of-line, as an integer
+      cols = 61,            // # of characters per full row (including '\n')
+
+      // A 'bytes' value that stores the complement of each base at its index
+      cmpl = b"          \n                                                  "
+           + b"    TVGH  CD  M KN   YSAABW R       TVGH  CD  M KN   YSAABW R",
+             //    ↑↑↑↑  ↑↑  ↑ ↑↑   ↑↑↑↑↑↑ ↑       ↑↑↑↑  ↑↑  ↑ ↑↑   ↑↑↑↑↑↑ ↑
+             //    ABCDEFGHIJKLMNOPQRSTUVWXYZ      abcdefghijklmnopqrstuvwxyz
+
+      maxChars = cmpl.size: uint(8); //upper bound on number of nucleotides used
+
+// map from pairs of nucleotide characters to their reversed complements
+var pairCmpl: [0..<join(maxChars, maxChars)] uint(16);
+
+// channels for doing efficient console I/O
+var stdinBin = (new file(0)).reader(deserializer=new binaryDeserializer(), locking=false),
+    stdoutBin = (new file(1)).writer(serializer=new binarySerializer(), locking=false);
 
 proc main(args: [] string) {
-  use IO;
-  const stdinBin = openfd(0).reader(iokind.native, locking=false,
-                                 hints = QIO_CH_ALWAYS_UNBUFFERED),
-        stdoutBin = openfd(1).writer(iokind.native, locking=false,
-                                  hints=QIO_CH_ALWAYS_UNBUFFERED);
+  // set up the 'pairCmpl' map
+  const chars = eol..<maxChars;
+  forall (i,j) in {chars, chars} with (ref pairCmpl) do
+    pairCmpl[join(i,j)] = join(cmpl(j), cmpl(i));
 
-  // read in the data using an incrementally growing buffer
-  var bufLen = 8 * 1024,
-      bufDom = {0..<bufLen},
-      buf: [bufDom] uint(8),
-      end = 0;
+  // variables for reading into a dynamically growing buffer
+  var buffCap = readSize,       // capacity of our input buffer
+      buffDom = {0..<buffCap},  // index set for the input buffer
+      buff: [buffDom] uint(8),  // the buffer itself
+      readPos = 0;              // the current read position
 
   do {
-    const more = stdinBin.read(buf[end..]);
-    if more {
-      end = bufLen;
-      bufLen += min(1024**2, bufLen);
-      bufDom = {0..<bufLen};
+    // read 'readSize' new characters
+    var newChars = stdinBin.readBinary(c_ptrTo(buff[readPos]), readSize),
+        nextSeqStart: int;
+
+    // if the new characters contain the start of the next sequence,
+    var endOfRead = readPos + newChars;
+    while buff[max(readPos,1)..<endOfRead].find('>'.toByte(), nextSeqStart) {
+      // process this one
+      revcomp(buff, nextSeqStart);
+
+      // then reset to check for the next sequence
+      readPos = 0;
+      endOfRead -= nextSeqStart;
+
+      // shift the remaining characters down (only in parallel if no overlap)
+      serial (nextSeqStart < endOfRead) do
+        forall j in 0..<endOfRead with (ref buff) do
+          buff[j] = buff[j + nextSeqStart];
     }
-  } while more;
-  end = stdinBin.offset()-1;
 
-  // process the buffer a sequence at a time, working from the end
-  var hi = end;
-  while (hi >= 0) {
-    // search for the '>' that marks the start of a sequence
-    var lo = hi;
-    while buf[lo] != '>'.toByte() do
-      lo -= 1;
+    // update where we'll read from next
+    readPos = endOfRead;
 
-    // reverse and complement the sequence once we find it
-    revcomp(buf[lo..hi]);
+    // if we're about to run out of space, grow the buffer by 2x
+    if readPos + readSize > buffCap {
+      buffCap *= 2;
+      buffDom = {0..<buffCap};
+    }
+  } while newChars;
 
-    hi = lo - 1;
-  }
-
-  // write out the transformed buffer
-  stdoutBin.write(buf[..end]);
+  // if anything remains, process it
+  if readPos then revcomp(buff, readPos);
 }
 
+proc revcomp(ref seq, size) {
+  param chunkSize = linesPerChunk * cols; // the size of the chunks to deal out
 
-proc revcomp(buf: [?inds]) {
-  param cols = 61;  // the number of characters per full row (including '\n')
-  var lo = inds.low,
-      hi = inds.high;
+  // compute how big the header is
+  var headerSize = 1;
+  while seq[headerSize - 1] != eol {
+    headerSize += 1;
+  }
 
-  // skip past header line
-  do {
-    lo += 1;
-  } while buf[lo-1] != eol;
+  // write out the header
+  stdoutBin.writeBinary(c_ptrTo(seq[0]), headerSize);
 
-  // shift all of the linefeeds into the right places
-  const len = hi - lo + 1,
-        off = (len - 1) % cols,
-        shift = cols - off - 1;
+  // set up the atomic variables we'll use to coordinate between tasks
+  var charsLeft, charsWritten: atomic int = size - (headerSize + 1);
 
-  if off {
-    forall m in lo+off..<hi by cols {
-      for i in m..#shift by -1 do
-        buf[i+1] = buf[i];
-      buf[m] = eol;
+  // create a task per core
+  coforall tid in 0..<here.maxTaskPar {
+    var myBuff: [0..<chunkSize] uint(8);  // the task's buffer
+
+    // grab  chunk of work
+    var myStartChar = charsLeft.fetchSub(chunkSize);
+    while myStartChar >= 0 {
+      const myChunkSize = min(chunkSize, myStartChar + 1),
+            lastLineChars = myStartChar % cols,        // # of chars and
+            lastLineGaps = cols - (lastLineChars + 1); // spaces on last line
+
+      var cursor = myStartChar + headerSize,
+          chunkLeft = myChunkSize,
+          chunkPos = 0;
+
+      // reverse the chunk
+      if lastLineGaps == 0 {
+        // if last line is full, it's easy to reverse-complement
+        revcomp(chunkPos, cursor, chunkLeft, myBuff, seq);
+      } else {
+        // otherwise, it's trickier
+        while chunkLeft >= cols {
+          revcomp(chunkPos, cursor, lastLineChars, myBuff, seq);
+          chunkPos += lastLineChars;
+          cursor -= lastLineChars + 1;
+
+          revcomp(chunkPos, cursor, lastLineGaps, myBuff, seq);
+          chunkPos += lastLineGaps;
+          cursor -= lastLineGaps;
+
+          myBuff[chunkPos] = eol;
+          chunkPos += 1;
+
+          chunkLeft -= cols;
+        }
+
+        if chunkLeft then
+          revcomp(chunkPos, cursor, lastLineChars + 1, myBuff, seq);
+      }
+
+      // take turns writing out our chunks
+      charsWritten.waitFor(myStartChar);
+      stdoutBin.writeBinary(c_ptrTo(myBuff[0]), myChunkSize);
+      charsWritten.write(myStartChar - myChunkSize);
+
+      // grab the next chunk of work
+      myStartChar = charsLeft.fetchSub(chunkSize);
     }
   }
-
-  // walk from both ends of the sequence, complementing and swapping
-  forall (i,j) in zip(lo..#(len/2), ..<hi by -1) do
-    (buf[i], buf[j]) = (table[buf[j]], table[buf[i]]);
 }
 
-
-proc createTable() {
-  // `pairs` compactly represents the table we're creating, where the
-  // first byte of each pair (in either case) maps to the second:
-  //   A|a -> T, C|c -> G, G|g -> C, T|t -> A, etc.
-  param pairs = b"ATCGGCTAUAMKRYWWSSYRKMVBHDDHBVNN",
-        upperToLower = "a".toByte() - "A".toByte();
-
-  var table: [0..127] uint(8);
-
-  for i in pairs.indices by 2 {
-    const src = pairs[i],
-          dst = pairs[i+1];
-
-    table[src] = dst;
-    table[src+upperToLower] = dst;
+proc revcomp(in dstFront, in charAfter, spanLen, ref buff, ref seq) {
+  if spanLen%2 {
+    charAfter -= 1;
+    buff[dstFront] = cmpl[seq[charAfter]];
+    dstFront += 1;
   }
-  table[eol] = eol;
 
-  return table;
+  for 2..spanLen by -2 {
+    charAfter -= 2;
+    const src = c_ptrTo(seq[charAfter]):c_ptr(void):c_ptr(uint(16)),
+          dst = c_ptrTo(buff[dstFront]):c_ptr(void):c_ptr(uint(16));
+    dst.deref() = pairCmpl[src.deref()];
+    dstFront += 2;
+  }
+}
+
+// combine two nucleotide characters to create a 16-bit integer
+inline proc join(i: uint(16), j) {
+  return i << 8 | j;
 }

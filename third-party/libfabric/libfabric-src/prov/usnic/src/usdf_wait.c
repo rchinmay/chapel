@@ -217,7 +217,7 @@ int usdf_wait_open(struct fid_fabric *fabric, struct fi_wait_attr *attr,
 	wait_priv->object.epfd = epfd;
 
 	ofi_atomic_initialize32(&wait_priv->wait_refcnt, 0);
-	fastlock_init(&wait_priv->lock);
+	ofi_mutex_init(&wait_priv->lock);
 	dlist_init(&wait_priv->list);
 
 	ofi_atomic_inc32(&wait_priv->wait_fabric->fab_refcnt);
@@ -274,7 +274,7 @@ static int usdf_wait_close(struct fid *waitset)
 static int usdf_wait_wait(struct fid_wait *fwait, int timeout)
 {
 	struct usdf_wait *wait;
-	void *context;
+	struct ofi_epollfds_event event;
 	int ret = FI_SUCCESS;
 	int nevents;
 
@@ -289,7 +289,7 @@ static int usdf_wait_wait(struct fid_wait *fwait, int timeout)
 		return ret;
 	}
 
-	nevents = ofi_epoll_wait(wait->object.epfd, &context, 1, timeout);
+	nevents = ofi_epoll_wait(wait->object.epfd, &event, 1, timeout);
 	if (nevents == 0) {
 		ret = -FI_ETIMEDOUT;
 	} else if (nevents < 0) {

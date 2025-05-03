@@ -4,7 +4,7 @@ import sys
 
 import chpl_compiler, chpl_platform, overrides, third_party_utils
 from chpl_home_utils import get_chpl_third_party
-from utils import memoize, warning
+from utils import memoize, warning, error, check_valid_var
 
 
 # returns True if CHPL_RE2 was set by the user
@@ -12,9 +12,8 @@ from utils import memoize, warning
 @memoize
 def is_overridden():
     re2 = overrides.get('CHPL_RE2')
-    regexp = overrides.get('CHPL_REGEXP')
 
-    if re2 or regexp:
+    if re2:
         return True
 
     return False
@@ -22,17 +21,14 @@ def is_overridden():
 @memoize
 def get():
     re2 = overrides.get('CHPL_RE2')
-    regexp = overrides.get('CHPL_REGEXP')
-    if regexp:
-        if not re2:
-            re2 = 'bundled' if regexp == 're2' else 'none'
 
-        warning("CHPL_REGEXP is deprecated. Use CHPL_RE2.")
-    elif not re2:
+    if not re2:
         re2_header = os.path.join(get_chpl_third_party(), 're2',
                                   'install', get_uniq_cfg_path(),
                                   'include', 're2', 're2.h')
         re2 = 'bundled' if os.path.exists(re2_header) else 'none'
+
+    check_valid_var("CHPL_RE2", re2, ["none", "bundled"])
     return re2
 
 
@@ -56,9 +52,7 @@ def get_compile_args():
 def get_link_args():
     re2_val = get()
     if re2_val == 'bundled':
-        return third_party_utils.get_bundled_link_args('re2',
-                                                       libs=['-lre2',
-                                                             '-lpthread'])
+        return third_party_utils.pkgconfig_get_bundled_link_args('re2')
     return ([ ], [ ])
 
 

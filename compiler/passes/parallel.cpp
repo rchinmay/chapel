@@ -1,5 +1,5 @@
 /*
- * Copyright 2020-2022 Hewlett Packard Enterprise Development LP
+ * Copyright 2020-2025 Hewlett Packard Enterprise Development LP
  * Copyright 2004-2019 Cray Inc.
  * Other additional copyright holders may be indicated within.
  *
@@ -36,6 +36,8 @@
 #include "stringutil.h"
 #include "symbol.h"
 #include "wellknown.h"
+
+#include "global-ast-vecs.h"
 
 // Notes on
 //   makeHeapAllocations()    //invoked from parallel()
@@ -305,7 +307,7 @@ static bool needsAutoCopyAutoDestroyForArg(ArgSymbol* formal, Expr* arg,
   // where we might take the reference of a sync on the stack, and that stack
   // is about to go away.
   //
-  if (isSyncType(baseType) || isSingleType(baseType)) {
+  if (isSyncType(baseType)) {
     return true;
   }
 
@@ -952,7 +954,6 @@ static void findHeapVarsAndRefs(Map<Symbol*, Vec<SymExpr*>*>& defMap,
            (isRecord(def->sym->type)             &&
             !isRecordWrappedType(def->sym->type) &&
             !isSyncType(def->sym->type)          &&
-            !isSingleType(def->sym->type)        &&
             // Dont try to broadcast string literals, they'll get fixed in
             // another manner
             !(def->sym->type == dtString && def->sym->isImmediate())))) {
@@ -971,6 +972,12 @@ static void findHeapVarsAndRefs(Map<Symbol*, Vec<SymExpr*>*>& defMap,
         INT_ASSERT(initialization);
         insertBroadcast(initialization, def->sym);
 
+      } else if (def->sym->hasFlag(FLAG_REMOTE_VARIABLE)) {
+        // replicate address of remote variables
+        Expr* initialization = def->sym->getInitialization();
+
+        INT_ASSERT(initialization);
+        insertBroadcast(initialization, def->sym);
       } else {
         // put other global constants and all global variables on the heap
         // ... but not type variables without a runtime type component
@@ -1021,6 +1028,12 @@ makeHeapAllocations() {
       }
     }
 
+    if (var->hasFlag(FLAG_REMOTE_VARIABLE)) {
+      // don't widen remote variables, they're already references
+      // to heap-allocated memory.
+      continue;
+    }
+
     if (isString(var) && var->isImmediate()) {
       // String immediates are privatized; do not widen them
       continue;
@@ -1045,7 +1058,8 @@ makeHeapAllocations() {
           call->insertBefore(new DefExpr(tmp));
           call->insertBefore(new CallExpr(PRIM_MOVE, tmp, new CallExpr(PRIM_GET_MEMBER, var, heapType->getField(1))));
           def->replace(new SymExpr(tmp));
-        } else if (call->isResolved()) {
+        } else if (call->isResolved() ||
+                   call->isPrimitive(PRIM_VIRTUAL_METHOD_CALL)) {
             ArgSymbol* formal = actual_to_formal(def);
             if (formal->isRef()) {
               VarSymbol* tmp = newTemp(var->type);
@@ -1131,6 +1145,12 @@ makeHeapAllocations() {
           call->getStmtExpr()->insertBefore(new DefExpr(tmp));
           call->getStmtExpr()->insertBefore(new CallExpr(PRIM_MOVE, tmp, new CallExpr(PRIM_GET_MEMBER_VALUE, use->symbol(), heapType->getField(1))));
           use->replace(new SymExpr(tmp));
+          if (call->isPrimitive(PRIM_ZERO_VARIABLE)) {
+            // aftering zeroing the value, we need to set it back
+            // otherwise its a dead store
+            call->getStmtExpr()->insertAfter(
+              new CallExpr(PRIM_SET_MEMBER, use->symbol(), heapType->getField(1), tmp));
+          }
         }
       } else if (use->parentExpr)
         INT_FATAL(var, "unexpected case");
@@ -1186,7 +1206,7 @@ static void replaceRecordWrappedRefs() {
     if (aggType->symbol->hasFlag(FLAG_REF)) {
       // ignore the reference type itself
     } else {
-      if (aggType->isSerializeable()) {
+      if (aggType->isSerializable()) {
         continue; // this type will be serialized and RVF'ed
       }
       for_fields(field, aggType) {
@@ -1301,7 +1321,7 @@ static void insertEndCounts()
   Vec<FnSymbol*> queue;
   Map<FnSymbol*,Symbol*> endCountMap;
 
-  forv_Vec(CallExpr, call, gCallExprs) {
+  forv_expanding_Vec(CallExpr, call, gCallExprs) {
     SET_LINENO(call);
     if (call->isPrimitive(PRIM_GET_END_COUNT)) {
       FnSymbol* pfn = call->getFunction();
@@ -1399,7 +1419,7 @@ CallExpr* createConditionalForDirectOn(CallExpr* call, FnSymbol* fn)
 // call that are accessed within the body of the nested function (recursively,
 // of course).
 static void passArgsToNestedFns() {
-  forv_Vec(FnSymbol, fn, gFnSymbols) {
+  forv_expanding_Vec(FnSymbol, fn, gFnSymbols) {
     if (isTaskFun(fn)) {
       BundleArgsFnData baData = bundleArgsFnDataInit;
 
@@ -1466,7 +1486,7 @@ Type* getOrMakeRefTypeDuringCodegen(Type* type) {
   refType = type->refType;
   if( ! refType ) {
     SET_LINENO(type->symbol);
-    AggregateType* ref = new AggregateType(AGGREGATE_RECORD);
+    AggregateType* ref = new AggregateType(AGGREGATE_CLASS);
     TypeSymbol* refTs = new TypeSymbol(astr("_ref_", type->symbol->cname), ref);
     refTs->addFlag(FLAG_REF);
     refTs->addFlag(FLAG_NO_DEFAULT_FUNCTIONS);
@@ -1513,4 +1533,3 @@ Type* getOrMakeWideTypeDuringCodegen(Type* refType) {
   }
   return wide;
 }
-

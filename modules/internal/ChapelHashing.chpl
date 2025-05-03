@@ -1,5 +1,5 @@
 /*
- * Copyright 2020-2022 Hewlett Packard Enterprise Development LP
+ * Copyright 2020-2025 Hewlett Packard Enterprise Development LP
  * Copyright 2004-2019 Cray Inc.
  * Other additional copyright holders may be indicated within.
  *
@@ -25,8 +25,35 @@ module ChapelHashing {
 
   use ChapelBase;
 
+  interface hashable {
+    proc Self.hash(): uint;
+  }
+
+  // Hash interfaces return uint, this internal implementation (also used for
+  // compiler-generated hashes) also returns uint. The public API returns
+  // integers, though, so is a different function.
+  proc chpl__defaultHashWrapperInner(x): uint {
+    use Reflection;
+
+    if !canResolveMethod(x, "hash") {
+      compilerError("No hash function found for " + x.type:string);
+    } else if __primitive("implements interface", x, hashable) == 2 {
+      compilerWarning("'", x.type:string + "' has a hash function that is being ",
+                      "used by the standard library. However, '" + x.type:string +
+                      "' does not implement hashable. ",
+                      "In the future, this will result in an error.");
+      if isRecordType(x.type) {
+        compilerWarning("to make '" + x.type:string + "' implement hashable, ",
+                        "add the interface to its declaration: 'record " + x.type:string +
+                        " : hashable'");
+      }
+    }
+
+    return x.hash();
+  }
+
   proc chpl__defaultHashWrapper(x): int {
-    const hash = x.hash();
+    const hash = chpl__defaultHashWrapperInner(x);
     return (hash & max(int)): int;
   }
 
@@ -53,6 +80,8 @@ module ChapelHashing {
   }
 
   inline proc chpl__defaultHashCombine(a:uint, b:uint, fieldnum:int): uint {
+    pragma "fn synchronization free"
+    pragma "codegen for CPU and GPU"
     extern proc chpl_bitops_rotl_64(x: uint(64), n: uint(64)) : uint(64);
     var n:uint = (17 + fieldnum):uint;
     return _gen_key(a ^ chpl_bitops_rotl_64(b, n));
@@ -64,6 +93,10 @@ module ChapelHashing {
     else
       return 1;
   }
+  bool implements hashable;
+
+  // The hash methods for various numeric types are below.
+  implements hashable(numeric);
 
   inline proc int.hash(): uint {
     return _gen_key(this);
@@ -76,6 +109,7 @@ module ChapelHashing {
   inline proc enum.hash(): uint {
     return _gen_key(chpl__enumToOrder(this));
   }
+  implements hashable(enum);
 
   inline proc real.hash(): uint {
     return _gen_key(__primitive( "real2int", this));
@@ -92,6 +126,7 @@ module ChapelHashing {
   inline proc chpl_taskID_t.hash(): uint {
     return _gen_key(this:int);
   }
+  chpl_taskID_t implements hashable;
 
   inline proc _array.hash(): uint {
     var hash : uint = 0;
@@ -102,15 +137,19 @@ module ChapelHashing {
     }
     return hash;
   }
+  _array implements hashable;
 
   // Nilable and non-nilable classes will coerce to this.
-  inline proc (borrowed object?).hash(): uint {
+  inline proc (borrowed RootClass?).hash(): uint {
     return _gen_key(__primitive( "object2int", this));
   }
+  implements hashable(class);
+  implements hashable(class?);
 
   inline proc locale.hash(): uint {
     return _gen_key(__primitive( "object2int", this._value));
   }
+  locale implements hashable;
 
   //
   // Implementation of hash for ranges, in case the 'keyType'
@@ -133,32 +172,5 @@ module ChapelHashing {
     }
     return ret;
   }
-
-  // Is 'idxType' legal to create a default associative domain with?
-  // Currently based on the availability of hash().
-  // Enumerated and sparse domains are handled separately.
-  // Tuples and records also work, somehow.
-  proc chpl__validDefaultAssocDomIdxType(type idxType) param return false;
-
-  proc chpl__validDefaultAssocDomIdxType(type idxType) param where
-      // one check per an implementation of hash() above
-      isBoolType(idxType)     ||
-      isIntType(idxType)      ||
-      isUintType(idxType)    ||
-      isRealType(idxType)        ||
-      isImagType(idxType)        ||
-      isComplexType(idxType)     ||
-      idxType == chpl_taskID_t    ||
-      idxType == string           ||
-      idxType == bytes            ||
-      idxType == c_string         ||
-      isClassType(idxType)        ||
-      // these are handled differently
-      isEnumType(idxType)  ||
-      isTupleType(idxType)        ||
-      isRecordType(idxType)
-  {
-    return true;
-  }
-
+  range implements hashable;
 }

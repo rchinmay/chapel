@@ -1,16 +1,16 @@
 /*
- * Copyright 2020-2022 Hewlett Packard Enterprise Development LP
+ * Copyright 2020-2025 Hewlett Packard Enterprise Development LP
  * Copyright 2004-2019 Cray Inc.
  * Other additional copyright holders may be indicated within.
- * 
+ *
  * The entirety of this work is licensed under the Apache License,
  * Version 2.0 (the "License"); you may not use this file except
  * in compliance with the License.
- * 
+ *
  * You may obtain a copy of the License at
- * 
+ *
  *     http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -57,6 +57,22 @@
 // Quiets warnings about _BSD_SOURCE being deprecated in glibc >= 2.20
 // This define enables everything _BSD_SOURCE does (and more) with glibc >= 2.19
 #define _DEFAULT_SOURCE
+#endif
+
+// define `___always_inline`, this should be used sparingly, prefer `inline`
+#if defined __has_attribute
+  #if __has_attribute (always_inline)
+    #define ___always_inline inline __attribute__ ((always_inline))
+  #endif
+  #ifndef ___always_inline
+    #if __has_attribute (__always_inline__)
+      #define ___always_inline inline __attribute__ ((__always_inline__))
+    #endif
+  #endif
+#endif
+#ifndef ___always_inline
+  // always_inline is not supported, just use inline
+  #define ___always_inline inline
 #endif
 
 // Ask a C++ compiler if it would please include e.g. INT64_MAX
@@ -109,8 +125,14 @@
 #if defined(__GNUC__) && ((__GNUC__ > 3) || (__GNUC__ == 3 && __GNUC_MINOR__ >= 1))
 #define restrict __restrict
 #else
-#define restrict 
+#define restrict
 #endif
+#endif
+
+#if defined(HAS_GPU_LOCALE) && !defined(GPU_RUNTIME_CPU) && defined(CHPL_GEN_CODE)
+#define MAYBE_GPU __host__ __device__
+#else
+#define MAYBE_GPU
 #endif
 
 

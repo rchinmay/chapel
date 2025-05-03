@@ -103,8 +103,8 @@ param ZETA_P_SYMM = 0x400;
 param ZETA_P_FREE = 0x800;
 
 config const filename = "sedov15oct.lmesh";
-var infile = open(filename, iomode.r);
-var reader = infile.reader();
+var infile = open(filename, ioMode.r);
+var reader = infile.reader(locking=false);
 
 if debug then writeln("Reading problem size...");
 const (numElems, numNodes) = reader.read(int, int);
@@ -136,9 +136,9 @@ config param useBlockDist = false;
 
 // STYLE: I don't really like these names (ElemDist, NodeDist)
 
-const ElemDist = if useBlockDist then ElemSpace dmapped Block(ElemSpace)
+const ElemDist = if useBlockDist then ElemSpace dmapped new blockDist(ElemSpace)
                                  else ElemSpace;
-const NodeDist = if useBlockDist then NodeSpace dmapped Block(NodeSpace)
+const NodeDist = if useBlockDist then NodeSpace dmapped new blockDist(NodeSpace)
                                  else NodeSpace;
 
 
@@ -234,10 +234,14 @@ writeln("Doing EOF check");
 
 // Make sure we're at the end of the input file, for sanity
 var badint: int;
+var dataRemains: bool = false;
 try! {
-  reader.read(badint);
+  dataRemains = reader.read(badint);
 } catch e: SystemError {
-  if (e.err != EEOF) then halt("Data remains at end of file");
+  dataRemains = true;
+}
+if (dataRemains) {
+  halt("Data remains at end of file");
 }
 
 writeln("Made it past EOF check");

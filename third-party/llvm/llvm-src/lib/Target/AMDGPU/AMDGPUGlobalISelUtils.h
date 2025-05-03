@@ -15,15 +15,17 @@
 namespace llvm {
 
 class MachineRegisterInfo;
+class GCNSubtarget;
+class GISelKnownBits;
+class LLT;
 
 namespace AMDGPU {
 
 /// Returns base register and constant offset.
 std::pair<Register, unsigned>
-getBaseWithConstantOffset(MachineRegisterInfo &MRI, Register Reg);
-
-bool isLegalVOP3PShuffleMask(ArrayRef<int> Mask);
-
+getBaseWithConstantOffset(MachineRegisterInfo &MRI, Register Reg,
+                          GISelKnownBits *KnownBits = nullptr,
+                          bool CheckNUW = false);
 }
 }
 

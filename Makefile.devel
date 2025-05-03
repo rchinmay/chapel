@@ -1,15 +1,15 @@
-# Copyright 2020-2022 Hewlett Packard Enterprise Development LP
+# Copyright 2020-2025 Hewlett Packard Enterprise Development LP
 # Copyright 2004-2019 Cray Inc.
 # Other additional copyright holders may be indicated within.
-# 
+#
 # The entirety of this work is licensed under the Apache License,
 # Version 2.0 (the "License"); you may not use this file except
 # in compliance with the License.
-# 
+#
 # You may obtain a copy of the License at
-# 
+#
 #     http://www.apache.org/licenses/LICENSE-2.0
-# 
+#
 # Unless required by applicable law or agreed to in writing, software
 # distributed under the License is distributed on an "AS IS" BASIS,
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -24,6 +24,9 @@ develall:
 
 docs: chpldoc man-chpl man-chpldoc
 	cd doc && $(MAKE) docs
+
+docs-release: chpldoc man-chpl man-chpldoc
+	cd doc && $(MAKE) docs-release
 
 checkdocs: FORCE
 	cd doc && $(MAKE) checkdocs
@@ -61,23 +64,29 @@ always-build-chplspell-venv: FORCE
 test: spectests FORCE
 	cd examples && start_test
 
-libchplcomp-docs: FORCE
-	@cd compiler/next && $(MAKE) -f Makefile.help libchplcomp-docs
+frontend-docs: FORCE
+	@cd compiler && $(MAKE) frontend-docs
 
-clobber-libchplcomp: FORCE
-	@cd compiler/next && $(MAKE) -f Makefile.help clobber-libchplcomp
+test-frontend: FORCE
+	@cd compiler && $(MAKE) test-frontend
 
-test-libchplcomp: FORCE
-	@cd compiler/next && $(MAKE) -f Makefile.help test-libchplcomp
+frontend-tests:
+	@cd compiler && $(MAKE) frontend-tests
 
-libchplcomp-parser: FORCE
-	@cd compiler/next && $(MAKE) -f Makefile.help libchplcomp-parser
+test-dyno: FORCE test-frontend
 
-libchplcomp-chpldoc: FORCE
-	@cd compiler/next && $(MAKE) -f Makefile.help libchplcomp-chpldoc
+test-cls test-chpl-language-server: FORCE
+	@$(MAKE) chpl-language-server
+	@cd tools/chpl-language-server && $(MAKE) test-chpl-language-server
 
-run-next-linter: FORCE
-	./compiler/next/util/lint --only-changed --jobs=-1
+test-cls-junit test-chpl-language-server-junit: FORCE
+	@$(MAKE) chpl-language-server
+	@cd tools/chpl-language-server && $(MAKE) test-chpl-language-server-junit
+
+run-frontend-linters: FORCE
+	@cd compiler && $(MAKE) run-frontend-linters
+
+run-dyno-linters: run-frontend-linters FORCE
 
 SPECTEST_DIR = ./test/release/examples/spec
 spectests: FORCE

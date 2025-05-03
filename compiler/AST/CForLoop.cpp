@@ -1,5 +1,5 @@
 /*
- * Copyright 2020-2022 Hewlett Packard Enterprise Development LP
+ * Copyright 2020-2025 Hewlett Packard Enterprise Development LP
  * Copyright 2004-2019 Cray Inc.
  * Other additional copyright holders may be indicated within.
  *
@@ -34,13 +34,15 @@
 ************************************* | ************************************/
 
 // A WhileDo loop may have a C_FOR_LOOP prim as the termination condition
-BlockStmt* CForLoop::buildCForLoop(CallExpr* call, BlockStmt* body)
+BlockStmt* CForLoop::buildCForLoop(CallExpr* call, BlockStmt* body, LLVMMetadataList attrs)
 {
   BlockStmt* retval = buildChapelStmt();
+  CForLoop*  loop   = new CForLoop(body);
+  retval->insertAtTail(loop);
+  loop->mLLVMMetadataList = attrs;
 
-  if (call->isPrimitive(PRIM_BLOCK_C_FOR_LOOP) == true)
-  {
-    CForLoop*    loop          = new CForLoop(body);
+  if (call != nullptr) {
+    INT_ASSERT(call, call->isPrimitive(PRIM_BLOCK_C_FOR_LOOP));
 
     Expr*        initClause    = call->get(1)->copy();
     Expr*        testClause    = call->get(2)->copy();
@@ -60,12 +62,7 @@ BlockStmt* CForLoop::buildCForLoop(CallExpr* call, BlockStmt* body)
 
     loop->insertAtTail(new DefExpr(continueLabel));
 
-    retval->insertAtTail(loop);
     retval->insertAtTail(new DefExpr(breakLabel));
-  }
-  else
-  {
-    INT_ASSERT(false);
   }
 
   return retval;
@@ -74,6 +71,11 @@ BlockStmt* CForLoop::buildCForLoop(CallExpr* call, BlockStmt* body)
 CForLoop* CForLoop::buildWithBodyFrom(ForLoop* forLoop)
 {
   SymbolMap map;
+  return buildWithBodyFrom(forLoop, map);
+}
+
+CForLoop* CForLoop::buildWithBodyFrom(ForLoop* forLoop, SymbolMap &map)
+{
   CForLoop* retval = new CForLoop();
 
   retval->astloc            = forLoop->astloc;
@@ -81,6 +83,7 @@ CForLoop* CForLoop::buildWithBodyFrom(ForLoop* forLoop)
   retval->mBreakLabel       = forLoop->breakLabelGet();
   retval->mContinueLabel    = forLoop->continueLabelGet();
   retval->mOrderIndependent = forLoop->isOrderIndependent();
+  retval->mLLVMMetadataList = forLoop->getAdditionalLLVMMetadata();
 
   for_alist(expr, forLoop->body)
     retval->insertAtTail(expr->copy(&map, true));
@@ -132,6 +135,7 @@ CForLoop* CForLoop::copyInner(SymbolMap* map)
   retval->mBreakLabel       = mBreakLabel;
   retval->mContinueLabel    = mContinueLabel;
   retval->mOrderIndependent = mOrderIndependent;
+  retval->mLLVMMetadataList = mLLVMMetadataList;
 
   if (initBlockGet() != 0 && testBlockGet() != 0 && incrBlockGet() != 0)
     retval->loopHeaderSet(initBlockGet()->copy(map, true),

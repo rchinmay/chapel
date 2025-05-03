@@ -1,5 +1,5 @@
 /*
- * Copyright 2020-2022 Hewlett Packard Enterprise Development LP
+ * Copyright 2020-2025 Hewlett Packard Enterprise Development LP
  * Copyright 2004-2019 Cray Inc.
  * Other additional copyright holders may be indicated within.
  *
@@ -21,20 +21,13 @@
 #ifndef _FN_SYMBOL_H_
 #define _FN_SYMBOL_H_
 
+#include "intents.h"
 #include "library.h"
 #include "symbol.h"
 
 class IteratorGroup;     // see iterator.h
 class GenericsCacheInfo; // see caches.h
 void cleanupCacheInfo(FnSymbol* fn);
-
-enum RetTag {
-  RET_VALUE,
-  RET_REF,
-  RET_CONST_REF,
-  RET_PARAM,
-  RET_TYPE
-};
 
 enum TagGenericResult {
   TGR_ALREADY_TAGGED,
@@ -113,6 +106,11 @@ public:
   IntentTag                  thisTag;
   RetTag                     retTag;
 
+  // If the parenful version of this function is deprecated, the deprecation
+  // message.
+  std::string                parenfulDeprecationMsg;
+  const char*                getParenfulDeprecationMsg() const;
+
   // Support for iterator lowering.
   IteratorInfo*              iteratorInfo;
   // Pointers to other iterator variants - serial, standalone, etc.
@@ -175,6 +173,8 @@ public:
   GenRet                     codegenFunctionType(bool forHeader);
   GenRet                     codegenCast(GenRet fnPtr);
 
+  GenRet                     codegenAsValue();
+  GenRet                     codegenAsCallBaseExpr();
   GenRet                     codegen() override;
   void                       codegenHeaderC();
   void                       codegenPrototype() override;
@@ -207,6 +207,9 @@ public:
   // the return-by-ref transformation has been applied, it returns gVoid.
   Symbol*                    getReturnSymbol();
 
+  // Compute the type based on the current signature. Does not resolve.
+  FunctionType*             computeAndSetType();
+
   // Removes all statements from body and adds all statements from block.
   void                       replaceBodyStmtsWithStmts(BlockStmt* block);
   // Removes all statements from body and adds the passed statement.
@@ -232,11 +235,14 @@ public:
   void                       setNormalized(bool value);
 
   bool                       isResolved()                                const;
+  bool                       isErrorHandlingLowered()                    const;
 
   bool                       isMethod()                                  const;
   bool                       isMethodOnClass()                           const;
   bool                       isMethodOnRecord()                          const;
   bool                       isTypeMethod()                              const;
+  bool                       isSignature()                               const;
+  bool                       isAnonymous()                               const;
 
   void                       setMethod(bool value);
 
@@ -247,6 +253,7 @@ public:
   bool                       isInitializer()                             const;
   bool                       isPostInitializer()                         const;
   bool                       isDefaultInit()                             const;
+  bool                       isDefaultCopyInit()                         const;
   bool                       isCopyInit()                                const;
 
   bool                       isGeneric()                                 const;
@@ -258,7 +265,9 @@ public:
   void                       addConstrainedType(DefExpr* def);
   void                       addInterfaceConstraint(IfcConstraint* icon);
 
-  AggregateType*             getReceiverType()                           const;
+  Type*                      getReceiverType()                           const;
+
+  FunctionType*              getType()                                   const;
 
   bool                       isIterator()                                const;
 
@@ -271,7 +280,6 @@ public:
 
   void                       throwsErrorInit();
   bool                       throwsError()                               const;
-
   bool                       retExprDefinesNonVoid()                     const;
 
   Symbol*                    getSubstitutionWithName(const char* name)   const;
@@ -304,6 +312,8 @@ extern FnSymbol*                gAddModuleFn;
 extern FnSymbol*                gGenericTupleTypeCtor;
 extern FnSymbol*                gGenericTupleDestroy;
 
+extern const char*              ftableName;
+extern const char*              ftableSizeName;
 extern std::map<FnSymbol*, int> ftableMap;
 extern std::vector<FnSymbol*>   ftableVec;
 

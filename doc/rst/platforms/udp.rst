@@ -59,7 +59,7 @@ Next, try running it across several machines.
    export GASNET_SSH_CMD=ssh
    # Disable X11 forwarding
    export GASNET_SSH_OPTIONS=-x
-   # Specify which hosts to spawn on.
+   # Specify which hosts to spawn on; SSH_SERVERS can be used equivalently
    export GASNET_SSH_SERVERS="host1 host2 host3 ..."
 
 where host1, host2, host3, ... are the names of the
@@ -119,11 +119,22 @@ I'm seeing login banners mixed with my program's output
 
 If you are using SSH to launch jobs, you might get a
 login banner printed out along with your program's output. We have
-found the following setting useful to disable such printing:
+found the following setting useful to disable such printing (where
+``-x`` is retained from the instructions above):
 
 .. code-block:: bash
 
-   export GASNET_SSH_OPTIONS="-o LogLevel=Error"
+   export GASNET_SSH_OPTIONS="-x -o LogLevel=Error"
+
+My console output seems to be jumbled or missing
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+We've had best results with console I/O and the UDP conduit when
+setting:
+
+  .. code-block:: bash
+
+    export GASNET_ROUTE_OUTPUT=0
 
 
 I'm seeing warnings from GASNet about using a higher-performance network
@@ -171,4 +182,9 @@ the local machine, use:
   export CHPL_RT_MASTERIP=127.0.0.1
   export CHPL_RT_WORKERIP=127.0.0.0  # may be optional
 
+I get ``worker failed DNSLookup on master host name`` error messages
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
+When running in a local, oversubscribed setting, this error can often
+be resolved by setting ``CHPL_RT_MASTERIP`` as described in the
+previous section.

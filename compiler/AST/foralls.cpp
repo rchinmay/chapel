@@ -1,5 +1,5 @@
 /*
- * Copyright 2020-2022 Hewlett Packard Enterprise Development LP
+ * Copyright 2020-2025 Hewlett Packard Enterprise Development LP
  * Copyright 2004-2019 Cray Inc.
  * Other additional copyright holders may be indicated within.
  *
@@ -34,6 +34,8 @@
 #include "stlUtil.h"
 #include "stringutil.h"
 #include "TransformLogicalShortCircuit.h"
+
+#include "global-ast-vecs.h"
 
 const char* forallIntentTagDescription(ForallIntentTag tfiTag) {
   switch (tfiTag) {
@@ -78,11 +80,12 @@ static ShadowVarSymbol* buildShadowVariable(ShadowVarPrefix prefix,
       // This keyword is for a TPV.
       // Whereas the user provided neither a type nor an init.
       USR_FATAL_CONT(ovar, "a task private variable '%s'"
-                     "requires a type and/or initializing expression", name);
+                     " requires a type and/or initializing expression", name);
       break;
   }
 
   ShadowVarSymbol* result = new ShadowVarSymbol(intent, name, NULL);
+  result->svExplicit = true;
   new DefExpr(result); // set result->defPoint
   return result;
 }
@@ -145,6 +148,7 @@ static ShadowVarSymbol* buildTaskPrivateVariable(ShadowVarPrefix prefix,
 
   // We will call autoDestroy from deinitBlock() explicitly.
   result->addFlag(FLAG_NO_AUTO_DESTROY);
+  result->svExplicit = true;
 
   new DefExpr(result, init, type); // set result->defPoint
 
@@ -165,9 +169,13 @@ ShadowVarSymbol* ShadowVarSymbol::buildForPrefix(ShadowVarPrefix prefix,
               nameSE->symbol()->name);
   }
 
-  const char* nameString = toUnresolvedSymExpr(nameExp)->unresolved;
-  if (nameString == astrThis)
-    USR_FATAL_CONT(nameExp, "cannot currently apply a forall or task intent to 'this'");
+  const char* nameString = nullptr;
+  if (auto urse = toUnresolvedSymExpr(nameExp))
+    nameString = urse->unresolved;
+  else if (auto se = toSymExpr(nameExp))
+    nameString = se->symbol()->name;
+  else
+    INT_FATAL("case not handled");
 
   if (type == NULL && init == NULL)
     // non-TPV forall intent
@@ -180,8 +188,16 @@ ShadowVarSymbol* ShadowVarSymbol::buildFromReduceIntent(Expr* ovar,
                                                         Expr* riExpr)
 {
   INT_ASSERT(riExpr != NULL);
-  const char* name = toUnresolvedSymExpr(ovar)->unresolved;
+  const char* name = nullptr;
+  if (auto urse = toUnresolvedSymExpr(ovar))
+    name = urse->unresolved;
+  else if (auto se = toSymExpr(ovar))
+    name = se->symbol()->name;
+  else
+    INT_FATAL("case not handled");
+
   ShadowVarSymbol* result = new ShadowVarSymbol(TFI_REDUCE, name, NULL, riExpr);
+  result->svExplicit = true;
   new DefExpr(result); // set result->defPoint
   return result;
 }
@@ -360,6 +376,7 @@ buildFollowLoop(VarSymbol* iter,
                                        /*isLoweredForall*/ false,
                                        forallExpr);
   followBody->orderIndependentSet(true);
+  followBody->exemptFromImplicitIntents();
 
   // not needed:
   //destructureIndices(followBody, indices, new SymExpr(followIdx), false);
@@ -634,22 +651,24 @@ static ParIterFlavor findParIter(ForallStmt* pfs, CallExpr* iterCall,
   return retval;
 }
 
-/////////// handle serial cases /////////// 
+/////////// handle serial cases ///////////
 
 static FnSymbol* trivialLeader          = NULL;
 static Type*     trivialLeaderYieldType = NULL;
 
-// Return a _build_tuple of fs's index variables.
+// Return a DefExpr or _build_tuple of DefExpr of fs's index variables.
+// Removes the DefExprs from fs->inductionVariables()
 static Expr* hzsMakeIndices(ForallStmt* fs) {
   if (fs->numInductionVars() == 1) {
-    INT_ASSERT(fs->overTupleExpand()); 
-    return new SymExpr(fs->firstInductionVarDef()->sym);
+    INT_ASSERT(fs->overTupleExpand());
+    return fs->firstInductionVarDef()->remove();
   }
 
   CallExpr* indices = new CallExpr("_build_tuple");
 
-  for_alist(inddef, fs->inductionVariables())
-    indices->insertAtTail(toDefExpr(inddef)->sym);
+  // Move the index variables' DefExprs to 'forLoop'.
+  while (Expr* inddef = fs->inductionVariables().tail)
+    indices->insertAtHead(inddef->remove());
 
   // Todo detect the case where the forall loop in the source code
   // had a single index variable. We can tell that by checking whether
@@ -794,7 +813,7 @@ static CallExpr* setupFollowerCall(BlockStmt* holder, Symbol* followThis,
                                 iterSym, gFollowerTag, followThis);
 
     holder->insertAtHead(followerCall);
-  }    
+  }
 
   return followerCall;
 }
@@ -844,7 +863,7 @@ static bool optionalFollowersAreMissing(ForallStmt* fs, Symbol* followThis) {
   return retval;
 }
 
-/////////// final transformations /////////// 
+/////////// final transformations ///////////
 
 // Create the induction variable of the parallel loop.
 static VarSymbol* createFollowThis(QualifiedType piType) {
@@ -1000,7 +1019,7 @@ static CallExpr *generateFastFollowCheckHelp(CallExpr *iterCall,
 
     leadSym = leadSE->symbol();
   }
-  
+
   const char *zipOp = NULL;
   if (strcmp(fnName, "chpl__canHaveFastFollowers") == 0) {
     zipOp = "||";
@@ -1295,7 +1314,7 @@ void static setupRecIterFields(ForallStmt* fs, CallExpr* parIterCall)
   DefExpr*   recIterICdef = new DefExpr(parIter);
   CallExpr*  recIterGetIterator  = new CallExpr("_getIterator", iterRec);
   CallExpr*  recIterFreeIterator = new CallExpr("_freeIterator", parIter);
-  
+
   CallExpr* initIterRec = new CallExpr(PRIM_MOVE, iterRec, parIterCall->copy());
   CallExpr* initParIter = new CallExpr(PRIM_MOVE, parIter, recIterGetIterator);
 
@@ -1403,7 +1422,7 @@ void resolveForallStmts2() {
     // If isTaskFun(parent), error is still reported in nonLeaderParCheckInt.
     if (parent->isIterator() && !parent->hasFlag(FLAG_INLINE_ITERATOR))
       USR_FATAL_CONT(fs, "invalid use of parallel construct in serial iterator");
-    
+
     convertIteratorForLoopexpr(fs);
   }
 }
@@ -1581,6 +1600,10 @@ static ForallStmt* doReplaceWithForall(ForLoop* src)
   return dest;
 }
 
+bool shouldReplaceForLoopWithForall(ForLoop *forLoop) {
+  return invokesParallelIterator(forLoop);
+}
+
 //
 // Replace a parallel ForLoop over a parallel iterator with a ForallStmt.
 // Otherwise we may get data races, ex. on shadow variable(s) 'sum' here:
@@ -1590,9 +1613,10 @@ static ForallStmt* doReplaceWithForall(ForLoop* src)
 //   }
 //
 Expr* replaceForWithForallIfNeeded(ForLoop* forLoop) {
-  if (!invokesParallelIterator(forLoop))
+  if (!shouldReplaceForLoopWithForall(forLoop)) {
     // Not a parallel for-loop. Leave it unchanged.
     return forLoop;
+  }
 
   // Yes, it is a parallel for-loop. Replace it.
   ForallStmt* fs = doReplaceWithForall(forLoop);

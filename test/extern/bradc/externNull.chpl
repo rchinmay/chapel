@@ -1,7 +1,7 @@
-use CPtr;
-extern type sPtr;
+use CTypes;
+extern type sPtr = c_ptr(opaque);
 extern proc getNullSPtr(): sPtr;
 extern proc getNonNullSPtr(): sPtr;
 
-writeln(is_c_nil(getNullSPtr()));
-writeln(is_c_nil(getNonNullSPtr()));
+writeln(getNullSPtr() == nil);
+writeln(getNonNullSPtr() == nil);

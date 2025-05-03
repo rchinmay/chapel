@@ -30,7 +30,7 @@ if length < 0 then
 // Domains
 const space = {0.. # length};
 const vectorDom = space dmapped if useBlockDist then
-                            new dmap(new Block(boundingBox=space)) else
+                            new blockDist(boundingBox=space) else
                             defaultDist;
 
 var A: [vectorDom] real,
@@ -50,7 +50,7 @@ A = 0.0;
 B = 2.0;
 C = 2.0;
 
-var timer = new Timer();
+var timer = new stopwatch();
 
 //
 // Main loop
@@ -70,9 +70,9 @@ timer.clear();
 //
 // Analyze and output results
 //
-if validate {
-  config const epsilon = 1.e-8;
+config const epsilon = 1.e-8;
 
+if validate {
   var aj=0.0, bj=2.0, cj=2.0;
   for 0..iterations do
     aj += bj+SCALAR*cj;

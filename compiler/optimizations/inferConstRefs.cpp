@@ -1,5 +1,5 @@
 /*
- * Copyright 2020-2022 Hewlett Packard Enterprise Development LP
+ * Copyright 2020-2025 Hewlett Packard Enterprise Development LP
  * Copyright 2004-2019 Cray Inc.
  * Other additional copyright holders may be indicated within.
  *
@@ -24,6 +24,8 @@
 #include "expr.h"
 #include "stmt.h"
 #include "stlUtil.h"
+
+#include "global-ast-vecs.h"
 
 //
 // This file implements the function 'inferConstRefs', which attempts to
@@ -238,6 +240,7 @@ static bool inferConstRef(Symbol*);
 static bool isSafeRefPrimitive(SymExpr* use) {
   CallExpr* call = toCallExpr(use->parentExpr);
   INT_ASSERT(call);
+  INT_ASSERT(call->isPrimitive());
 
   switch (call->primitive->tag) {
     case PRIM_ADDR_OF:
@@ -705,9 +708,10 @@ static bool inferRefToConst(Symbol* sym) {
     }
     else if (call->isResolved()) {
       isRefToConst = true;
-    }
-    else {
+    } else if (call->isPrimitive()) {
       isRefToConst = isSafeRefPrimitive(use);
+    } else {
+      INT_FATAL(call, "Unhandled call in '%s'", "inferRefToConst");
     }
   }
 

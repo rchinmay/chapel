@@ -1,16 +1,16 @@
 /*
- * Copyright 2020-2022 Hewlett Packard Enterprise Development LP
+ * Copyright 2020-2025 Hewlett Packard Enterprise Development LP
  * Copyright 2004-2019 Cray Inc.
  * Other additional copyright holders may be indicated within.
- * 
+ *
  * The entirety of this work is licensed under the Apache License,
  * Version 2.0 (the "License"); you may not use this file except
  * in compliance with the License.
- * 
+ *
  * You may obtain a copy of the License at
- * 
+ *
  *     http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -74,6 +74,7 @@ void chpl_mem_exit(void);
 
 int chpl_mem_inited(void);
 
+extern void* chpl_gpu_memmove(void* dest, const void* src, size_t num);
 
 static inline
 void* chpl_mem_allocMany(size_t number, size_t size,
@@ -116,7 +117,8 @@ static inline
 void* chpl_mem_realloc(void* memAlloc, size_t size,
                        chpl_mem_descInt_t description,
                        int32_t lineno, int32_t filename) {
-  void* moreMemAlloc;
+  void* newMemAlloc = NULL;
+  intptr_t oldMemAlloc = (intptr_t) memAlloc;
 
   chpl_memhook_realloc_pre(memAlloc, size, description,
                            lineno, filename);
@@ -125,10 +127,10 @@ void* chpl_mem_realloc(void* memAlloc, size_t size,
     chpl_free(memAlloc);
     return NULL;
   }
-  moreMemAlloc = chpl_realloc(memAlloc, size);
-  chpl_memhook_realloc_post(moreMemAlloc, memAlloc, size, description,
-                            lineno, filename);
-  return moreMemAlloc;
+  newMemAlloc = chpl_realloc(memAlloc, size);
+  chpl_memhook_realloc_post(newMemAlloc, oldMemAlloc,
+                            size, description, lineno, filename);
+  return newMemAlloc;
 }
 
 // assumes that alignment/boundary is:
@@ -161,12 +163,6 @@ void* chpl_memcpy(void* dest, const void* src, size_t num)
 {
   assert(dest != src || num == 0);
   return memcpy(dest, src, num);
-}
-
-static inline
-void* chpl_memmove(void* dest, const void* src, size_t num)
-{
-  return memmove(dest, src, num);
 }
 
 // Query the allocator to ask for a good size to allocate that is at least

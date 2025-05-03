@@ -8,6 +8,9 @@ PREFIX=""
 # (to mirror release / source checkout)
 DEST_DIR=""
 
+# set MAKE=make if it is not set yet
+: "${MAKE:=make}"
+
 # Argument parsing
 for arg in "$@"
 do
@@ -15,7 +18,10 @@ do
     #e.g. -s|--short)
     --stage=*)
       STAGE="${arg#*=}"
-      STAGE_SET=1
+      if [ ! -z $STAGE ]
+      then
+        STAGE_SET=1
+      fi
       shift
       ;;
     *)
@@ -53,10 +59,7 @@ fi
 if [ ! -z "$PREFIX" ]
 then
   PREFIX="${STAGE}${PREFIX}"
-  if [ "$STAGE_SET" -ne 0 ]
-  then
-    mkdir -p "$PREFIX"
-  fi
+  mkdir -p "$PREFIX"
   if [ ! -d "$PREFIX" ]
   then
     echo "Exiting: Installation prefix path '$PREFIX' does not exist"
@@ -67,10 +70,8 @@ else
   then
     read -r DEST_DIR < "$CHPL_HOME/configured-chpl-home"
     DEST_DIR="${STAGE}${DEST_DIR}"
-    if [ "$STAGE_SET" -ne 0 ]
-    then
-      mkdir -p "$DEST_DIR"
-    fi
+    mkdir -p "$DEST_DIR"
+
     if [ ! -d "$DEST_DIR" ]
     then
       echo "Exiting: Installation dest path '$DEST_DIR' does not exist"
@@ -105,6 +106,12 @@ esac
 CHPL_PYTHON=`"$CHPL_HOME"/util/config/find-python.sh`
 CHPL_BIN_SUBDIR=`"$CHPL_PYTHON" "$CHPL_HOME"/util/chplenv/chpl_bin_subdir.py`
 VERS=`$CHPL_HOME/bin/$CHPL_BIN_SUBDIR/chpl --version`
+if [ $? -ne 0 ]
+then
+  echo "Error: failed to run chpl --version; Have you already built the compiler using make?"
+  echo "       If not, please run 'make' before running this script."
+  exit -1
+fi
 # Remove the "chpl version " part
 VERS=${VERS#chpl version }
 # Replace the periods with spaces.
@@ -120,6 +127,7 @@ then
   DEST_RUNTIME_LIB="$PREFIX/lib/chapel/$VERS/runtime/lib"
   DEST_RUNTIME_INCL="$PREFIX/lib/chapel/$VERS/runtime/include"
   DEST_THIRD_PARTY="$PREFIX/lib/chapel/$VERS/third-party"
+  DEST_CMAKE_LIB="$PREFIX/lib/cmake/chpl"
   DEST_CHPL_HOME="$PREFIX/share/chapel/$VERS"
   echo "Installing Chapel split to bin, lib, share to $PREFIX"
   if [ "$CHPL_HOME" = "$PREFIX" ]
@@ -133,6 +141,7 @@ else
   DEST_RUNTIME_LIB="$DEST_DIR/lib"
   DEST_RUNTIME_INCL="$DEST_DIR/runtime/include"
   DEST_THIRD_PARTY="$DEST_DIR/third-party"
+  DEST_CMAKE_LIB="$DEST_DIR/lib/cmake/chpl"
   DEST_CHPL_HOME="$DEST_DIR"
   echo "Installing Chapel-as-a-directory to $DEST_DIR"
   if [ "$CHPL_HOME" = "$DEST_DIR" ]
@@ -232,20 +241,15 @@ myinstallfileto () {
   fi
 }
 
+# this makefile target runs 'cmake' to install the compiler library, 'chpl',
+# and optionally 'chpldoc' if it was built
+(cd compiler && "$MAKE" install-chpl-chpldoc)
 
-# copy chpl
-if [ ! -z "$PREFIX" ]
-then
-  # TODO -- handle chpldoc
-  #   these are symbol links to chpl
-  myinstallfile "bin/$CHPL_BIN_SUBDIR"/chpl "$PREFIX/bin"
-else
-  tmp_bin_dir="bin/$CHPL_BIN_SUBDIR"
-  myinstallfile "$tmp_bin_dir"/chpl "$DEST_DIR/$tmp_bin_dir"
-fi
 
-# copy runtime lib
+# copy compiler and runtime lib
 myinstalldir  lib                     "$DEST_RUNTIME_LIB"
+# copy cmake files to the cmake lib directory
+myinstalldir  lib/cmake/chpl          "$DEST_CMAKE_LIB"
 
 # copy runtime include
 myinstalldir  runtime/include         "$DEST_RUNTIME_INCL"
@@ -302,7 +306,7 @@ cd ..
 
 for dir in $THIRD_PARTY_DIRS
 do
-  #echo "Considering 3p dir $dir"
+  # copy Makefiles (which are used by the C backend)
   for f in third-party/"$dir"/Makefile*
   do
     if [ -f "$f" ]
@@ -310,9 +314,18 @@ do
       myinstallfile "$f"  "$DEST_THIRD_PARTY"/"$dir"
     fi
   done
+
+  # copy any installed libraries
   if [ -d third-party/"$dir"/install ]
   then
     myinstalldir "third-party/$dir/install" "$DEST_THIRD_PARTY/$dir/install/"
+  fi
+
+  # chpl-venv also needs to copy chpldoc-sphinx-project
+  # but this never contains executables so should go in DEST_CHPL_HOME
+  if [ -d third-party/"$dir"/chpldoc-sphinx-project ]
+  then
+    myinstalldir "third-party/$dir/chpldoc-sphinx-project" "$DEST_CHPL_HOME/third-party/$dir/chpldoc-sphinx-project/"
   fi
 done
 
@@ -322,27 +335,78 @@ myinstallfile third-party/llvm/filter-llvm-config.awk "$DEST_THIRD_PARTY"/llvm
 # copy utf8-decoder header
 myinstallfile third-party/utf8-decoder/utf8-decoder.h "$DEST_THIRD_PARTY"/utf8-decoder/
 
+
+MASON="bin/$CHPL_BIN_SUBDIR"/mason
+
 # copy mason
-if [ -f tools/mason/mason ]
+if [ -f "$MASON" ]
 then
   if [ ! -z "$PREFIX" ]
   then
-    myinstallfile tools/mason/mason "$PREFIX/bin"
+    myinstallfile "$MASON" "$PREFIX/bin"
   else
-    myinstallfile tools/mason/mason "$DEST_CHPL_HOME/tools/mason"
+    myinstallfile "$MASON" "$DEST_CHPL_HOME/tools/mason"
     ln -s "$DEST_CHPL_HOME/tools/mason/mason" "$DEST_DIR/bin/$CHPL_BIN_SUBDIR"/mason
+  fi
+fi
+
+C2CHAPEL="bin/$CHPL_BIN_SUBDIR"/c2chapel
+
+# copy c2chapel
+if [ -f "$C2CHAPEL" ]
+then
+  myinstalldir "tools/c2chapel/install" "$DEST_CHPL_HOME/tools/c2chapel/install"
+  myinstallfile "tools/c2chapel/c2chapel" "$DEST_CHPL_HOME/tools/c2chapel"
+  myinstallfile "tools/c2chapel/c2chapel.py" "$DEST_CHPL_HOME/tools/c2chapel"
+  myinstallfile "tools/c2chapel/utils/custom.h" "$DEST_CHPL_HOME/tools/c2chapel/util"
+
+  if [ ! -z "$PREFIX" ]
+  then
+    ln -s "$DEST_CHPL_HOME/tools/c2chapel/c2chapel" "$PREFIX/bin"/c2chapel
+  else
+    ln -s "$DEST_CHPL_HOME/tools/c2chapel/c2chapel" "$DEST_DIR/bin/$CHPL_BIN_SUBDIR"/c2chapel
+  fi
+fi
+
+CHPLCHECK="bin/$CHPL_BIN_SUBDIR"/chplcheck
+
+# copy chplcheck
+if [ -f "$CHPLCHECK" ]
+then
+  myinstallfile "tools/chplcheck/chplcheck" "$DEST_CHPL_HOME/tools/chplcheck"
+  myinstalldir "tools/chplcheck/src" "$DEST_CHPL_HOME/tools/chplcheck/src"
+
+  if [ ! -z "$PREFIX" ]
+  then
+    ln -s "$DEST_CHPL_HOME/tools/chplcheck/chplcheck" "$PREFIX/bin"/chplcheck
+  else
+    ln -s "$DEST_CHPL_HOME/tools/chplcheck/chplcheck" "$DEST_DIR/bin/$CHPL_BIN_SUBDIR"/chplcheck
+  fi
+fi
+
+CHPL_LANGUAGE_SERVER="bin/$CHPL_BIN_SUBDIR"/chpl-language-server
+
+# copy chpl-language-server
+if [ -f "$CHPL_LANGUAGE_SERVER" ]
+then
+  myinstallfile "tools/chpl-language-server/chpl-language-server" "$DEST_CHPL_HOME/tools/chpl-language-server"
+  myinstallfile "tools/chpl-language-server/chpl-shim" "$DEST_CHPL_HOME/tools/chpl-language-server"
+  myinstalldir "tools/chpl-language-server/src" "$DEST_CHPL_HOME/tools/chpl-language-server/src"
+
+  if [ ! -z "$PREFIX" ]
+  then
+    ln -s "$DEST_CHPL_HOME/tools/chpl-language-server/chpl-language-server" "$PREFIX/bin"/chpl-language-server
+    ln -s "$DEST_CHPL_HOME/tools/chpl-language-server/chpl-shim" "$PREFIX/bin"/chpl-shim
+  else
+    ln -s "$DEST_CHPL_HOME/tools/chpl-language-server/chpl-language-server" "$DEST_DIR/bin/$CHPL_BIN_SUBDIR"/chpl-language-server
+    ln -s "$DEST_CHPL_HOME/tools/chpl-language-server/chpl-shim" "$DEST_DIR/bin/$CHPL_BIN_SUBDIR"/chpl-shim
   fi
 fi
 
 # copy chplconfig
 if [ -f chplconfig ]
 then
-  if [ ! -z "$PREFIX" ]
-  then
-    myinstallfileto chplconfig "$PREFIX/lib/chapel/$VERS/chplconfig"
-  else
-    myinstallfileto chplconfig "$DEST_CHPL_HOME/chplconfig"
-  fi
+  myinstallfileto chplconfig "$DEST_CHPL_HOME/chplconfig"
 fi
 
 # Clean up: remove any .pyc files

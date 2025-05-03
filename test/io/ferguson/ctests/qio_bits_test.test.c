@@ -37,7 +37,7 @@ void check_bits(int offset, int padding)
   err = qio_file_open_tmp(&f, 0, NULL);
   assert(!err);
 
-  err = qio_channel_create(&writing, f, 0, 0, 1, 0, INT64_MAX, NULL);
+  err = qio_channel_create(&writing, f, 0, 0, 1, 0, INT64_MAX, NULL, 0);
   assert(!err);
 
   for( i = 0; i < offset; i++ ) {
@@ -73,7 +73,7 @@ void check_bits(int offset, int padding)
   qio_channel_release(writing);
 
   // Read the data a byte at a time.
-  err = qio_channel_create(&reading, f, 0, 1, 0, 0, INT64_MAX, NULL);
+  err = qio_channel_create(&reading, f, 0, 1, 0, 0, INT64_MAX, NULL, 0);
   assert(!err);
 
   for( i = 0; i < offset; i++ ) {
@@ -103,7 +103,7 @@ void check_bits(int offset, int padding)
   qio_channel_release(reading);
 
   // Read the data with the binary reader.
-  err = qio_channel_create(&reading, f, 0, 1, 0, 0, INT64_MAX, NULL);
+  err = qio_channel_create(&reading, f, 0, 1, 0, 0, INT64_MAX, NULL, 0);
   assert(!err);
 
   for( i = 0; i < offset; i++ ) {
@@ -130,17 +130,17 @@ void check_bits(int offset, int padding)
     err = qio_channel_read_amt(true, reading, &got, 1);
     assert(!err);
     assert( got == 0xff );
-  
+ 
     b = 0;
     err = qio_channel_read_bits(true, reading, &b, 3);
     assert(!err);
     assert( b == 2 );
- 
+
     got = 0;
     err = qio_channel_read_amt(true, reading, &got, 1);
     assert(!err);
     assert( got == 0xff );
- 
+
     b = 0;
     err = qio_channel_read_bits(true, reading, &b, 3);
     assert(!err);
@@ -223,7 +223,7 @@ void check_write_read_pat(int width, int num, int pat, qio_chtype_t type, qio_hi
     }
   }
 
-  err = qio_channel_create(&writing, f, ch_hints, 0, 1, 0, INT64_MAX, NULL);
+  err = qio_channel_create(&writing, f, ch_hints, 0, 1, 0, INT64_MAX, NULL, 0);
   assert(!err);
 
   for( int i = 0; i < num; i++ ) {
@@ -250,7 +250,7 @@ void check_write_read_pat(int width, int num, int pat, qio_chtype_t type, qio_hi
     err = qio_file_open_access(&f, filename, "r", file_hints, NULL);
     assert(!err);
   }
-  // Rewind the file 
+  // Rewind the file
   if( !memory ) {
     off_t off;
 
@@ -260,7 +260,7 @@ void check_write_read_pat(int width, int num, int pat, qio_chtype_t type, qio_hi
 
 
 
-  err = qio_channel_create(&reading, f, ch_hints, 1, 0, 0, INT64_MAX, NULL);
+  err = qio_channel_create(&reading, f, ch_hints, 1, 0, 0, INT64_MAX, NULL, 0);
   assert(!err);
 
   for( int i = 0; i < num; i++ ) {
@@ -307,15 +307,6 @@ int main(int argc, char** argv)
   int file_hint, ch_hint;
 
   {
-    //for( file_hint = 0; file_hint < nhints; file_hint++ ) {
-    //  check_write_read_pat(1, 262144, 0, 0, file_hint, file_hint, 0);
-    //}
-
-    //check_write_read_pat(32,4096,0,3,QIO_METHOD_PREADPWRITE,0,1);
-    //check_write_read_pat(32,4096,0,3,0,0,1);
-    //exit(0);
-//check_write_read_pat(width=32, num=4096, pat=0, type=3, file_hints=default_type default, ch_hints=buffered default, reopen=1)
-
     // Run unit tests.
     for( offset = 0; offset < 63; offset++ ) {
       for( padding = 0; padding < 63; padding++ ) {
@@ -323,10 +314,8 @@ int main(int argc, char** argv)
       }
     }
 
-    maxlogn = 19;
-    if( valgrind ) maxlogn = 10;
-
-    for( logn = 0; logn < maxlogn; logn+=9 ) {
+    // do some small tests in a lot of configurations
+    for( logn = 0; logn < 4; logn+=3 ) {
       for( width = 1; width <= 64; width++ ) {
         for( file_hint = 0; file_hint < nhints; file_hint++ ) {
           ch_hint = file_hint;
@@ -334,6 +323,18 @@ int main(int argc, char** argv)
           check_write_read_pat(width,1 << logn,0,type,file_hint,ch_hint,0);
           check_write_read_pat(width,1 << logn,1,type,file_hint,ch_hint,1);
         }
+      }
+    }
+
+    // do a bigger run with more data and smaller size
+    if (!valgrind) {
+      int size = 1 << 25;
+      width = 61;  // totals to about 56 MB
+      for( file_hint = 0; file_hint < nhints; file_hint++ ) {
+        ch_hint = file_hint;
+        type = 0;
+        check_write_read_pat(width,1 << logn,0,type,file_hint,ch_hint,0);
+        check_write_read_pat(width,1 << logn,1,type,file_hint,ch_hint,1);
       }
     }
   }
@@ -350,7 +351,7 @@ int main(int argc, char** argv)
     uint64_t got;
     uint64_t expect;
     qioerr err;
-    
+   
 
     //qbytes_iobuf_size = 256;
 
@@ -359,7 +360,7 @@ int main(int argc, char** argv)
     //err = qio_file_open_access(&f, "test.bin", "w+", 0, NULL);
     //assert(!err);
 
-    err = qio_channel_create(&writing, f, 0, 0, 1, 0, INT64_MAX, NULL);
+    err = qio_channel_create(&writing, f, 0, 0, 1, 0, INT64_MAX, NULL, 0);
     assert(!err);
 
     for( i = 0; i < n; i++ ) {
@@ -371,7 +372,7 @@ int main(int argc, char** argv)
     qio_channel_release(writing);
 
     if( argc > 2 ) {
-      err = qio_channel_create(&reading, f, 0, 1, 0, 0, INT64_MAX, NULL);
+      err = qio_channel_create(&reading, f, 0, 1, 0, 0, INT64_MAX, NULL, 0);
       assert(!err);
 
       for( i = 0; i < n; i++ ) {

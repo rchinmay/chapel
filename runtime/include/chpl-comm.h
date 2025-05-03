@@ -1,16 +1,16 @@
 /*
- * Copyright 2020-2022 Hewlett Packard Enterprise Development LP
+ * Copyright 2020-2025 Hewlett Packard Enterprise Development LP
  * Copyright 2004-2019 Cray Inc.
  * Other additional copyright holders may be indicated within.
- * 
+ *
  * The entirety of this work is licensed under the Apache License,
  * Version 2.0 (the "License"); you may not use this file except
  * in compliance with the License.
- * 
+ *
  * You may obtain a copy of the License at
- * 
+ *
  *     http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -155,6 +155,9 @@ void chpl_comm_wait_nb_some(chpl_comm_nb_handle_t* h, size_t nhandles);
 // detected.
 int chpl_comm_try_nb_some(chpl_comm_nb_handle_t* h, size_t nhandles);
 
+// Free a handle returned by chpl_comm_*_nb.
+void chpl_comm_free_nb_handle(chpl_comm_nb_handle_t h);
+
 // Returns whether or not the passed wide address is known to be in
 // a communicable memory region and known to be readable. That is,
 // GET to that address should succeed without an access violation
@@ -185,17 +188,25 @@ int chpl_comm_addr_gettable(c_nodeid_t node, void* start, size_t len);
 int32_t chpl_comm_getMaxThreads(void);
 
 
+void chpl_comm_pre_topo_init(int *argc_p, char ***argv_p);
+
 //
-// initializes the communications package
-//   set chpl_nodeID and chpl_numNodes
+// initializes the communications layer after topo layer initialization
+//
 // notes:
 //   * Called with the argc/argv pair passed to main()
-//
 void chpl_comm_init(int *argc_p, char ***argv_p);
 
 //
-// Allow the communication layer to do any secondary initialization it needs
-// to, after the memory layer is initialized.
+// Allow the communication layer to do any additional initialization
+// after the topology layer has been fully initialized but before the
+// memory layer is initialized.
+//
+void chpl_comm_pre_mem_init(void);
+
+//
+// Allow the communication layer to do any additional initialization
+// after the memory layer is initialized.
 //
 void chpl_comm_post_mem_init(void);
 
@@ -415,7 +426,7 @@ static inline void chpl_comm_barrier(const char *msg) {
     return;
   }
 
-  chpl_rmem_consist_fence(memory_order_seq_cst, 0, 0);
+  chpl_rmem_consist_fence(chpl_memory_order_seq_cst, 0, 0);
   chpl_comm_impl_barrier(msg);
 }
 
@@ -540,6 +551,12 @@ void chpl_comm_execute_on_fast(c_nodeid_t node, c_sublocid_t subloc,
                                int ln, int32_t fn);
 
 //
+// Ensure that the communication layer makes progress if there are any
+// outstanding non-blocking operations.
+//
+void chpl_comm_ensure_progress(void);
+
+//
 // Hook to ensure remote memory consistency after unordered operations.
 //
 #ifndef CHPL_COMM_IMPL_UNORDERED_TASK_FENCE
@@ -581,17 +598,24 @@ void* chpl_get_global_serialize_table(int64_t idx);
 void chpl_signal_shutdown(void);
 void chpl_wait_for_shutdown(void);
 
-// Sets the number of locales on the local node and determines if the node is 
-// oversubscribed. 
+// Sets the number of locales on the local node.
 void chpl_set_num_locales_on_node(int32_t count);
 
 // Returns the number of locales on the local node.
-
 int32_t chpl_get_num_locales_on_node(void);
 
-// Returns true if node is oversubscribed, false otherwise.
+// Sets our local rank on the node.
+void chpl_set_local_rank(int32_t rank);
 
-chpl_bool chpl_get_oversubscribed(void);
+// Returns our local rank on the node, -1 if chpl_set_local_rank has
+// not been called.
+int32_t chpl_get_local_rank(void);
+
+// Sets the number of colocales on the local node.
+void chpl_set_num_colocales_on_node(int32_t count);
+
+// Returns the number of colocales on the local node.
+int32_t chpl_get_num_colocales_on_node(void);
 
 #ifdef __cplusplus
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright 2020-2022 Hewlett Packard Enterprise Development LP
+ * Copyright 2020-2025 Hewlett Packard Enterprise Development LP
  * Copyright 2004-2019 Cray Inc.
  * Other additional copyright holders may be indicated within.
  *
@@ -19,7 +19,8 @@
  */
 
 
-/*
+/* Support for a lock-free Treiber stack.
+
   .. warning::
 
     This module relies on the :mod:`AtomicObjects` package module, which
@@ -27,13 +28,10 @@
 
       - It relies on Chapel ``extern`` code blocks and so requires that
         the Chapel compiler is built with LLVM enabled.
-      - Currently only ``CHPL_TARGET_ARCH=x86_64`` is supported as it uses
-        the x86-64 instruction: CMPXCHG16B_.
-      - The implementation relies on ``GCC`` style inline assembly, and so
-        is restricted to a ``CHPL_TARGET_COMPILER`` value of ``gnu``,
-        ``clang``, or ``llvm``.
-
-    .. _CMPXCHG16B: https://www.felixcloutier.com/x86/cmpxchg8b:cmpxchg16b
+      - The implementation relies on using either ``GCC`` style inline assembly
+        (for x86-64) or a GCC/clang builtin, and so is restricted to a
+        ``CHPL_TARGET_COMPILER`` value of ``gnu``, ``clang``, or ``llvm``.
+      - The implementation does not work with ``CHPL_ATOMICS=locks``.
 
   An implementation of the Treiber Stack [#]_, a lock-free stack. Concurrent safe
   memory reclamation is handled by an internal :record:`EpochManager`. Usage of the
@@ -91,7 +89,7 @@
         n += 1;
         if n % GC_THRESHOLD == 0 then lfs.tryReclaim();
       }
-    } 
+    }
 
   Also provided, is a utility method for draining the stack of all elements,
   called ``drain``. This iterator will implicitly call ``tryReclaim`` at the
@@ -102,9 +100,9 @@
     var lfs = new LockFreeStack(int);
     forall i in 1..N with (var tok = lfs.getToken()) do lfs.push(i,tok);
     var total = + reduce lfs.drain();
-  
-  .. [#] Hendler, Danny, Nir Shavit, and Lena Yerushalmi. 
-      "A scalable lock-free stack algorithm." Proceedings of the sixteenth annual 
+
+  .. [#] Hendler, Danny, Nir Shavit, and Lena Yerushalmi.
+      "A scalable lock-free stack algorithm." Proceedings of the sixteenth annual
       ACM symposium on Parallelism in algorithms and architectures. ACM, 2004.
 */
 module LockFreeStack {
@@ -131,10 +129,16 @@ module LockFreeStack {
     var _top : AtomicObject(unmanaged Node(objType)?, hasGlobalSupport=true, hasABASupport=false);
     var _manager = new owned LocalEpochManager();
 
-    proc objTypeOpt type return toNilableIfClassType(objType);
+    proc objTypeOpt type do return toNilableIfClassType(objType);
 
     proc init(type objType) {
       this.objType = objType;
+    }
+    proc deinit() {
+      drain();
+      if var top = _top.read() {
+        delete top;
+      }
     }
 
     proc getToken() : owned TokenWrapper {
@@ -148,9 +152,9 @@ module LockFreeStack {
       do {
         var oldTop = _top.read();
         n.next = oldTop;
-        if shouldYield then chpl_task_yield();
+        if shouldYield then currentTask.yieldExecution();
         shouldYield = true;
-      } while (!_top.compareAndSwap(oldTop, n));
+      } while !_top.compareAndSwap(oldTop, n);
       tok.unpin();
     }
 
@@ -160,15 +164,15 @@ module LockFreeStack {
       var shouldYield = false;
       do {
         oldTop = _top.read();
-        if (oldTop == nil) {
+        if oldTop == nil {
           tok.unpin();
           var retval : objType;
           return (false, retval);
         }
         var newTop = oldTop!.next;
-        if shouldYield then chpl_task_yield();
+        if shouldYield then currentTask.yieldExecution();
         shouldYield = true;
-      } while (!_top.compareAndSwap(oldTop, newTop));
+      } while !_top.compareAndSwap(oldTop, newTop);
       var retval = oldTop!.val;
       tok.deferDelete(oldTop);
       tok.unpin();
@@ -186,7 +190,7 @@ module LockFreeStack {
     }
 
     iter drain(param tag : iterKind) : objTypeOpt where tag == iterKind.standalone {
-      coforall tid in 1..here.maxTaskPar {
+      coforall 1..here.maxTaskPar {
         var tok = getToken();
         var (hasElt, elt) = pop(tok);
         while hasElt {

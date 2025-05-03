@@ -1,5 +1,5 @@
 /*
- * Copyright 2020-2022 Hewlett Packard Enterprise Development LP
+ * Copyright 2020-2025 Hewlett Packard Enterprise Development LP
  * Other additional copyright holders may be indicated within.
  *
  * The entirety of this work is licensed under the Apache License,
@@ -23,10 +23,10 @@
   Treap supports insertion, deletion, query in O(lgN).
 
   .. note::
-    Generally, users don't have to directly use this module. The methods of a treap 
+    Generally, users don't have to directly use this module. The methods of a treap
     are available for an sortedSet. This page is for reference.
 */
-pragma "no doc"
+@chpldoc.nodoc
 module Treap {
   import ChapelLocks;
   private use HaltWrappers;
@@ -36,21 +36,21 @@ module Treap {
   private use Reflection;
   private use SortedSet only sortedSet;
 
-  pragma "no doc"
+  @chpldoc.nodoc
   private param _sanityChecks = false;
 
   // The locker is borrowed from List.chpl
-  // 
+  //
   // We can change the lock type later. Use a spinlock for now.
   //
-  pragma "no doc"
+  @chpldoc.nodoc
   type _lockType = ChapelLocks.chpl_LocalSpinlock;
 
   //
   // Use a wrapper class to let heap methods have a const ref receiver even
   // when `parSafe` is `true` and the sortedSet lock is used.
   //
-  pragma "no doc"
+  @chpldoc.nodoc
   class _LockWrapper {
     var lock$ = new _lockType();
 
@@ -63,18 +63,18 @@ module Treap {
     }
   }
 
-  pragma "no doc"
-  var _treapRandomStream = new RandomStream(int);
+  @chpldoc.nodoc
+  var _treapRandomStream = new randomStream(int);
 
   /*
     Helper procedure to get one random int
   */
-  pragma "no doc"
+  @chpldoc.nodoc
   proc _random(): int {
-    return _treapRandomStream.getNext();
+    return _treapRandomStream.next();
   }
 
-  pragma "no doc"
+  @chpldoc.nodoc
   proc _checkType(type t) {
     if isGenericType(t) {
       compilerError('creating an treap with element type ' + t:string
@@ -84,7 +84,7 @@ module Treap {
         compilerError('treap does not support owned class type: ' + t:string, 2);
   }
 
-  pragma "no doc"
+  @chpldoc.nodoc
   class _treapNode {
     type eltType;
     var element: eltType;
@@ -129,7 +129,7 @@ module Treap {
     }
   }
 
-  record treap {
+  record treap : writeSerializable {
     /* The type of the elements contained in this sortedSet.*/
     type eltType;
 
@@ -139,15 +139,15 @@ module Treap {
     /* The comparator to use for comparing elements */
     var comparator;
 
-    pragma "no doc"
+    @chpldoc.nodoc
     type nodeType = unmanaged _treapNode(eltType)?;
-    pragma "no doc"
+    @chpldoc.nodoc
     var _root: nodeType = nil;
 
-    pragma "no doc"
+    @chpldoc.nodoc
     var _lock$ = if parSafe then new _LockWrapper() else none;
 
-    pragma "no doc"
+    @chpldoc.nodoc
     inline proc _enter() {
       if parSafe then
         on this {
@@ -155,7 +155,7 @@ module Treap {
         }
     }
 
-    pragma "no doc"
+    @chpldoc.nodoc
     inline proc _leave() {
       if parSafe then
         on this {
@@ -163,7 +163,7 @@ module Treap {
         }
     }
 
-    pragma "no doc"
+    @chpldoc.nodoc
     proc deinit() {
       if _root != nil {
         delete _root;
@@ -193,7 +193,8 @@ module Treap {
       :arg parSafe: If `true`, this sortedSet will use parallel safe operations.
       :arg comparator: The comparator used to compare elements.
     */
-    proc init(type eltType, param parSafe = false, comparator: record = defaultComparator) {
+    proc init(type eltType, param parSafe = false,
+              comparator: record = new defaultComparator()) {
       _checkType(eltType);
       this.eltType = eltType;
       this.parSafe = parSafe;
@@ -210,14 +211,15 @@ module Treap {
       :arg parSafe: If `true`, this sortedSet will use parallel safe operations.
       :arg comparator: The comparator used to compare elements.
     */
-    proc init(type eltType, iterable, param parSafe = false, comparator: record = defaultComparator)
+    proc init(type eltType, iterable, param parSafe = false,
+              comparator: record = new defaultComparator())
     where canResolveMethod(iterable, "these") lifetime this < iterable {
-      _checkType(eltType); 
+      _checkType(eltType);
 
       this.eltType = eltType;
       this.parSafe = parSafe;
       this.comparator = comparator;
-      this.complete();
+      init this;
 
       for elem in iterable do _add(elem);
     }
@@ -225,8 +227,8 @@ module Treap {
     /*
       Inorder traversal for output
     */
-    pragma "no doc"
-    proc const _inorderVisit(node: nodeType, ch: channel) throws {
+    @chpldoc.nodoc
+    proc const _inorderVisit(node: nodeType, ch: fileWriter) throws {
       if node == nil {
         return;
       }
@@ -241,14 +243,14 @@ module Treap {
     /*
       Visit and output elements in order
     */
-    pragma "no doc"
-    proc const _visit(ch: channel) throws {
+    @chpldoc.nodoc
+    proc const _visit(ch: fileWriter) throws {
       ch.write('[ ');
       _inorderVisit(_root, ch);
       ch.write(']');
     }
 
-    pragma "no doc"
+    @chpldoc.nodoc
     proc ref _add(in x: eltType) lifetime this < x {
       _insert(_root, x, nil);
     }
@@ -268,7 +270,7 @@ module Treap {
       _leave();
     }
 
-    pragma "no doc"
+    @chpldoc.nodoc
     proc const _contains(const ref x: eltType): bool {
       return _find(_root, x) != nil;
     }
@@ -285,7 +287,7 @@ module Treap {
       var result = false;
 
       on this {
-        _enter(); 
+        _enter();
         result = _contains(x);
         _leave();
       }
@@ -298,7 +300,7 @@ module Treap {
       Note that it's not robust and should be called with care to avoid
       invalidating the tree. All it does is simply linking.
     */
-    pragma "no doc"
+    @chpldoc.nodoc
     proc _link(x: nodeType, y: nodeType, pos: int) {
       if x != nil then
         x!.parent = y;
@@ -313,14 +315,14 @@ module Treap {
 
       Note that the rotation will change the value of node passed in.
     */
-    pragma "no doc"
+    @chpldoc.nodoc
     proc _rotate(ref node: nodeType, pos: int) {
       var child = node!.children[pos];
       var parent = node!.parent;
 
       _link(child!.children[pos^1], node, pos);
       _link(node, child, pos^1);
-      
+
 
       // Update the size field.
       node!.update();
@@ -333,7 +335,7 @@ module Treap {
     /*
       Helper procedure to locate a certain node
     */
-    pragma "no doc"
+    @chpldoc.nodoc
     proc const _find(const node: nodeType, element: eltType): nodeType
     lifetime return node {
       if node == nil then return node;
@@ -347,7 +349,7 @@ module Treap {
       Helper procedure to locate a certain node
       Returns a ref to the node
     */
-    pragma "no doc"
+    @chpldoc.nodoc
     proc _findRef(ref node: nodeType, element: eltType) ref: nodeType
     lifetime return node {
       if node == nil then return node;
@@ -357,34 +359,34 @@ module Treap {
       else return _findRef(node!.children[1], element);
     }
 
-    /* Given one element, return the reference to the element in the sortedSet, 
+    /* Given one element, return the reference to the element in the sortedSet,
        which equals to the former in the perspective of the comparator.
 
        This procedure could halt when there is no hit.
 
        Used by sortedMap
      */
-    pragma "no doc"
-    proc _getReference(element: eltType) ref {
+    @chpldoc.nodoc
+    proc ref _getReference(element: eltType) ref {
       var node = _findRef(_root, element);
       if node == nil then
-        boundsCheckHalt("index " + element:string + " out of bounds");
+        boundsCheckHalt(try! "index %? out of bounds".format(element));
       ref result = node!.element;
       return result;
     }
 
-    /* Given one element, return the element in the sortedSet, which equals to the 
+    /* Given one element, return the element in the sortedSet, which equals to the
        former in the perspective of the comparator.
 
        This procedure could halt when there is no hit.
 
        Used by sortedMap
      */
-    pragma "no doc"
+    @chpldoc.nodoc
     proc const _getValue(element: eltType) const {
       var node = _find(_root, element);
       if node == nil then
-        boundsCheckHalt("index " + element:string + " out of bounds");
+        boundsCheckHalt(try! "index %? out of bounds".format(element));
       var result = node!.element;
       return result;
     }
@@ -392,12 +394,12 @@ module Treap {
     /*
       Compare wrapper
     */
-    pragma "no doc"
+    @chpldoc.nodoc
     proc const _compare(x: eltType, y: eltType) {
       return chpl_compare(x, y, comparator);
     }
 
-    pragma "no doc"
+    @chpldoc.nodoc
     proc ref _insert(ref node: nodeType, element: eltType, parent: nodeType): bool {
       if node == nil {
         node = new nodeType(element, _random(), 1, parent);
@@ -417,7 +419,7 @@ module Treap {
       }
     }
 
-    pragma "no doc"
+    @chpldoc.nodoc
     proc ref _remove(ref node: nodeType, const ref x: eltType): bool {
       if node == nil then return false;
       var cmp = _compare(x, node!.element);
@@ -507,13 +509,13 @@ module Treap {
       if direction is 0, return predecessor
       else if 1, return successor
     */
-    pragma "no doc"
+    @chpldoc.nodoc
     proc _neighbor(in node: nodeType, in direction: int) {
       // Assuming direction is 1, we're finding the successor
       if node == nil then return nil;
       if node!.children[direction] {
         // node has right child,
-        // find the leftmost node in its right child tree 
+        // find the leftmost node in its right child tree
         node = node!.children[direction];
         direction ^= 1;
         while node != nil && node!.children[direction] != nil {
@@ -532,7 +534,7 @@ module Treap {
       }
     }
 
-    pragma "no doc"
+    @chpldoc.nodoc
     proc const _lower_bound(node: nodeType, e: eltType): nodeType {
       if node == nil then return nil;
       var cmp = _compare(e, node!.element);
@@ -545,7 +547,7 @@ module Treap {
       else return _lower_bound(node!.children[1], e);
     }
 
-    pragma "no doc"
+    @chpldoc.nodoc
     proc const _upper_bound(node: nodeType, e: eltType): nodeType {
       if node == nil then return nil;
       var cmp = _compare(e, node!.element);
@@ -573,7 +575,7 @@ module Treap {
         compilerError("lowerBound is not available on types that can't be \
                       default-initialized, here: " + eltType: string);
       }
-      
+
       _enter(); defer _leave();
 
       var node = _lower_bound(_root, e);
@@ -643,7 +645,7 @@ module Treap {
       }
       return result;
     }
-    
+
     /*
       Find the successor of one element in the sortedSet.
 
@@ -680,7 +682,7 @@ module Treap {
     }
 
     /* Implementation for the `kth` procedure, without acquiring the lock */
-    pragma "no doc"
+    @chpldoc.nodoc
     proc _kth(node: nodeType, in k: int): nodeType {
       if node == nil then return nil;
 
@@ -725,7 +727,7 @@ module Treap {
       :rtype: `(bool, eltType)`
     */
     proc const kth(k: int): (bool, eltType) {
-      if !isDefaultInitializable(e) {
+      if !isDefaultInitializable(eltType) {
         compilerError("kth is not available on types that can't be \
                       default-initialized, here: " + eltType: string);
       }
@@ -743,7 +745,7 @@ module Treap {
     /*
       Returns the minimal element in the tree
     */
-    pragma "no doc"
+    @chpldoc.nodoc
     proc _first() {
       var node = _root;
       while node != nil && node!.children[0] != nil {
@@ -761,7 +763,7 @@ module Treap {
         Modifying this sortedSet while iterating over it may invalidate the
         references returned by an iterator and is considered undefined
         behavior.
-      
+
       :yields: A constant reference to an element in this sortedSet.
     */
     iter const these() {
@@ -799,7 +801,7 @@ module Treap {
 
       return result;
     }
-    
+
     /*
       Returns `true` if this sortedSet and `other` have at least one element in
       common, and `false` otherwise.
@@ -813,13 +815,11 @@ module Treap {
     }
 
     /*
-      Write the contents of this sortedSet to a channel.
-
-      :arg ch: A channel to write to.
+      Write the contents of this sortedSet to a fileWriter.
     */
-    proc const writeThis(ch: channel) throws {
+    proc const serialize(writer, ref serializer) throws {
       _enter();
-      _visit(ch);
+      _visit(writer);
       _leave();
     }
 

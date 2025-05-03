@@ -14,7 +14,6 @@
 #include "llvm/ADT/SmallSet.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
-#include "llvm/ADT/Triple.h"
 #include "llvm/Analysis/AliasAnalysis.h"
 #include "llvm/Analysis/InstructionSimplify.h"
 #include "llvm/Analysis/LoopAnalysisManager.h"
@@ -56,6 +55,7 @@
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/KnownBits.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/TargetParser/Triple.h"
 #include "llvm/Transforms/Scalar.h"
 #include "llvm/Transforms/Utils.h"
 #include "llvm/Transforms/Utils/Local.h"
@@ -192,10 +192,8 @@ private:
 
     void push_back(Value *V) {
       // Do not push back duplicates.
-      if (!S.count(V)) {
+      if (S.insert(V).second)
         Q.push_back(V);
-        S.insert(V);
-      }
     }
 
     Value *pop_front_val() {
@@ -338,7 +336,7 @@ void Simplifier::Context::initialize(Instruction *Exp) {
 
   while (!Q.empty()) {
     Value *V = Q.pop_front_val();
-    if (M.find(V) != M.end())
+    if (M.contains(V))
       continue;
     if (Instruction *U = dyn_cast<Instruction>(V)) {
       if (isa<PHINode>(U) || U->getParent() != Block)
@@ -524,7 +522,7 @@ void Simplifier::Context::link(Instruction *I, BasicBlock *B,
       link(OpI, B, At);
   }
 
-  B->getInstList().insert(At, I);
+  I->insertInto(B, At);
 }
 
 Value *Simplifier::Context::materialize(BasicBlock *B,
@@ -666,7 +664,7 @@ Value *PolynomialMultiplyRecognize::getCountIV(BasicBlock *BB) {
       continue;
 
     if (auto *T = dyn_cast<ConstantInt>(IncV))
-      if (T->getZExtValue() == 1)
+      if (T->isOne())
         return PN;
   }
   return nullptr;
@@ -772,8 +770,7 @@ bool PolynomialMultiplyRecognize::matchLeftShift(SelectInst *SelI,
     //          select +++ ? T : 0
 
     Value *U = *SelI->user_begin();
-    if (!match(U, m_Xor(m_Specific(SelI), m_Value(R))) &&
-        !match(U, m_Xor(m_Value(R), m_Specific(SelI))))
+    if (!match(U, m_c_Xor(m_Specific(SelI), m_Value(R))))
       return false;
     // Matched: xor (select +++ ? 0 : T), R
     //          xor (select +++ ? T : 0), R
@@ -816,15 +813,13 @@ bool PolynomialMultiplyRecognize::matchRightShift(SelectInst *SelI,
   CmpInst::Predicate P;
   bool TrueIfZero;
 
-  if (match(CondV, m_ICmp(P, m_Value(C), m_Zero())) ||
-      match(CondV, m_ICmp(P, m_Zero(), m_Value(C)))) {
+  if (match(CondV, m_c_ICmp(P, m_Value(C), m_Zero()))) {
     if (P != CmpInst::ICMP_EQ && P != CmpInst::ICMP_NE)
       return false;
     // Matched: select C == 0 ? ... : ...
     //          select C != 0 ? ... : ...
     TrueIfZero = (P == CmpInst::ICMP_EQ);
-  } else if (match(CondV, m_ICmp(P, m_Value(C), m_One())) ||
-             match(CondV, m_ICmp(P, m_One(), m_Value(C)))) {
+  } else if (match(CondV, m_c_ICmp(P, m_Value(C), m_One()))) {
     if (P != CmpInst::ICMP_EQ && P != CmpInst::ICMP_NE)
       return false;
     // Matched: select C == 1 ? ... : ...
@@ -834,8 +829,7 @@ bool PolynomialMultiplyRecognize::matchRightShift(SelectInst *SelI,
     return false;
 
   Value *X = nullptr;
-  if (!match(C, m_And(m_Value(X), m_One())) &&
-      !match(C, m_And(m_One(), m_Value(X))))
+  if (!match(C, m_And(m_Value(X), m_One())))
     return false;
   // Matched: select (X & 1) == +++ ? ... : ...
   //          select (X & 1) != +++ ? ... : ...
@@ -847,8 +841,7 @@ bool PolynomialMultiplyRecognize::matchRightShift(SelectInst *SelI,
     if (!match(TrueV, m_LShr(m_Value(R), m_One())))
       return false;
     // Matched: select +++ ? (R >> 1) : ...
-    if (!match(FalseV, m_Xor(m_Specific(TrueV), m_Value(Q))) &&
-        !match(FalseV, m_Xor(m_Value(Q), m_Specific(TrueV))))
+    if (!match(FalseV, m_c_Xor(m_Specific(TrueV), m_Value(Q))))
       return false;
     // Matched: select +++ ? (R >> 1) : (R >> 1) ^ Q
     // with commuting ^.
@@ -858,8 +851,7 @@ bool PolynomialMultiplyRecognize::matchRightShift(SelectInst *SelI,
     if (!match(FalseV, m_LShr(m_Value(R), m_One())))
       return false;
     // Matched: select +++ ? ... : (R >> 1)
-    if (!match(TrueV, m_Xor(m_Specific(FalseV), m_Value(Q))) &&
-        !match(TrueV, m_Xor(m_Value(Q), m_Specific(FalseV))))
+    if (!match(TrueV, m_c_Xor(m_Specific(FalseV), m_Value(Q))))
       return false;
     // Matched: select +++ ? (R >> 1) ^ Q : (R >> 1)
     // with commuting ^.
@@ -1064,7 +1056,7 @@ void PolynomialMultiplyRecognize::promoteTo(Instruction *In,
   // Promote immediates.
   for (unsigned i = 0, n = In->getNumOperands(); i != n; ++i) {
     if (ConstantInt *CI = dyn_cast<ConstantInt>(In->getOperand(i)))
-      if (CI->getType()->getBitWidth() < DestBW)
+      if (CI->getBitWidth() < DestBW)
         In->setOperand(i, ConstantInt::get(DestTy, CI->getZExtValue()));
   }
 }
@@ -1139,7 +1131,7 @@ bool PolynomialMultiplyRecognize::findCycle(Value *Out, Value *In,
   auto *BB = cast<Instruction>(Out)->getParent();
   bool HadPhi = false;
 
-  for (auto U : Out->users()) {
+  for (auto *U : Out->users()) {
     auto *I = dyn_cast<Instruction>(&*U);
     if (I == nullptr || I->getParent() != BB)
       continue;
@@ -1152,9 +1144,8 @@ bool PolynomialMultiplyRecognize::findCycle(Value *Out, Value *In,
     if (IsPhi && HadPhi)
       return false;
     HadPhi |= IsPhi;
-    if (Cycle.count(I))
+    if (!Cycle.insert(I))
       return false;
-    Cycle.insert(I);
     if (findCycle(I, In, Cycle))
       break;
     Cycle.remove(I);
@@ -1283,7 +1274,7 @@ bool PolynomialMultiplyRecognize::keepsHighBitsZero(Value *V,
   // Assume that all inputs to the value have the high bits zero.
   // Check if the value itself preserves the zeros in the high bits.
   if (auto *C = dyn_cast<ConstantInt>(V))
-    return C->getValue().countLeadingZeros() >= IterCount;
+    return C->getValue().countl_zero() >= IterCount;
 
   if (auto *I = dyn_cast<Instruction>(V)) {
     switch (I->getOpcode()) {
@@ -1351,8 +1342,8 @@ bool PolynomialMultiplyRecognize::convertShiftsToLeft(BasicBlock *LoopB,
     // be unshifted.
     if (!commutesWithShift(R))
       return false;
-    for (auto I = R->user_begin(), E = R->user_end(); I != E; ++I) {
-      auto *T = cast<Instruction>(*I);
+    for (User *U : R->users()) {
+      auto *T = cast<Instruction>(U);
       // Skip users from outside of the loop. They will be handled later.
       // Also, skip the right-shifts and phi nodes, since they mix early
       // and late values.
@@ -1487,13 +1478,11 @@ bool PolynomialMultiplyRecognize::convertShiftsToLeft(BasicBlock *LoopB,
 
 void PolynomialMultiplyRecognize::cleanupLoopBody(BasicBlock *LoopB) {
   for (auto &I : *LoopB)
-    if (Value *SV = SimplifyInstruction(&I, {DL, &TLI, &DT}))
+    if (Value *SV = simplifyInstruction(&I, {DL, &TLI, &DT}))
       I.replaceAllUsesWith(SV);
 
-  for (auto I = LoopB->begin(), N = I; I != LoopB->end(); I = N) {
-    N = std::next(I);
-    RecursivelyDeleteTriviallyDeadInstructions(&*I, &TLI);
-  }
+  for (Instruction &I : llvm::make_early_inc_range(*LoopB))
+    RecursivelyDeleteTriviallyDeadInstructions(&I, &TLI);
 }
 
 unsigned PolynomialMultiplyRecognize::getInverseMxN(unsigned QP) {
@@ -1582,7 +1571,7 @@ Value *PolynomialMultiplyRecognize::generate(BasicBlock::iterator At,
 
 static bool hasZeroSignBit(const Value *V) {
   if (const auto *CI = dyn_cast<const ConstantInt>(V))
-    return (CI->getType()->getSignBit() & CI->getSExtValue()) == 0;
+    return CI->getValue().isNonNegative();
   const Instruction *I = dyn_cast<const Instruction>(V);
   if (!I)
     return false;
@@ -1693,7 +1682,7 @@ void PolynomialMultiplyRecognize::setupPreSimplifier(Simplifier &S) {
       if (I->getOpcode() != Instruction::Or)
         return nullptr;
       ConstantInt *Msb = dyn_cast<ConstantInt>(I->getOperand(1));
-      if (!Msb || Msb->getZExtValue() != Msb->getType()->getSignBit())
+      if (!Msb || !Msb->getValue().isSignMask())
         return nullptr;
       if (!hasZeroSignBit(I->getOperand(0)))
         return nullptr;
@@ -2008,8 +1997,7 @@ mayLoopAccessLocation(Value *Ptr, ModRefInfo Access, Loop *L,
   for (auto *B : L->blocks())
     for (auto &I : *B)
       if (Ignored.count(&I) == 0 &&
-          isModOrRefSet(
-              intersectModRef(AA.getModRefInfo(&I, StoreLoc), Access)))
+          isModOrRefSet(AA.getModRefInfo(&I, StoreLoc) & Access))
         return true;
 
   return false;
@@ -2060,7 +2048,7 @@ bool HexagonLoopIdiomRecognize::processCopyingStore(Loop *CurLoop,
   // includes the load that feeds the stores.  Check for an alias by generating
   // the base address and checking everything.
   Value *StoreBasePtr = Expander.expandCodeFor(StoreEv->getStart(),
-      Builder.getInt8PtrTy(SI->getPointerAddressSpace()), ExpPt);
+      Builder.getPtrTy(SI->getPointerAddressSpace()), ExpPt);
   Value *LoadBasePtr = nullptr;
 
   bool Overlap = false;
@@ -2131,7 +2119,7 @@ CleanupAndExit:
   // For a memcpy, we have to make sure that the input array is not being
   // mutated by the loop.
   LoadBasePtr = Expander.expandCodeFor(LoadEv->getStart(),
-      Builder.getInt8PtrTy(LI->getPointerAddressSpace()), ExpPt);
+      Builder.getPtrTy(LI->getPointerAddressSpace()), ExpPt);
 
   SmallPtrSet<Instruction*, 2> Ignore2;
   Ignore2.insert(SI);
@@ -2171,7 +2159,7 @@ CleanupAndExit:
                                SCEV::FlagNUW);
   Value *NumBytes = Expander.expandCodeFor(NumBytesS, IntPtrTy, ExpPt);
   if (Instruction *In = dyn_cast<Instruction>(NumBytes))
-    if (Value *Simp = SimplifyInstruction(In, {*DL, TLI, DT}))
+    if (Value *Simp = simplifyInstruction(In, {*DL, TLI, DT}))
       NumBytes = Simp;
 
   CallInst *NewCall;
@@ -2247,8 +2235,7 @@ CleanupAndExit:
     DT->addNewBlock(MemmoveB, Preheader);
     // Find the new immediate dominator of the exit block.
     BasicBlock *ExitD = Preheader;
-    for (auto PI = pred_begin(ExitB), PE = pred_end(ExitB); PI != PE; ++PI) {
-      BasicBlock *PB = *PI;
+    for (BasicBlock *PB : predecessors(ExitB)) {
       ExitD = DT->findNearestCommonDominator(ExitD, PB);
       if (!ExitD)
         break;
@@ -2270,11 +2257,11 @@ CleanupAndExit:
 
     if (DestVolatile) {
       Type *Int32Ty = Type::getInt32Ty(Ctx);
-      Type *Int32PtrTy = Type::getInt32PtrTy(Ctx);
+      Type *PtrTy = PointerType::get(Ctx, 0);
       Type *VoidTy = Type::getVoidTy(Ctx);
       Module *M = Func->getParent();
       FunctionCallee Fn = M->getOrInsertFunction(
-          HexagonVolatileMemcpyName, VoidTy, Int32PtrTy, Int32PtrTy, Int32Ty);
+          HexagonVolatileMemcpyName, VoidTy, PtrTy, PtrTy, Int32Ty);
 
       const SCEV *OneS = SE->getConstant(Int32Ty, 1);
       const SCEV *BECount32 = SE->getTruncateOrZeroExtend(BECount, Int32Ty);
@@ -2282,16 +2269,11 @@ CleanupAndExit:
       Value *NumWords = Expander.expandCodeFor(NumWordsS, Int32Ty,
                                                MemmoveB->getTerminator());
       if (Instruction *In = dyn_cast<Instruction>(NumWords))
-        if (Value *Simp = SimplifyInstruction(In, {*DL, TLI, DT}))
+        if (Value *Simp = simplifyInstruction(In, {*DL, TLI, DT}))
           NumWords = Simp;
 
-      Value *Op0 = (StoreBasePtr->getType() == Int32PtrTy)
-                      ? StoreBasePtr
-                      : CondBuilder.CreateBitCast(StoreBasePtr, Int32PtrTy);
-      Value *Op1 = (LoadBasePtr->getType() == Int32PtrTy)
-                      ? LoadBasePtr
-                      : CondBuilder.CreateBitCast(LoadBasePtr, Int32PtrTy);
-      NewCall = CondBuilder.CreateCall(Fn, {Op0, Op1, NumWords});
+      NewCall = CondBuilder.CreateCall(Fn,
+                                       {StoreBasePtr, LoadBasePtr, NumWords});
     } else {
       NewCall = CondBuilder.CreateMemMove(
           StoreBasePtr, SI->getAlign(), LoadBasePtr, LI->getAlign(), NumBytes);
@@ -2353,7 +2335,7 @@ bool HexagonLoopIdiomRecognize::coverLoop(Loop *L,
         continue;
       if (!Worklist.count(&In) && In.mayHaveSideEffects())
         return false;
-      for (auto K : In.users()) {
+      for (auto *K : In.users()) {
         Instruction *UseI = dyn_cast<Instruction>(K);
         if (!UseI)
           continue;
@@ -2437,7 +2419,7 @@ bool HexagonLoopIdiomRecognize::run(Loop *L) {
   if (Name == "memset" || Name == "memcpy" || Name == "memmove")
     return false;
 
-  DL = &L->getHeader()->getModule()->getDataLayout();
+  DL = &L->getHeader()->getDataLayout();
 
   HasMemcpy = TLI->has(LibFunc_memcpy);
   HasMemmove = TLI->has(LibFunc_memmove);

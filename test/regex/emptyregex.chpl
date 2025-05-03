@@ -1,6 +1,6 @@
 use Regex;
 
-var r = compile("");
+var r = new regex("");
 var s = "one";
 assert(r.match(s).matched);
 assert(!r.fullMatch(s).matched);
@@ -10,23 +10,25 @@ var matches = r.matches(s);
 assert(matches.size == (s.size + 1));
 writeln(matches.size);
 for (i, (match,)) in zip(matches.domain, matches) {
-  writeln("offset=", match.offset);
-  assert(i == match.offset);
+  writeln("offset=", match.byteOffset);
+  assert(i == match.byteOffset);
 }
 
 writeln();
 
-for x in compile("a").split("babbbba") do
-  writef("%t\n", x);
+var re = new regex("a");
+for x in re.split("babbbba") do
+  writef('%"S\n', x);
 
 writeln();
 
-for x in compile("z").split("babbbba") do
-  writef("%t\n", x);
+re = new regex("z");
+for x in re.split("babbbba") do
+  writef('%"S\n', x);
 
 writeln();
 for x in r.split(s) do
-  writef("%t\n", x);
+  writef('%"S\n', x);
 
 writeln();
-writeln(r.subn("A", "one"));
+writeln("one".replaceAndCount(r, "A"));

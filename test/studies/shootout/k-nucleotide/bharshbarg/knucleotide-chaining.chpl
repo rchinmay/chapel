@@ -1,7 +1,7 @@
 use IO;
 use Sort;
 
-extern proc memcpy(x : [], b:c_string, len:int);
+extern proc memcpy(ref x : [], b:c_ptrConst(c_char), len:int);
 
 config const tableSize = 1 << 16;
 config const lineSize = 61;
@@ -118,7 +118,7 @@ proc write_frequencies(data : [] uint(8), size : int) {
   var arr : [1..freqs.size] (int, uint);
   for (a, (k,v)) in zip(arr, freqs) do
     a = (v,k);
-  sort(arr, comparator=reverseComparator);
+  sort(arr, comparator=new reverseComparator());
 
   for (f, s) in arr do
     writef("%s %.3dr\n", decode(s, size), (100.0 * f) / sum);
@@ -144,23 +144,30 @@ inline proc startsWithThree(data : []) {
 
 proc main(args: [] string) {
   // Open stdin and a binary reader channel
-  const inFile = openfd(0);
+  const inFile = new file(0);
   const fileLen = inFile.size;
-  var myin = inFile.reader(kind=ionative,locking=false);
+  var myin = inFile.reader(deserializer=new binaryDeserializer(),locking=false);
 
   // Read line-by-line until we see a line beginning with '>TH'
   var tempdata : [1..lineSize] uint(8);
   var numRead = 0;
   var total = 0;
-  while myin.readline(tempdata, numRead) && !startsWithThree(tempdata) { total += numRead; }
-
+  numRead = myin.readLine(tempdata);
+  while numRead>0 && !startsWithThree(tempdata) {
+    total += numRead;
+    numRead = myin.readLine(tempdata);
+  }
 
   // Read in the rest of the file
   var dataDom = {1..fileLen-total};
   var data : [dataDom] uint(8);
   var idx = 1;
-  while myin.readline(data, numRead, idx) { idx += numRead - 1; }
-  
+  numRead = myin.readLine(data[idx..]);
+  while numRead > 0 {
+    idx += numRead - 1;
+    numRead = myin.readLine(data[idx..]);
+  }
+
   // Resize our array to the amount actually read
   dataDom = {1..idx};
 

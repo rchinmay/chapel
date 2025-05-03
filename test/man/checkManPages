@@ -24,16 +24,7 @@ def main():
     results.append( check_man_page(chpl, ['--no-devel']) )
 
     # Test chpldoc
-    # chpldoc requires Python version 3.6 or greater.  Don't check it otherwise
-    version_is_good = True
-    if sys.version_info[0] < 3:
-        version_is_good = False
-    else:
-        if sys.version_info[0] == 3 and sys.version_info[1] <= 5:
-            version_is_good = False
-
-    if version_is_good:
-        results.append( check_man_page(chpldoc) )
+    results.append( check_man_page(chpldoc) )
 
     # Exit clean if no errors.
     if not reduce(operator.and_, results):
@@ -109,7 +100,7 @@ def check_man_page(bin_name, additional_args=None):
     for mline in [l.strip() for l in manpage if len(l.strip()) > 2]:
 
         # Line is flag
-        if (mline[0:5] == "**\--" or mline[4:5] == "," or mline[0:3] == "**-") and mline[-2:] == '**' and currentsection:
+        if (mline[0:5] == "**\\--" or mline[4:5] == "," or mline[0:3] == "**-") and mline[-2:] == '**' and currentsection:
 
             mflags = _get_flags(mline)
 

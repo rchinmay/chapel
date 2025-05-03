@@ -1,15 +1,16 @@
 use BlockDist;
-use LayoutCS;
+use CompressedSparseLayout;
 use List;
+use Sort;
 
 var parentDom1D = {1..100};
 var parentDom2D = {1..100, 1..100};
-var distParentDom1D = {1..100} dmapped Block({1..100});
-var distParentDom2DCOO = {1..100, 1..100} dmapped Block({1..100, 1..100});
-var distParentDom2DCSR = {1..100, 1..100} dmapped Block({1..100, 1..100},
-    sparseLayoutType=CS(compressRows=true));
-var distParentDom2DCSC = {1..100, 1..100} dmapped Block({1..100, 1..100},
-    sparseLayoutType=CS(compressRows=false));
+var distParentDom1D = {1..100} dmapped new blockDist({1..100});
+var distParentDom2DCOO = {1..100, 1..100} dmapped new blockDist({1..100, 1..100});
+var distParentDom2DCSR = {1..100, 1..100} dmapped new blockDist({1..100, 1..100},
+    sparseLayoutType=csrLayout());
+var distParentDom2DCSC = {1..100, 1..100} dmapped new blockDist({1..100, 1..100},
+    sparseLayoutType=cscLayout());
 
 const indexRange = 10..90 by 20;
 
@@ -26,7 +27,7 @@ iter indexGen(d) {
 }
 
 proc test(d) {
-  var spsIndexBuffer = d.makeIndexBuffer(size=4);
+  var spsIndexBuffer = d.createIndexBuffer(size=4);
   for i in indexGen(d) do
     spsIndexBuffer.add(i);
   spsIndexBuffer.commit();
@@ -36,8 +37,8 @@ proc test(d) {
 proc printDomain(d) {
   var indexList: list(if d.rank==1 then d.idxType else d.rank*d.idxType);
   for i in d do
-    indexList.append(i);
-  indexList.sort();
+    indexList.pushBack(i);
+  sort(indexList);
   writeln(indexList);
 }
 
@@ -48,9 +49,9 @@ test(cooDom1D);
 // test local 2D domains
 var cooDom2D: sparse subdomain(parentDom2D);
 test(cooDom2D);
-var csrDom: sparse subdomain(parentDom2D) dmapped CS(compressRows=true);
+var csrDom: sparse subdomain(parentDom2D) dmapped new csrLayout();
 test(csrDom);
-var cscDom: sparse subdomain(parentDom2D) dmapped CS(compressRows=false);
+var cscDom: sparse subdomain(parentDom2D) dmapped new cscLayout();
 test(cscDom);
 
 // test distributed 1D domains

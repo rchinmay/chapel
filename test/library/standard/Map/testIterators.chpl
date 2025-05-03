@@ -1,3 +1,4 @@
+use Sort;
 use Map;
 
 record FacInt {
@@ -11,7 +12,7 @@ record FacInt {
 
   proc init(n: uint) {
     this.n = n;
-    this.complete();
+    init this;
     this.nFac = factorial(n);
   }
 
@@ -40,25 +41,45 @@ for i in 1..15 {
 }
 
 var A: [1..fac.size] (int, FacInt);
-for key in fac {
-  A[key] = (key, fac[key]);
+for item in zip(fac.keys(), fac.values()) {
+  A[item(0)] = item;
 }
-writeln(A.sorted());
+writeln("A: ", sorted(A));
 
-var B: [1..fac.size] (int, FacInt);
-for item in fac.items() {
-  B[item(0)] = item;
-}
-writeln(B.sorted());
-
-var C: [1..fac.size] FacInt;
+var B: [1..fac.size] FacInt;
 for (val, i) in zip(fac.values(), 1..) {
-  C[i] = val;
+  B[i] = val;
 }
-writeln(C.sorted());
+writeln("B: ", sorted(B));
+
+var C: [1..fac.size] (int, FacInt);
+for key in fac.keys() {
+  C[key] = (key, fac[key]);
+}
+writeln("C: ", sorted(C));
 
 var D: [1..fac.size] (int, FacInt);
-for key in fac.keys() {
-  D[key] = (key, fac[key]);
+forall item in zip(fac.keys(), fac.values()) {
+  D[item(0)] = item;
 }
-writeln(D.sorted());
+writeln("D: ", sorted(D));
+
+var E: [1..fac.size] (FacInt, int);
+forall item in zip(fac.values(), fac.keys()) {
+  E[item(1)] = item;
+}
+writeln("E: ", sorted(E));
+
+var F: [1..fac.size] (int, FacInt);
+forall key in fac.keys() {
+  F[key] = (key, fac[key]);
+}
+writeln("F: ", sorted(F));
+
+var G: [1..fac.size] FacInt;
+var Hidx: atomic int = 1;
+forall val in fac.values() {
+  var i = Hidx.fetchAdd(1);
+  G[i] = val;
+}
+writeln("G: ", sorted(G));

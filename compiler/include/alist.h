@@ -1,5 +1,5 @@
 /*
- * Copyright 2020-2022 Hewlett Packard Enterprise Development LP
+ * Copyright 2020-2025 Hewlett Packard Enterprise Development LP
  * Copyright 2004-2019 Cray Inc.
  * Other additional copyright holders may be indicated within.
  *
@@ -50,13 +50,20 @@ class AList {
   bool empty() const;
 
   // add element(s) at beginning of list
+  // the withoutFlattening case disables the PRIM_ACTUALS_LIST flattening behavior.
   void insertAtHead(Expr* new_ast);
+  void insertAtHeadWithoutFlattening(Expr* new_ast);
 
   // add element(s) at end of list
+  // the withoutFlattening case disables the PRIM_ACTUALS_LIST flattening behavior.
   void insertAtTail(Expr* new_ast);
+  void insertAtTailWithoutFlattening(Expr* new_ast);
 
   // codegen list. Separator only used for C codegenning.
   GenRet codegen(const char* separator = ", ");
+ private:
+  void performInsertAtHead(Expr* new_ast);
+  void performInsertAtTail(Expr* new_ast);
 };
 
 #define for_alist(node, list)                                           \
@@ -158,7 +165,7 @@ class AList {
                                                                               \
   Expr* _alist_actual_next = (actual) ? actual->next : NULL;                  \
                                                                               \
-  for (ArgSymbol* formal = (_alist_fn->formals.head) ?                        \
+  for (ArgSymbol* formal = (_alist_fn && _alist_fn->formals.head) ?           \
          toArgSymbol(toDefExpr(_alist_fn->formals.head)->sym) : NULL,         \
                                                                               \
        *_alist_formal_next = (formal && formal->defPoint->next) ?             \
@@ -187,5 +194,64 @@ class AList {
        (field);                                                         \
        field = _alist_prev,                                             \
          _alist_prev = (field && field->defPoint->prev) ? toDefExpr(field->defPoint->prev)->sym : NULL)
+
+inline AList::AList() :
+  head(NULL),
+  tail(NULL),
+  parent(NULL),
+  length(0)
+{ }
+
+
+inline Expr* AList::first(void) {
+  return head;
+}
+
+
+inline Expr* AList::last(void) {
+  return tail;
+}
+
+
+inline Expr* AList::only(void) {
+  if (!head)
+    INT_FATAL("only() called on empty list");
+
+  if (head == tail)
+    return first();
+  else
+    INT_FATAL("only() called on list with more than one element");
+
+  return NULL;
+}
+
+// This header has to go here because we want AList::get to be inlined.
+// AList::get accesses expr->next, so it needs the full definition of Expr.
+// Expr has methods with AList formals so needs the full definition of AList.
+#include "expr-class-def.h"
+
+inline Expr* AList::get(int index) const {
+  if (index <=0) {
+    INT_FATAL("Indexing list must use positive integer");
+  }
+
+  int i = 0;
+
+  for_alist(node, *this) {
+    i++;
+
+    if (i == index) {
+      return node;
+    }
+  }
+
+  INT_FATAL("Indexing list out of bounds");
+
+  return NULL;
+}
+
+inline bool AList::empty() const {
+  return length == 0;
+}
 
 #endif

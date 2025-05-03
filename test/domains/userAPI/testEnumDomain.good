@@ -3,17 +3,18 @@
 {orange..green, yellow..blue}
 rank             = 2
 idxType          = color
-stridable        = false
+fullIdxType      = 2*color
+strides          = one
 size             = 9
 isEmpty()        = false
-low              = (orange, yellow)
-high             = (green, blue)
+lowBound         = (orange, yellow)
+highBound        = (green, blue)
 stride           = (1, 1)
-alignment        = (orange, yellow)
+alignment        = (red, red)
 first            = (orange, yellow)
 last             = (green, blue)
-alignedLow       = (orange, yellow)
-alignedHigh      = (green, blue)
+low              = (orange, yellow)
+high             = (green, blue)
 dims()           = (orange..green, yellow..blue)
 dim(0)           = orange..green
 dim(1)           = yellow..blue
@@ -40,7 +41,7 @@ serial iteration =
 D[{red..violet, green..violet}] = {orange..green, green..blue}
 D[{red..violet, green..violet} (as ranges)] = {orange..green, green..blue}
 D.localSlice({red..violet, green..violet}) = {orange..green, green..blue}
-D.targetLocales = LOCALE0
+D.targetLocales() = LOCALE0
 D.hasSingleLocalSubdomain() = true
 D.localSubdomain() = {orange..green, yellow..blue}
 D#(2,2) = {orange..yellow, yellow..green}
@@ -55,27 +56,28 @@ Clearing...
 {orange..red, orange..red}
 size             = 0
 isEmpty()        = true
-low              = (orange, orange)
-high             = (red, red)
+lowBound         = (orange, orange)
+highBound        = (red, red)
 stride           = (1, 1)
-alignment        = (orange, orange)
+alignment        = (red, red)
 
 strided 2D enum domain
 ------------
 {orange..green by 2, yellow..blue by 2}
 rank             = 2
 idxType          = color
-stridable        = true
+fullIdxType      = 2*color
+strides          = positive
 size             = 4
 isEmpty()        = false
-low              = (orange, yellow)
-high             = (green, blue)
+lowBound         = (orange, yellow)
+highBound        = (green, blue)
 stride           = (2, 2)
-alignment        = (orange, yellow)
+alignment        = (orange, red)
 first            = (orange, yellow)
 last             = (green, blue)
-alignedLow       = (orange, yellow)
-alignedHigh      = (green, blue)
+low              = (orange, yellow)
+high             = (green, blue)
 dims()           = (orange..green by 2, yellow..blue by 2)
 dim(0)           = orange..green by 2
 dim(1)           = yellow..blue by 2
@@ -102,7 +104,7 @@ serial iteration =
 D[{red..violet, green..violet}] = {orange..green by 2, green..blue by 2 align red}
 D[{red..violet, green..violet} (as ranges)] = {orange..green by 2, green..blue by 2 align red}
 D.localSlice({red..violet, green..violet}) = {orange..green by 2, green..blue by 2 align red}
-D.targetLocales = LOCALE0
+D.targetLocales() = LOCALE0
 D.hasSingleLocalSubdomain() = true
 D.localSubdomain() = {orange..green by 2, yellow..blue by 2}
 D#(2,2) = {orange..green by 2, yellow..blue by 2}
@@ -117,8 +119,8 @@ Clearing...
 {orange..red, orange..red}
 size             = 0
 isEmpty()        = true
-low              = (orange, orange)
-high             = (red, red)
+lowBound         = (orange, orange)
+highBound        = (red, red)
 stride           = (1, 1)
 alignment        = (red, red)
 

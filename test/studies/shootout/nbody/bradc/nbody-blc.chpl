@@ -1,15 +1,15 @@
 /* The Computer Language Benchmarks Game
    https://salsa.debian.org/benchmarksgame-team/benchmarksgame/
 
-   contributed by Albert Sidelnik and Brad Chamberlain
+   contributed by Albert Sidelnik and Brad Chamberlain, modernized by Brad
    derived from the Java version by Mark C. Lewis and Chad Whipkey
 */
 
+use Math;                     // to get access to 'pi'
 
 config const n = 10000;       // The number of timesteps to simulate
 
-const pi = 3.141592653589793,
-      solarMass = 4 * pi**2,
+param solarMass = 4 * pi * pi,
       daysPerYear = 365.24;
 
 
@@ -68,7 +68,6 @@ var bodies = [/* sun */
 
 const numBodies = bodies.size;    // the number of bodies being simulated
 
-
 proc main() {
   initSun();                      // initialize the sun's velocity
 
@@ -92,8 +91,8 @@ proc initSun() {
 // advance the positions and velocities of all the bodies
 //
 proc advance(dt) {
-  for i in 0..<numBodies {
-    for j in i+1..<numBodies {
+  foreach i in 0..<numBodies {
+    foreach j in i+1..<numBodies {
       ref b1 = bodies[i],
           b2 = bodies[j];
 
@@ -105,7 +104,7 @@ proc advance(dt) {
     }
   }
 
-  for b in bodies do
+  foreach b in bodies do
     b.pos += dt * b.vel;
 }
 

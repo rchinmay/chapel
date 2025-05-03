@@ -1,5 +1,4 @@
 bytes1 as bytes
-bytes1 as c_string
 6
 6
 6
@@ -24,4 +23,3 @@ true as bytes
 10.0i as bytes
 10.0 + 10.0i as bytes
 some string as bytes
-some C string as bytes

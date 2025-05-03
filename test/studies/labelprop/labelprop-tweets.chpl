@@ -58,6 +58,8 @@ use Random;
 use HashedDist;
 use LinkedLists;
 use BlockDist;
+use JSON;
+use Sort;
 
 // packing twitter user IDs to numbers
 var total_tweets_processed : atomic int;
@@ -71,7 +73,7 @@ proc main(args:[] string) {
   for arg in files {
     if isDir(arg) {
       // Go through files in directories.
-      for f in findfiles(arg, true) {
+      for f in findFiles(arg, true) {
         todo.append(f);
       }
     } else {
@@ -83,10 +85,10 @@ proc main(args:[] string) {
   // domain assignment in Hashed
   // Pairs is for collecting twitter  user ID to user ID mentions
   if distributed {
-    var Pairs: domain( (int, int) ) dmapped Hashed(idxType=(int, int));
+    var Pairs: domain( (int, int), parSafe=false) dmapped new hashedDist(idxType=(int, int));
     run(todo, Pairs);
   } else {
-    var Pairs: domain( (int, int) );
+    var Pairs: domain( (int, int), parSafe=false);
     run(todo, Pairs);
   }
 }
@@ -94,12 +96,12 @@ proc main(args:[] string) {
 
 
 proc run(ref todo:LinkedList(string), ref Pairs) {
-  var t:Timer;
+  var t:stopwatch;
   t.start();
 
   const FilesSpace = {1..todo.size};
   const BlockSpace = if distributed then
-                       FilesSpace dmapped Block(boundingBox=FilesSpace)
+                       FilesSpace dmapped new blockDist(boundingBox=FilesSpace)
                      else
                        FilesSpace;
   var allfiles:[BlockSpace] string;
@@ -107,7 +109,7 @@ proc run(ref todo:LinkedList(string), ref Pairs) {
 
   todo.destroy();
 
-  var parseAndMakeSetTime:Timer;
+  var parseAndMakeSetTime:stopwatch;
   parseAndMakeSetTime.start();
 
 
@@ -145,7 +147,7 @@ proc run(ref todo:LinkedList(string), ref Pairs) {
   create_and_analyze_graph(Pairs);
 
   t.stop();
-  var days = t.elapsed(TimeUnits.hours) / 24.0;
+  var days = t.elapsed() / (60.0 * 60.0 * 24.0);
   var m = 1000000.0;
   if timing {
     writeln("processed ", nlines, " lines in ", t.elapsed(), " s ");
@@ -177,7 +179,7 @@ record Empty {
 }
 
 
-proc process_json(logfile:channel, fname:string, ref Pairs) {
+proc process_json(logfile:fileReader(?), fname:string, ref Pairs) {
   var tweet:Tweet;
   var empty:Empty;
   var got:bool;
@@ -186,31 +188,40 @@ proc process_json(logfile:channel, fname:string, ref Pairs) {
   var nlines = 0;
   var max_id = 0;
 
+  var jsonReader = logfile.withDeserializer(jsonDeserializer);
+
   if progress then
     writeln(fname, " : processing");
 
   while true {
     try! {
       try {
-        got = logfile.readf("%~jt", tweet);
+        got = jsonReader.read(tweet);
       } catch e: BadFormatError {
-        if verbose then
+        if verbose {
+            try! logfile.lock();
+            var off = logfile.offset();
+            logfile.unlock();
             stdout.writeln("error reading tweets ", fname, " offset ",
-              logfile.offset(), " : ", errorToString(e.err));
+              off, " : ", e._msg);
+        }
 
         // read over something else
-        got = logfile.readf("%~jt", empty);
+        got = logfile.read(empty);
       }
     } catch e: SystemError {
+      try! logfile.lock();
+      var off = logfile.offset();
+      logfile.unlock();
       stderr.writeln("severe error reading tweets ", fname, " offset ",
-          logfile.offset(), " : ", errorToString(e.err));
+          off, " : ", errorToString(e.err));
 
       // advance to the next line.
       logfile.readln();
     } // halt on truly unknown error
 
     if got {
-      if verbose then writef("%jt\n", tweet);
+      if verbose then stdout.withSerializer(jsonSerializer).write(tweet);
       var id = tweet.user.id;
       if max_id < id then max_id = id;
       for mentions in tweet.entities.user_mentions {
@@ -239,12 +250,10 @@ proc process_json(logfile:channel, fname:string, ref Pairs) {
   total_tweets_processed.add(ntweets);
   total_lines_processed.add(nlines);
 
-  while true {
-    var got = max_user_id.read();
-    var id = if got > max_id then got else max_id;
-    var success = max_user_id.compareAndSwap(got, id);
-    if success then break;
-  }
+  var old_id = max_user_id.read();
+  do {
+    var id = if old_id > max_id then old_id else max_id;
+  } while(!max_user_id.compareExchangeWeak(old_id, id));
 }
 
 proc process_json(fname: string, ref Pairs)
@@ -252,10 +261,10 @@ proc process_json(fname: string, ref Pairs)
 
   var last3chars = fname[fname.size-3..];
   if last3chars == ".gz" {
-    var sub = spawn(["gunzip", "-c", fname], stdout=PIPE);
+    var sub = spawn(["gunzip", "-c", fname], stdout=pipeStyle.pipe);
     process_json(sub.stdout, fname, Pairs);
   } else {
-    var logfile = openreader(fname);
+    var logfile = openReader(fname, locking=false);
     process_json(logfile, fname, Pairs);
   }
 }
@@ -264,7 +273,7 @@ proc process_json(fname: string, ref Pairs)
 record Triple {
   var from: int(32);
   var to: int(32);
-  proc weight return 1:int(32);
+  proc weight do return 1:int(32);
 }
 
 
@@ -278,13 +287,13 @@ proc create_and_analyze_graph(ref Pairs)
             total_lines_processed.read(), " lines");
   }
 
-  var createGraphTime:Timer;
+  var createGraphTime:stopwatch;
   createGraphTime.start();
 
   var nmutual = 0;
 
   // Build idToNode
-  var userIds:domain(int);
+  var userIds:domain(int, parSafe=true);
 
   forall (id, other_id) in Pairs with (ref userIds) {
     if Pairs.contains( (other_id, id) ) {
@@ -311,7 +320,7 @@ proc create_and_analyze_graph(ref Pairs)
 
   // reduction intent would help here to compute max node id
   // TODO -- bug: this loop is not working with a forall (compile error)
-  for (node, id) in zip(1..userIds.size, userIds.sorted()) {
+  for (node, id) in zip(1..userIds.size, Sort.sorted(userIds)) {
     idToNode[id] = node:int(32);
     nodeToId[node] = id;
   }
@@ -384,7 +393,7 @@ proc create_and_analyze_graph(ref Pairs)
   if progress then
     writeln("label propagation");
 
-  var graphAlgorithmTime:Timer;
+  var graphAlgorithmTime:stopwatch;
   graphAlgorithmTime.start();
 
   // start with a different label for each node
@@ -418,7 +427,7 @@ proc create_and_analyze_graph(ref Pairs)
 
   // re-seed the RNG if seed is 0.
   if seed == 0 {
-    seed = SeedGenerator.currentTime;
+    seed = (new randomStream(int(32))).seed;
   }
 
 
@@ -431,8 +440,7 @@ proc create_and_analyze_graph(ref Pairs)
   //      with as much internal state as the yielded values)
   //   - yield values only within the requested range
   //     (in order to yield once, keep statistics)
-  var reorder:[G.vertices] int(32);
-  permutation(reorder, seed=seed);
+  var reorder = permute(G.vertices, seed);
   // Or we could just do it in the normal order...
 
   var go: atomic bool;
@@ -460,14 +468,14 @@ proc create_and_analyze_graph(ref Pairs)
 
     // TODO:  -> forall, but handle races in vertex labels?
     // iterate over G.vertices in a random order
-    serial !parallel { forall vid in reorder {
+    serial !parallel { forall vid in reorder with (ref labels) {
     //for vid in G.vertices {
 
       if printall then
         writeln("on node ", vid, " currently in group ", labels[vid]);
 
       // label -> count
-      var foundLabels:domain(int(32));
+      var foundLabels:domain(int(32), parSafe=false);
       var counts:[foundLabels] int;
 
       for nid in G.Neighbors(vid) {
@@ -493,10 +501,10 @@ proc create_and_analyze_graph(ref Pairs)
       var maxcount = 0;
       // TODO -- performance -- this allocates memory.
       // There might not be a tie.
-      var tiebreaker = createRandomStream(seed+vid, eltType=bool,
-                                        parSafe=false, algorithm=RNG.PCG);
+      var tiebreaker = new randomStream(seed+vid, eltType=bool);
+
       for (count,lab) in zip(counts, counts.domain) {
-        if count > maxcount || (count == maxcount && tiebreaker.getNext()) {
+        if count > maxcount || (count == maxcount && tiebreaker.next()) {
           maxcount = count;
           maxlabel = lab;
         }
@@ -534,5 +542,3 @@ proc create_and_analyze_graph(ref Pairs)
 
   delete G;
 }
-
-

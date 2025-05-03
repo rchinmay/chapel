@@ -68,14 +68,6 @@
 #include <psm2_am.h>
 #include <psm_help.h>
 
-/* We currently have 3 PTLs, 0 is reserved. */
-#define PTL_DEVID_IPS  1
-#define PTL_DEVID_AMSH 2
-#define PTL_DEVID_SELF 3
-
-/* We can currently initialize up to 3 PTLs */
-#define PTL_MAX_INIT	3
-
 /* struct ptl is an incomplete type, and it serves as a generic or opaque
    container.  It should remain an incomplete type in the entire psm
    source base. concrete ptl types need to have a suffix such as ptl_self,
@@ -133,6 +125,186 @@ struct ptl_arg {
 	};
 } PACK_SUFFIX ptl_arg_t;
 
+/* can be tracked per protocol, only fully tracked and reported
+ * for ips_proto at this time but by defining here we can later track
+ * for shm and maybe self protocols too and we avoid a branch in
+ * psm3_mq_handle_envelope
+ */
+struct ptl_strategy_stats {
+	uint64_t tiny_cpu_isend;
+	uint64_t tiny_cpu_isend_bytes;
+#if defined(PSM_CUDA) || defined(PSM_ONEAPI)
+	uint64_t tiny_gdrcopy_isend;
+	uint64_t tiny_gdrcopy_isend_bytes;
+	uint64_t tiny_cuCopy_isend;
+	uint64_t tiny_cuCopy_isend_bytes;
+#endif
+	uint64_t tiny_cpu_send;
+	uint64_t tiny_cpu_send_bytes;
+#if defined(PSM_CUDA) || defined(PSM_ONEAPI)
+	uint64_t tiny_gdrcopy_send;
+	uint64_t tiny_gdrcopy_send_bytes;
+	uint64_t tiny_cuCopy_send;
+	uint64_t tiny_cuCopy_send_bytes;
+#endif
+
+	uint64_t tiny_cpu_recv;
+	uint64_t tiny_cpu_recv_bytes;
+	uint64_t tiny_sysbuf_recv;	/* to unexpected Q sysbuf */ /* incl 0 byte */
+	uint64_t tiny_sysbuf_recv_bytes;
+#if defined(PSM_CUDA) || defined(PSM_ONEAPI)
+	uint64_t tiny_gdrcopy_recv;
+	uint64_t tiny_gdrcopy_recv_bytes;
+	uint64_t tiny_cuCopy_recv;
+	uint64_t tiny_cuCopy_recv_bytes;
+#endif
+
+	uint64_t short_copy_cpu_isend;
+	uint64_t short_copy_cpu_isend_bytes;
+	uint64_t short_dma_cpu_isend;
+	uint64_t short_dma_cpu_isend_bytes;
+#if defined(PSM_CUDA) || defined(PSM_ONEAPI)
+	uint64_t short_gdrcopy_isend;
+	uint64_t short_gdrcopy_isend_bytes;
+	uint64_t short_cuCopy_send;
+	uint64_t short_cuCopy_send_bytes;
+	uint64_t short_gdr_send;
+	uint64_t short_gdr_send_bytes;
+#endif
+	uint64_t short_copy_cpu_send;
+	uint64_t short_copy_cpu_send_bytes;
+	uint64_t short_dma_cpu_send;
+	uint64_t short_dma_cpu_send_bytes;
+
+#if defined(PSM_CUDA) || defined(PSM_ONEAPI)
+	uint64_t short_gdrcopy_send;
+	uint64_t short_gdrcopy_send_bytes;
+	uint64_t short_cuCopy_isend;
+	uint64_t short_cuCopy_isend_bytes;
+	uint64_t short_gdr_isend;
+	uint64_t short_gdr_isend_bytes;
+#endif
+
+	uint64_t short_cpu_recv;
+	uint64_t short_cpu_recv_bytes;
+	uint64_t short_sysbuf_recv;	/* to unexpected Q sysbuf */
+	uint64_t short_sysbuf_recv_bytes;
+#if defined(PSM_CUDA) || defined(PSM_ONEAPI)
+	uint64_t short_gdrcopy_recv;
+	uint64_t short_gdrcopy_recv_bytes;
+	uint64_t short_cuCopy_recv;
+	uint64_t short_cuCopy_recv_bytes;
+#endif
+
+	uint64_t eager_copy_cpu_isend;
+	uint64_t eager_copy_cpu_isend_bytes;
+	uint64_t eager_dma_cpu_isend;
+	uint64_t eager_dma_cpu_isend_bytes;
+	uint64_t eager_sysbuf_recv;	/* to unexpected Q sysbuf */
+	uint64_t eager_sysbuf_recv_bytes;
+#if defined(PSM_CUDA) || defined(PSM_ONEAPI)
+	uint64_t eager_cuCopy_isend;
+	uint64_t eager_cuCopy_isend_bytes;
+	uint64_t eager_gdr_isend;
+	uint64_t eager_gdr_isend_bytes;
+#endif
+	uint64_t eager_copy_cpu_send;
+	uint64_t eager_copy_cpu_send_bytes;
+	uint64_t eager_dma_cpu_send;
+	uint64_t eager_dma_cpu_send_bytes;
+#if defined(PSM_CUDA) || defined(PSM_ONEAPI)
+	uint64_t eager_cuCopy_send;
+	uint64_t eager_cuCopy_send_bytes;
+	uint64_t eager_gdr_send;
+	uint64_t eager_gdr_send_bytes;
+#endif
+
+	uint64_t eager_cpu_recv;
+	uint64_t eager_cpu_recv_bytes;
+#if defined(PSM_CUDA) || defined(PSM_ONEAPI)
+	uint64_t eager_gdrcopy_recv;
+	uint64_t eager_gdrcopy_recv_bytes;
+	uint64_t eager_cuCopy_recv;
+	uint64_t eager_cuCopy_recv_bytes;
+#endif
+
+	uint64_t rndv_cpu_isend;
+	uint64_t rndv_cpu_isend_bytes;
+#if defined(PSM_CUDA) || defined(PSM_ONEAPI)
+	uint64_t rndv_gpu_isend;
+	uint64_t rndv_gpu_isend_bytes;
+#endif
+	uint64_t rndv_cpu_send;
+	uint64_t rndv_cpu_send_bytes;
+#if defined(PSM_CUDA) || defined(PSM_ONEAPI)
+	uint64_t rndv_gpu_send;
+	uint64_t rndv_gpu_send_bytes;
+#endif
+
+	/* Payload in RTS for small sync send */
+	uint64_t rndv_rts_cpu_recv;
+	uint64_t rndv_rts_cpu_recv_bytes;
+	uint64_t rndv_rts_sysbuf_recv;
+	uint64_t rndv_rts_sysbuf_recv_bytes;
+#if defined(PSM_CUDA) || defined(PSM_ONEAPI)
+	uint64_t rndv_rts_cuCopy_recv;
+	uint64_t rndv_rts_cuCopy_recv_bytes;
+#endif
+
+	/* Payload in RTS approach used by sender */
+	/* this approach uses a LONG DATA CTS, but sends no more data */
+	uint64_t rndv_rts_copy_cpu_send;	/* per CTS  (1 per RTS) */
+	uint64_t rndv_rts_copy_cpu_send_bytes;
+
+	/* LONG DATA approach selected by receiver */
+	uint64_t rndv_long_cpu_recv;	/* per RTS */
+	uint64_t rndv_long_cpu_recv_bytes;
+	uint64_t rndv_long_gpu_recv;	/* per RTS */
+	uint64_t rndv_long_gpu_recv_bytes;
+#if defined(PSM_CUDA) || defined(PSM_ONEAPI)
+	uint64_t rndv_long_cuCopy_recv;
+	uint64_t rndv_long_cuCopy_recv_bytes;
+	uint64_t rndv_long_gdrcopy_recv;
+	uint64_t rndv_long_gdrcopy_recv_bytes;
+#endif
+
+	/* LONG DATA approach used by sender after LONG selected by receiver */
+	/* LONG DATA only uses 1 CTS per RTS */
+	uint64_t rndv_long_copy_cpu_send;	/* per CTS  (1 per RTS) */
+	uint64_t rndv_long_copy_cpu_send_bytes;
+	uint64_t rndv_long_dma_cpu_send;	/* per CTS  (1 per RTS) */
+	uint64_t rndv_long_dma_cpu_send_bytes;
+#if defined(PSM_CUDA) || defined(PSM_ONEAPI)
+	uint64_t rndv_long_cuCopy_send;	/* per CTS  (1 per RTS) */
+	uint64_t rndv_long_cuCopy_send_bytes;
+	uint64_t rndv_long_gdrcopy_send;	/* per CTS  (1 per RTS) */
+	uint64_t rndv_long_gdrcopy_send_bytes;
+	uint64_t rndv_long_gdr_send;	/* per CTS  (1 per RTS) */ /* SDMA */
+	uint64_t rndv_long_gdr_send_bytes;		/* SDMA */
+#endif
+
+	/* RDMA approach selected by receiver */
+	uint64_t rndv_rdma_cpu_recv;	/* per RTS */
+	uint64_t rndv_rdma_cpu_recv_bytes;
+#if defined(PSM_CUDA) || defined(PSM_ONEAPI)
+	uint64_t rndv_rdma_gdr_recv;	/* per RTS */
+	uint64_t rndv_rdma_gdr_recv_bytes;
+	uint64_t rndv_rdma_hbuf_recv;	/* per RTS */
+	uint64_t rndv_rdma_hbuf_recv_bytes;
+#endif
+
+	/* RDMA approach used by sender after RDMA selected by receiver */
+	/* RDMA may use >= 1 CTS per RTS */
+	uint64_t rndv_rdma_cpu_send;	/* per CTS */
+	uint64_t rndv_rdma_cpu_send_bytes;
+#if defined(PSM_CUDA) || defined(PSM_ONEAPI)
+	uint64_t rndv_rdma_gdr_send;	/* per CTS */
+	uint64_t rndv_rdma_gdr_send_bytes;
+	uint64_t rndv_rdma_hbuf_send;	/* per CTS */
+	uint64_t rndv_rdma_hbuf_send_bytes;
+#endif
+};
+
 #include "ptl_self/ptl_fwd.h"
 #include "ptl_ips/ptl_fwd.h"
 #include "ptl_am/ptl_fwd.h"
@@ -143,7 +315,7 @@ struct ptl_ctl {
 	psm2_ep_t ep;		/* pointer to ep */
 
 	/* EP-specific stuff */
-	 psm2_error_t(*ep_poll) (ptl_t *ptl, int replyonly);
+	 psm2_error_t(*ep_poll) (ptl_t *ptl, int replyonly, bool force);
 
 	/* PTL-level connect
 	 *
@@ -219,7 +391,5 @@ struct ptl_ctl {
 				      int nargs, void *src, size_t len,
 				      void *dest, int flags);
 #endif
-	psm2_error_t (*msg_size_thresh_query) (enum psm2_info_query_thresh_et,
-					       uint32_t *out, psm2_mq_t mq, psm2_epaddr_t);
 };
 #endif

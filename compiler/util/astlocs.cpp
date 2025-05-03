@@ -1,5 +1,5 @@
 /*
- * Copyright 2020-2022 Hewlett Packard Enterprise Development LP
+ * Copyright 2020-2025 Hewlett Packard Enterprise Development LP
  * Copyright 2004-2019 Cray Inc.
  * Other additional copyright holders may be indicated within.
  *
@@ -34,24 +34,49 @@ astlocT currentAstLoc(0,NULL);
 * Definitions for astlocT                                                     *
 *                                                                             *
 ************************************** | *************************************/
+
+static int compareFileLine(const char* lhsFilename, int lhsLineno,
+                           const char* rhsFilename, int rhsLineno) {
+  if (lhsFilename && rhsFilename) {
+    int strResult = strcmp(lhsFilename, rhsFilename);
+    if (strResult != 0) return strResult;
+    return lhsLineno - rhsLineno;
+  } else if (!lhsFilename) {
+    return -1;
+  } else {
+    return 1;
+  }
+}
+
 int astlocT::compare(const astlocT& other) const {
   if (this->filename_ == nullptr && other.filename_ == nullptr) {
     // compare IDs
     return this->id_.compare(other.id_);
-  } else if (this->filename_ != nullptr && other.filename_ != nullptr) {
-    // compare filename and line
-    int strResult = strcmp(this->filename_, other.filename_);
-    if (strResult != 0)
-      return strResult;
-    return this->lineno_ - other.lineno_;
   } else {
-    // filename is nullptr in one but not the other
-    // (arbitrarily) consider no filename < filename
-    if (this->filename_ == nullptr)
-      return -1;
-    else
-      return 1;
+    return compareFileLine(this->filename_, this->lineno_,
+                           other.filename_,
+                           other.lineno_);
   }
+}
+
+bool astlocT::hasSameFileLine(const astlocT& other) const {
+  const char* lhsFilename = this->filename_;
+  int lhsLineno = this->lineno_;
+  const char* rhsFilename = other.filename_;
+  int rhsLineno = other.lineno_;
+
+  if (!lhsFilename && !this->id_.isEmpty()) {
+    this->convertIdToFileLine(lhsFilename, lhsLineno);
+  }
+
+  if (!rhsFilename && !other.id_.isEmpty()) {
+    other.convertIdToFileLine(rhsFilename, rhsLineno);
+  }
+
+  int cmp = compareFileLine(lhsFilename, lhsLineno,
+                            rhsFilename,
+                            rhsLineno);
+  return cmp == 0;
 }
 
 void astlocT::convertIdToFileLine(const char*& filename, int& lineno) const {
@@ -77,6 +102,13 @@ const char* astlocT::stringLoc() const {
   return astr(this->filename(), ":", linenoBuf);
 }
 
+const char* astlocT::stringLineno() const {
+  char linenoBuf[16];
+
+  snprintf(linenoBuf, sizeof(linenoBuf), "%d", this->lineno());
+  return astr(linenoBuf);
+}
+
 /************************************* | **************************************
 *                                                                             *
 * Definitions for astlocMarker                                                *
@@ -98,7 +130,7 @@ astlocMarker::astlocMarker(int lineno, const char* filename)
   currentAstLoc = astlocT(lineno, astr(filename));
 }
 
-// constructor, for compiler/next Locations
+// constructor, for dyno Locations
 astlocMarker::astlocMarker(chpl::Location location)
   : previousAstLoc(currentAstLoc)
 {
@@ -152,6 +184,9 @@ Expr* findLocationIgnoringInternalInlining(Expr* cur) {
     if (preserveInlinedLineNumbers ||
         (startsWithChpl==false && inlined==false))
       return cur;
+
+    // If we're in a module init function, we can't go any further
+    if (curFn->hasFlag(FLAG_MODULE_INIT)) return cur;
 
     // Look for a call to that function
     CallExpr* anyCall = NULL;

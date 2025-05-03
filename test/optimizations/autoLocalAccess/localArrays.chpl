@@ -4,103 +4,60 @@
 // 
 // See: https://github.com/Cray/chapel-private/issues/1897
 
-use LayoutCS;
-
-var thisCalls: atomic int;
-var localAccessCalls: atomic int;
+use CompressedSparseLayout;
 
 var baseDom1D = {1..10};
 var baseDom2D = {1..10, 1..10};
 
-{ // DR
+config param case = ""; // choose which case to test
+
+if case == "1D DR" {
   test(baseDom1D, "1D DR");
+}
+if case == "2D DR" {
   test(baseDom2D, "2D DR");
 }
 
-{
+if case == "1D COO" {
   var cooDom: sparse subdomain(baseDom1D);
   cooDom += [1,2];
   test(cooDom, "1D COO");
 }
 
-{
+if case == "2D COO" {
   var cooDom: sparse subdomain(baseDom2D);
   cooDom += [(1,1),(2,2)];
   test(cooDom, "2D COO");
 }
 
-{
-  var csrDom: sparse subdomain(baseDom2D) dmapped CS();
+if case == "CSR" {
+  var csrDom: sparse subdomain(baseDom2D) dmapped new csrLayout();
   csrDom += [(1,1),(2,2)];
   test(csrDom, "CSR");
 }
 
-{
-  var cscDom: sparse subdomain(baseDom2D) dmapped CS(compressRows=false);
+if case == "CSC" {
+  var cscDom: sparse subdomain(baseDom2D) dmapped new cscLayout();
   cscDom += [(1,1),(2,2)];
   test(cscDom, "CSC");
 }
 
-{
-  var assocDom: domain(string);
-  assocDom += ["foo", "bar"];
+if case == "associative domain with string keys" {
+  var assocDom: domain(string) = {"foo", "bar"};
+
   test(assocDom, "associative domain with string keys");
 }
 
-// hijack these methods to provide some output
-inline proc _array.this(i: string) ref {
-  thisCalls.add(1);
-  return this._value.dsiAccess(i);
-}
-
-inline proc _array.localAccess(i: string) ref {
-  localAccessCalls.add(1);
-  return this._value.dsiAccess(i);
-}
-
-inline proc _array.this(i: int) ref {
-  thisCalls.add(1);
-  return this._value.dsiAccess((i:int,));
-}
-
-inline proc _array.this(i: 2*int) ref {
-  thisCalls.add(1);
-  return this._value.dsiAccess(i);
-}
-
-inline proc _array.localAccess(i: int) ref {
-  localAccessCalls.add(1);
-  return this._value.dsiAccess((i:int,));
-}
-
-inline proc _array.localAccess(i: 2*int) ref {
-  localAccessCalls.add(1);
-  return this._value.dsiAccess(i);
-}
-
-proc resetCounters() {
-  thisCalls.write(0);
-  localAccessCalls.write(0);
-}
-
-proc printCounters() {
-  writeln("Calls to `this`: ", thisCalls.read());
-  writeln("Calls to `localAccess`: ", localAccessCalls.read());
-}
-
-proc test(dom:domain, name) {
+proc test(dom:domain(?), name) {
   writeln("Testing ", name);
 
   var arr: [dom] int;
 
-  forall i in dom {
+  forall i in dom with (ref arr) {
     arr[i] = idxToInt(i);
   }
 
   writeln(arr);
-
-  printCounters();
-  resetCounters();
 
   writeln("End testing ", name);
   writeln();

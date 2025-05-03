@@ -1,3 +1,4 @@
-var timer : Time.Timer;
-timer.start(); //unresolved call
+import Time;
+var timer : Time.stopwatch;
+timer.start();
 writeln("Got here");

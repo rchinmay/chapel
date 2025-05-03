@@ -27,7 +27,7 @@ installed, grab it from http://sphinx-doc.org/"
 
 # Internal variables.
 COMP_DOXY_XML=../build/doc/doxygen/xml
-BREATHEOPT = -Dbreathe_projects.libchplcomp=../$(COMP_DOXY_XML)
+BREATHEOPT = -Dbreathe_projects.dyno=../$(COMP_DOXY_XML)
 PAPEROPT_a4     = -D latex_paper_size=a4
 PAPEROPT_letter = -D latex_paper_size=letter
 ALLSPHINXOPTS   = -d $(BUILDDIR)/doctrees $(PAPEROPT_$(PAPER)) $(SPHINXOPTS) $(BREATHEOPT) $(SOURCEDIR)
@@ -85,8 +85,11 @@ html-release: check-sphinxbuild source
 	@echo "Building HTML documentation"
 	$(SPHINXBUILD) -b html $(ALLSPHINXOPTS) $(BUILDDIR)/html
 	@chmod -R ugo+rX $(BUILDDIR)
-	@$(COPY_IF_DIFFERENT) util/versionButton.php $(BUILDDIR)/html/versionButton.php
-	@echo "ErrorDocument 404 https://chapel-lang.org/docs/$(WEB_DOC_VERSION)/index.html" > $(BUILDDIR)/html/.htaccess
+	rm -f $(BUILDDIR)/html/versionButton.php
+	cp -RP util/versionButton.php $(BUILDDIR)/html/versionButton.php
+	@echo "ErrorDocument 404 https://chapel-lang.org/docs/$(WEB_DOC_VERSION)/" > $(BUILDDIR)/html/.htaccess
+	@echo copying searchtools.js
+	@cp $(CHPL_MAKE_HOME)/doc/rst/meta/static/searchtools.js $(BUILDDIR)/html/_static
 	@rm -Rf html
 	@cp -R $(BUILDDIR)/html html
 	@echo

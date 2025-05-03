@@ -1,5 +1,5 @@
 /*
- * Copyright 2020-2022 Hewlett Packard Enterprise Development LP
+ * Copyright 2020-2025 Hewlett Packard Enterprise Development LP
  * Copyright 2004-2019 Cray Inc.
  * Other additional copyright holders may be indicated within.
  *
@@ -48,7 +48,7 @@ module ArrayViewSlice {
   // class implementations, it supports the standard dsi interface.
   //
   pragma "aliasing array"
-  class ArrayViewSliceArr: AbsBaseArr {
+  class ArrayViewSliceArr: AbsBaseArr(?) {
     // the representation of the slicing domain
     //
     // TODO: Can we privatize upon creation of the array-view slice and cache
@@ -108,7 +108,7 @@ module ArrayViewSlice {
     // domain and array
     //
     proc chpl__serialize() where chpl__rvfMe() {
-      use SysCTypes;
+      use CTypes;
       if chpl_debugSerializeSlice {
         // use printf to avoid messing up tests checking comm counts
         extern proc printf(x...);
@@ -142,15 +142,15 @@ module ArrayViewSlice {
 
     // these could be fields, but indirecting works just as well and
     // makes the class less generic.
-    proc idxType type return dom.idxType;
-    proc rank param return arr.rank;
+    proc idxType type do return dom.idxType;
+    proc rank param do return arr.rank;
 
     // The following seems like it ought to work, but it causes an
     // error in the compiler for non-devel mode...  presumably due to
     // a direct query of eltType in the compiler(?).  As a TODO we
     // might want to hunt this down in the future...
     //
-    //  proc eltType type return arr.eltType;
+    //  proc eltType type do return arr.eltType;
 
 
     //
@@ -177,7 +177,7 @@ module ArrayViewSlice {
 
     iter these(param tag: iterKind) ref
       where tag == iterKind.standalone && !localeModelHasSublocales &&
-           __primitive("method call resolves", privDom, "these", tag) {
+           __primitive("resolves", privDom.these(tag)) {
       const ref myarr = arr;
       forall i in privDom do yield myarr.dsiAccess(i);
     }
@@ -279,7 +279,7 @@ module ArrayViewSlice {
     // locality-oriented queries
     //
 
-    proc dsiHasSingleLocalSubdomain() param
+    proc dsiHasSingleLocalSubdomain() param do
       return privDom.dsiHasSingleLocalSubdomain();
 
     proc dsiLocalSubdomain(loc: locale) {
@@ -346,7 +346,7 @@ module ArrayViewSlice {
     // routines relating to the underlying domains and arrays
     //
 
-    inline proc privDom {
+    inline proc privDom: dom.type {
       if _isPrivatized(dom) {
         return chpl_getPrivatizedCopy(dom.type, _DomPid);
       } else {

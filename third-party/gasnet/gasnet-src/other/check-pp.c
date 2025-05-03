@@ -1,6 +1,9 @@
 /* Test program for gasnet_portable_platform.h */
 
 #ifdef CONFIG_HEADER
+#ifndef _FORTIFY_SOURCE
+#define _FORTIFY_SOURCE 0 /* avoid a harmless -Wundef warning */
+#endif
 #include CONFIG_HEADER
 #endif
 
@@ -50,6 +53,7 @@ typedef entry_t *snap_t;
     CAPTURE_TOK(OS_FAMILYNAME),                                               \
     CAPTURE_FULL("PLATFORM_OS_" PLATFORM_STRINGIFY(PLATFORM_OS_FAMILYNAME),   \
                            0,  _CONCAT(PLATFORM_OS_,PLATFORM_OS_FAMILYNAME)), \
+    CAPTURE_OS_SUBFAMILY() \
     \
     CAPTURE_TOK(ARCH_FAMILYNAME),                                                 \
     CAPTURE_FULL("PLATFORM_ARCH_" PLATFORM_STRINGIFY(PLATFORM_ARCH_FAMILYNAME),   \
@@ -62,6 +66,17 @@ typedef entry_t *snap_t;
     }
 
 #include <gasnet_portable_platform.h>
+
+/* handle conditional subfamily definitions */
+#ifdef PLATFORM_OS_SUBFAMILYNAME
+  #define CAPTURE_OS_SUBFAMILY() \
+     CAPTURE_TOK(OS_SUBFAMILYNAME),                                                         \
+     CAPTURE_FULL("PLATFORM_OS_SUBFAMILY_" PLATFORM_STRINGIFY(PLATFORM_OS_SUBFAMILYNAME),   \
+                  0,  _CONCAT(PLATFORM_OS_SUBFAMILY_,PLATFORM_OS_SUBFAMILYNAME)), 
+#else
+  #define CAPTURE_OS_SUBFAMILY() \
+     CAPTURE_FULL("PLATFORM_OS_SUBFAMILY_NAME","",0),
+#endif
 
 CAPTURE_SNAP(0);
 

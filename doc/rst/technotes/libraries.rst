@@ -70,7 +70,7 @@ example, one can define a Chapel file ``foo.chpl`` like this:
    }
 
    // As will this one
-   export proc baz(int x) {
+   export proc baz(x: int) {
      // Does something different
      ...
    }
@@ -92,18 +92,18 @@ Library Name
 
 The generated library name will be the same as the file being compiled, except
 it will start with ``lib`` if the name does not already, and it will be followed
-by a ``.so`` or ``.a`` suffix.  Thus, in the example above, the generated
-library will be named ``libfoo.so`` or ``libfoo.a``.
+by a ``.so``/``.dylib`` or ``.a`` suffix.  Thus, in the example above, the generated
+library will be named ``libfoo.so``/``libfoo.dylib`` or ``libfoo.a``.
 
 .. code-block:: bash
 
    # Builds library as lib/libfoo.a
    chpl --library --static foo.chpl
 
-   # Builds library as lib/libfoo.so
+   # Builds library as lib/libfoo.so (On MacOS, lib/libfoo.dylib)
    chpl --library --dynamic foo.chpl
 
-   # Builds library as lib/libfoo.so (note: file named libfoo.chpl)
+   # Builds library as lib/libfoo.so (On MacOS, lib/libfoo.dylib) (note: file named libfoo.chpl)
    chpl --library --dynamic libfoo.chpl
 
 The basename used (the ``foo`` portion) can be changed with the ``-o`` or
@@ -185,6 +185,13 @@ module initialization function.  This function will be named
 ``chpl__init_<moduleName>``, and you can find its declaration in your generated
 ``.h`` file.
 
+At present, the generated module initialization function takes two arguments,
+``int64_t _ln`` and ``int32_t _fn``.  These correspond to "line number" and
+"file number", respectively.  The values passed to them are used by the Chapel
+runtime when providing error messages, but do not matter in this context.  In
+the future, they may not be included at all when compiling into a library.  For
+now, feel free to pass any valid number to them.
+
 .. note::
 
    It is recommended that you always call the module initialization function
@@ -260,6 +267,27 @@ An example Makefile which uses the generated ``Makefile.foo`` looks like this:
 
 .. _Makefileless Compilation In Single Locale:
 
+CMake Helper
+~~~~~~~~~~~~
+
+Similar to the makefile helper, the Chapel compiler can also generate a
+CMakeLists file containing the includes directories and linker flags that must
+be added to a CMake project to properly compile. Such a CMakeLists file can be
+generated using ``--library-cmakelists``.
+
+For a Chapel library with the name ``FooLibrary``, this CMakeLists file defines
+``FooLibrary_INCLUDE_DIRS`` and ``FooLibrary_LINK_LIBS`` which can
+be used in your CMake project. To incorporate your Chapel library into a
+target named ``myTarget``, add the following lines to your project's CMakeLists:
+
+.. code-block:: cmake
+
+   include(path/to/generated/CmakeLists/FooLibrary.cmake)
+   target_include_directories(myTarget PUBLIC ${FooLibrary_INCLUDE_DIRS})
+   target_link_libraries(myTarget PUBLIC ${FooLibrary_LINK_LIBS})
+
+.. _CMake Helper Example:
+
 Makefile-less Compilation
 ~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -275,6 +303,7 @@ library):
 
 Note that ``compileline --compile-c++`` is also available for compiling a C++
 program.
+
 
 .. _readme-libraries.Python:
 
@@ -550,14 +579,17 @@ this function itself.  The following should work after replacing
     export proc chpl_library_init_ftn() {
       // Make the runtime/library initialization function visible
       extern proc chpl_library_init(argc: c_int, argv: c_ptr(c_ptr(c_char)));
-      var filename = c"fake";
+      var filename = "fake":c_ptrConst(c_char);
       // Initialize the internal runtime/library
-      chpl_library_init(1, c_ptrTo(filename): c_ptr(c_ptr(c_char)));;
+      chpl_library_init(1, c_ptrTo(filename): c_ptr(c_ptr(c_char)));
       // Initialize the main user module
       chpl__init_MyModuleName();
     }
 
-A simple Fortran example using a function ``myChapelFunction`` from the 
+Note that the module initializer call in this context takes no arguments - that
+is because the arguments will be inserted during Chapel compilation.
+
+A simple Fortran example using a function ``myChapelFunction`` from the
 ``MyModuleName`` library is:
 
 .. code-block:: Fortran

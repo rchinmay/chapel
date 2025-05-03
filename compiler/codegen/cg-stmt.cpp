@@ -1,5 +1,5 @@
 /*
- * Copyright 2020-2022 Hewlett Packard Enterprise Development LP
+ * Copyright 2020-2025 Hewlett Packard Enterprise Development LP
  * Copyright 2004-2019 Cray Inc.
  * Other additional copyright holders may be indicated within.
  *
@@ -29,6 +29,7 @@
 #include "ImportStmt.h"
 #include "LayeredValueTable.h"
 #include "llvmDebug.h"
+#include "llvmTracker.h"
 #include "llvmVer.h"
 #include "misc.h"
 #include "passes.h"
@@ -115,24 +116,6 @@ GenRet ImportStmt::codegen() {
 *                                                                   *
 ********************************* | ********************************/
 
-#ifdef HAVE_LLVM
-static
-void codegenLifetimeEnd(llvm::Type *valType, llvm::Value *addr)
-{
-  GenInfo *info = gGenInfo;
-  const llvm::DataLayout& dataLayout = info->module->getDataLayout();
-
-  int64_t sizeInBytes = -1;
-  if (valType->isSized())
-    sizeInBytes = dataLayout.getTypeStoreSize(valType);
-
-  llvm::ConstantInt *size = llvm::ConstantInt::getSigned(
-    llvm::Type::getInt64Ty(info->llvmContext), sizeInBytes);
-
-  info->irBuilder->CreateLifetimeEnd(addr, size);
-}
-#endif
-
 GenRet BlockStmt::codegen() {
   GenInfo* info    = gGenInfo;
   FILE*    outfile = info->cfile;
@@ -170,11 +153,17 @@ GenRet BlockStmt::codegen() {
     getFunction()->codegenUniqueNum++;
 
     blockStmtBody = llvm::BasicBlock::Create(info->module->getContext(), FNAME("blk_body"));
+    trackLLVMValue(blockStmtBody);
 
-    info->irBuilder->CreateBr(blockStmtBody);
+    llvm::BranchInst* toBody = info->irBuilder->CreateBr(blockStmtBody);
+    trackLLVMValue(toBody);
 
     // Now add the body.
+#if HAVE_LLVM_VER >= 160
+    func->insert(func->end(), blockStmtBody);
+#else
     func->getBasicBlockList().push_back(blockStmtBody);
+#endif
 
     info->irBuilder->SetInsertPoint(blockStmtBody);
 
@@ -182,15 +171,6 @@ GenRet BlockStmt::codegen() {
 
     for_alist(node, this->body) {
       node->codegen();
-      if (CallExpr* call = toCallExpr(node)) {
-        if (call->isPrimitive(PRIM_RETURN)) {
-          for (std::size_t i = 0; i < info->currentStackVariables.size(); ++i) {
-            llvm::Value* val = info->currentStackVariables.at(i).first;
-            llvm::Type* type = info->currentStackVariables.at(i).second;
-            codegenLifetimeEnd(type, val);
-          };
-        }
-      }
     }
 
     info->lvt->removeLayer();
@@ -207,11 +187,26 @@ GenRet BlockStmt::codegen() {
 *                                                                   *
 ********************************* | ********************************/
 
+// If this is 'if gCpuVsGpuToken then ... else ...'
+// then return the appropriate branch, else nil.
+static BlockStmt* chooseCpuVsGpuBranch(CondStmt* cond) {
+  if (SymExpr* se = toSymExpr(cond->condExpr))
+    if (se->symbol() == gCpuVsGpuToken)
+      return gCodegenGPU ? cond->elseStmt : cond->thenStmt;
+  return nullptr;
+}
+
 GenRet
 CondStmt::codegen() {
   GenInfo* info    = gGenInfo;
   FILE*    outfile = info->cfile;
   GenRet   ret;
+
+  if (BlockStmt* chosenBlock = chooseCpuVsGpuBranch(this)) {
+    for_alist(node, chosenBlock->body)
+      node->codegen();
+    return ret;
+  }
 
   codegenStmt(this);
 
@@ -237,7 +232,22 @@ CondStmt::codegen() {
 
     if (elseStmt) {
       info->cStatements.push_back(" else ");
-      elseStmt->codegen();
+
+      // If the first statement is the only statement and itself a
+      // conditional, just dive in and codegen it to avoid a potential
+      // cascade of curly brackets, striving instead for:
+      //
+      // ...
+      // } else if (...) {
+      // } else if (...) {
+      // ...
+      //
+      Expr* firstStmt = elseStmt->body.head;
+      if (elseStmt->length() == 1 && isCondStmt(firstStmt)) {
+        firstStmt->codegen();
+      } else {
+        elseStmt->codegen();
+      }
     }
 
   } else {
@@ -260,16 +270,26 @@ CondStmt::codegen() {
         info->module->getContext(),
         FNAME("cond_end"));
 
+    trackLLVMValue(condStmtIf);
+    trackLLVMValue(condStmtThen);
+    trackLLVMValue(condStmtEnd);
+
     if (elseStmt) {
       condStmtElse = llvm::BasicBlock::Create(info->module->getContext(),
                                               FNAME("cond_else"));
+      trackLLVMValue(condStmtElse);
     }
 
     info->lvt->addLayer();
 
-    info->irBuilder->CreateBr(condStmtIf);
+    llvm::BranchInst* toCond = info->irBuilder->CreateBr(condStmtIf);
+    trackLLVMValue(toCond);
 
+#if HAVE_LLVM_VER >= 160
+    func->insert(func->end(), condStmtIf);
+#else
     func->getBasicBlockList().push_back(condStmtIf);
+#endif
     info->irBuilder->SetInsertPoint(condStmtIf);
 
     GenRet condValueRet = codegenValue(condExpr);
@@ -282,33 +302,49 @@ CondStmt::codegen() {
           condValue,
           llvm::ConstantInt::get(condValue->getType(), 0),
           FNAME("condition"));
+      trackLLVMValue(condValue);
     }
 
-    info->irBuilder->CreateCondBr(
+    llvm::BranchInst* condBr = info->irBuilder->CreateCondBr(
         condValue,
         condStmtThen,
         (elseStmt) ? condStmtElse : condStmtEnd);
+    trackLLVMValue(condBr);
 
+#if HAVE_LLVM_VER >= 160
+    func->insert(func->end(), condStmtThen);
+#else
     func->getBasicBlockList().push_back(condStmtThen);
+#endif
     info->irBuilder->SetInsertPoint(condStmtThen);
 
     info->lvt->addLayer();
     thenStmt->codegen();
 
-    info->irBuilder->CreateBr(condStmtEnd);
+    llvm::BranchInst* toEnd1 = info->irBuilder->CreateBr(condStmtEnd);
+    trackLLVMValue(toEnd1);
     info->lvt->removeLayer();
 
     if(elseStmt) {
+#if HAVE_LLVM_VER >= 160
+      func->insert(func->end(), condStmtElse);
+#else
       func->getBasicBlockList().push_back(condStmtElse);
+#endif
       info->irBuilder->SetInsertPoint(condStmtElse);
 
       info->lvt->addLayer();
       elseStmt->codegen();
-      info->irBuilder->CreateBr(condStmtEnd);
+      llvm::BranchInst* toEnd2 = info->irBuilder->CreateBr(condStmtEnd);
+      trackLLVMValue(toEnd2);
       info->lvt->removeLayer();
     }
 
+#if HAVE_LLVM_VER >= 160
+    func->insert(func->end(), condStmtEnd);
+#else
     func->getBasicBlockList().push_back(condStmtEnd);
+#endif
     info->irBuilder->SetInsertPoint(condStmtEnd);
 
     info->lvt->removeLayer();
@@ -345,16 +381,23 @@ GenRet GotoStmt::codegen() {
     llvm::BasicBlock *blockLabel;
     if(!(blockLabel = info->lvt->getBlock(cname))) {
       blockLabel = llvm::BasicBlock::Create(info->module->getContext(), cname);
+      trackLLVMValue(blockLabel);
       info->lvt->addBlock(cname, blockLabel);
     }
 
-    info->irBuilder->CreateBr(blockLabel);
+    llvm::BranchInst* toLabel = info->irBuilder->CreateBr(blockLabel);
+    trackLLVMValue(toLabel);
 
     getFunction()->codegenUniqueNum++;
 
     llvm::BasicBlock *afterGoto = llvm::BasicBlock::Create(
         info->module->getContext(), FNAME("afterGoto"));
+    trackLLVMValue(afterGoto);
+#if HAVE_LLVM_VER >= 160
+    func->insert(func->end(), afterGoto);
+#else
     func->getBasicBlockList().push_back(afterGoto);
+#endif
     info->irBuilder->SetInsertPoint(afterGoto);
 
 #endif

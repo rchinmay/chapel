@@ -34,7 +34,11 @@ proc ExampleRecord2.secondaryMethod() { }
 
 // First we will declare a simple record with a field that is a tuple of
 // integers.  We'll add special methods and iterators to this record later.
-record R {
+// To make the language recognize a special method, it's necessary to implement
+// the corresponding interface. For the ``hash`` method we'll see below, the
+// appropriate interface is ``hashable``. We can mark ``R`` as implementing
+// ``hashable`` by including a ``: hashable`` after its name when we declare it.
+record R : hashable, writeSerializable, readDeserializable {
   param size: int = 10;
   var vals: size*int;
 }
@@ -67,8 +71,8 @@ record R {
 */
 
 // The ``this`` method gives the record the ability to be accessed like an
-// array.  Here we use the the argument as an index to choose a tuple element.
-proc R.this(n: int) ref {
+// array.  Here we use the argument as an index to choose a tuple element.
+proc ref R.this(n: int) ref {
   if !vals.indices.contains(n) then
     halt("index out of bounds accessing R");
   return vals[n];
@@ -94,7 +98,7 @@ writeln(r.vals);
 // An iterator named ``these`` that can accept zero arguments is automatically
 // called when a record or class instance is used in the iterator position
 // of a ``for`` loop.
-iter R.these() ref {
+iter ref R.these() ref {
   for i in vals.indices {
     yield vals[i];
   }
@@ -114,17 +118,24 @@ writeln(r.vals);
   --------------
 */
 
+// By default, the compiler will define a hash method for any record
+// that does not define its own ``==`` or ``!=`` overloads.  This
+// permits such records to be used as the indices of associative
+// domains, the values in a :mod:`Set`, or the keys in a :mod:`Map`.
+// Users can override this default by supplying their own hash method
+// that returns a ``uint`` or ``int`` value.  For example:
+
 use Map;
 
-proc R.hash() {
+proc R.hash(): uint {
   writeln("In custom hash function");
-  return vals[0];
+  return vals[0] : uint;
 }
 
-// Now that the record R has a ``hash`` method defined, Chapel's map
-// and associative domain will call this custom ``hash`` instead of
-// the compiler generated method for ``hash``. Note that this only works
-// for records and will not apply to defining a ``int.hash`` for example.
+// Now that the record R has a ``hash`` method defined, Chapel's,
+// ``set``, ``map``, and associative domain types will call this
+// custom ``hash`` instead of the compiler-generated method.
+
 var myMap = new map(R, int);
 var myD: domain(R);
 var myR = new R();
@@ -137,69 +148,54 @@ myD += myR;
   ----------
 */
 
-// The ``writeThis`` method defines how to write an instance of R to a
+// The ``serialize`` method defines how to write an instance of R to a
 // channel. We'll write the ``vals`` tuple between asterisks. See section
-// :ref:`readThis-writeThis-readWriteThis` for more information  on the
-// ``writeThis``, ``readThis``, and ``readWriteThis`` methods.
+// :ref:`serialize-deserialize` for more information  on the ``serialize`` and
+// ``deserialize`` methods.
 
 use IO; // required for file operations
 
 config const filename = "tempfile.txt";
 
-proc R.writeThis(ch: channel) throws {
-  ch.write("*", vals, "*");
+proc R.serialize(writer: fileWriter(?),
+                 ref serializer: writer.serializerType) throws {
+  writer.write("*", vals, "*");
 }
 
 {
-  // Open the file in a new block so that deinitializers
+  // Open the fileWriter in a new block so that deinitializers
   // will close it at the end of the block
-  var f = open(filename, iomode.cw);
-  var ch = f.writer();
-  ch.writeln(r);
+  var fw = openWriter(filename);
+  fw.writeln(r);
 }
 
-// The ``readThis`` method defines how to read an instance of R from a
+// The ``deserialize`` method defines how to read an instance of R from a
 // channel. We'll read the ``vals`` tuple between asterisks like how it
 // was written above.
-proc R.readThis(ch: channel) throws {
-  var star = new ioLiteral("*");
-  ch.read(star);
-  ch.read(vals);
-  ch.read(star);
+proc ref R.deserialize(reader: fileReader(?),
+                       ref deserializer: reader.deserializerType) throws {
+  reader.readLiteral("*");
+  reader.read(vals);
+  reader.readLiteral("*");
 }
 
 {
-  var f = open(filename, iomode.r);
-  var ch = f.reader();
+  var fr = openReader(filename);
   var r2 = new R();
-  ch.readln(r2);
+  fr.readln(r2);
   assert(r == r2);
 }
 
-// If the record should be read and written using the same
-// format, the combined ``readWriteThis`` method can replace the
-// ``readThis`` and ``writeThis`` methods. This method will be
-// used for both reading and writing the ``vals`` tuple
-// surrounded by double asterisks. The ``readThis`` and
-// ``writeThis`` methods defined above have higher precedence
-// than ``readWriteThis``, so this function is not used because
-// they are defined.
-proc R.readWriteThis(ch: channel) throws {
-  const stars = new ioLiteral("**");
-  ch <~> stars <~> vals <~> stars;
-}
-
 {
-  var chW = openwriter(filename);
-  chW.writeln(r);
-  chW.flush();
+  var fw = openWriter(filename);
+  fw.writeln(r);
+  fw.flush();
 
   writeln(r);
   var r2 = new R();
-  var chR = openreader(filename);
-  chR.readln(r2);
+  var fr = openReader(filename);
+  fr.readln(r2);
   assert(r == r2);
-  
 }
 
 // Clean up the temporary file we created earlier.

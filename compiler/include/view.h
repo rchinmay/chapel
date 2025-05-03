@@ -1,16 +1,16 @@
 /*
- * Copyright 2020-2022 Hewlett Packard Enterprise Development LP
+ * Copyright 2020-2025 Hewlett Packard Enterprise Development LP
  * Copyright 2004-2019 Cray Inc.
  * Other additional copyright holders may be indicated within.
- * 
+ *
  * The entirety of this work is licensed under the Apache License,
  * Version 2.0 (the "License"); you may not use this file except
  * in compliance with the License.
- * 
+ *
  * You may obtain a copy of the License at
- * 
+ *
  *     http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -24,6 +24,11 @@
 #include "expr.h"
 #include "vec.h"
 #include <vector>
+
+// Include 'dyno' headers to add 'nprint' overloads for 'dyno' types.
+#include <chpl/uast/all-uast.h>
+#include <chpl/resolution/resolution-types.h>
+#include <chpl/types/all-types.h>
 
 class GenRet;
 class ResolutionCandidate;
@@ -62,6 +67,17 @@ void nprint_view(BaseAST* ast);
 void nprint_view(GenRet& gen); // defined in codegen/codegen.cpp
 void nprint_view_noline(BaseAST* ast);
 
+// Add overloads for 'dyno' stuff, as needed.
+void nprint_view(const chpl::uast::AstNode* x);
+void nprint_view(const chpl::types::Type* x);
+void nprint_view(const chpl::types::QualifiedType& x);
+void nprint_view(const chpl::resolution::CallInfo& x);
+void nprint_view(const chpl::resolution::ResolvedExpression* x);
+void nprint_view(const chpl::resolution::TypedFnSignature* x);
+void nprint_view(const chpl::resolution::UntypedFnSignature* x);
+void nprint_view(const chpl::ID& x);
+void nprint_view(const chpl::UniqueString& x);
+
 void mark_view(BaseAST* ast, int id);
 
 void list_view(int id);
@@ -70,8 +86,6 @@ void list_view_noline(const BaseAST* ast);
 
 void astDump_view(int id);
 void astDump_view(BaseAST* ast);
-void astDumpToNode_view(int id);
-void astDumpToNode_view(BaseAST* ast);
 
 void viewFlags(int id);
 

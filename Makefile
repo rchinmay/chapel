@@ -1,4 +1,4 @@
-# Copyright 2020-2022 Hewlett Packard Enterprise Development LP
+# Copyright 2020-2025 Hewlett Packard Enterprise Development LP
 # Copyright 2004-2019 Cray Inc.
 # Other additional copyright holders may be indicated within.
 #
@@ -47,6 +47,9 @@
 #
 MAKEFLAGS = --no-print-directory
 
+MODULES_TO_LINT = \
+	$(shell find $(CHPL_MAKE_HOME)/modules/dists -name '*.chpl')
+
 export CHPL_MAKE_HOME=$(shell pwd)
 export CHPL_MAKE_PYTHON := $(shell $(CHPL_MAKE_HOME)/util/config/find-python.sh)
 
@@ -56,12 +59,19 @@ all: comprt
 	@test -r Makefile.devel && $(MAKE) develall || echo ""
 
 comprt: FORCE
+	@$(MAKE) chplenv-verify
 	@$(MAKE) compiler
 	@$(MAKE) third-party-try-opt
 	@$(MAKE) always-build-test-venv
 	@$(MAKE) always-build-chpldoc
+	@$(MAKE) always-build-chapel-py
+	@$(MAKE) always-build-cls-test
+	@$(MAKE) always-build-chplcheck
+	@$(MAKE) always-build-cls
 	@$(MAKE) runtime
 	@$(MAKE) modules
+	@$(MAKE) chpl-cmake-module-files
+	@$(MAKE) chplenv-verify
 
 notcompiler: FORCE
 	@$(MAKE) third-party-try-opt
@@ -69,14 +79,25 @@ notcompiler: FORCE
 	@$(MAKE) runtime
 	@$(MAKE) modules
 
-libchplcomp: FORCE
-	@echo "Making the compiler library..."
-	@cd compiler/next && $(MAKE) -f Makefile.help libchplcomp
+frontend: FORCE
+	@echo "Making the frontend compiler library..."
+	@cd third-party && $(MAKE) llvm
+	@cd third-party && $(MAKE) CHPL_MAKE_HOST_TARGET=--host jemalloc
+	@cd third-party && $(MAKE) CHPL_MAKE_HOST_TARGET=--host mimalloc
+	@cd compiler && $(MAKE) frontend
+
+frontend-shared: FORCE
+	@echo "Making the frontend compiler library (always shared)..."
+	@cd third-party && $(MAKE) llvm
+	@cd third-party && $(MAKE) CHPL_MAKE_HOST_TARGET=--host jemalloc
+	@cd third-party && $(MAKE) CHPL_MAKE_HOST_TARGET=--host mimalloc
+	@cd compiler && $(MAKE) frontend-shared
 
 compiler: FORCE
 	@echo "Making the compiler..."
 	@cd third-party && $(MAKE) llvm
 	@cd third-party && $(MAKE) CHPL_MAKE_HOST_TARGET=--host jemalloc
+	@cd third-party && $(MAKE) CHPL_MAKE_HOST_TARGET=--host mimalloc
 	@cd compiler && $(MAKE)
 
 parser: FORCE
@@ -114,10 +135,21 @@ third-party-c2chapel-venv: FORCE
 	cd third-party && $(MAKE) c2chapel-venv; \
 	fi
 
+third-party-chapel-py-venv: FORCE
+	cd third-party && $(MAKE) chapel-py-venv;
+
 test-venv: third-party-test-venv
 
-chpldoc: compiler third-party-chpldoc-venv
+chapel-py-venv: frontend-shared
+	$(MAKE) third-party-chapel-py-venv
+
+cls-test-venv: FORCE chapel-py-venv
+	cd third-party && $(MAKE) cls-test-venv
+
+chpldoc: third-party-chpldoc-venv
+	@cd third-party && $(MAKE) llvm
 	cd compiler && $(MAKE) chpldoc
+	@cd modules && $(MAKE)
 	@test -r Makefile.devel && $(MAKE) man-chpldoc || echo ""
 
 always-build-test-venv: FORCE
@@ -130,11 +162,30 @@ always-build-chpldoc: FORCE
 	$(MAKE) chpldoc; \
 	fi
 
-chplvis: compiler third-party-fltk FORCE
-	cd tools/chplvis && $(MAKE)
-	cd tools/chplvis && $(MAKE) install
+always-build-chapel-py: FORCE
+	-@if [ -n "$$CHPL_ALWAYS_BUILD_CHAPEL_PY" ]; then \
+	$(MAKE) chapel-py-venv; \
+	fi
 
-mason: chpldoc notcompiler FORCE
+always-build-cls-test: FORCE
+	-@if [ -n "$$CHPL_ALWAYS_BUILD_CHAPEL_PY_TEST" ]; then \
+	$(MAKE) cls-test-venv; \
+	fi
+
+always-build-chplcheck: FORCE
+	-@if [ -n "$$CHPL_ALWAYS_BUILD_CHPLCHECK" ]; then \
+	$(MAKE) chplcheck; \
+	fi
+
+always-build-cls: FORCE
+	-@if [ -n "$$CHPL_ALWAYS_BUILD_CHPL_LANGUAGE_SERVER" ]; then \
+	$(MAKE) chpl-language-server; \
+	fi
+
+chplvis: FORCE
+	cd tools/chplvis && $(MAKE) && $(MAKE) install
+
+mason: compiler chpldoc notcompiler FORCE
 	cd tools/mason && $(MAKE) && $(MAKE) install
 
 protoc-gen-chpl: chpldoc notcompiler FORCE
@@ -144,23 +195,56 @@ c2chapel: third-party-c2chapel-venv FORCE
 	cd tools/c2chapel && $(MAKE)
 	cd tools/c2chapel && $(MAKE) install
 
+chplcheck: frontend-shared FORCE
+	@# chplcheck's build files take care of ensuring the virtual env is built.
+	@# Best not to depend on chapel-py-venv here, because at the time of
+	@# writing this target is always FORCEd (so we'd end up building it twice).
+	cd tools/chplcheck && $(MAKE) all install
+
+chpl-language-server: frontend-shared FORCE
+	@# chpl-language-server's build files take care of ensuring the virtual
+	@# env is built. Best not to depend on chapel-py-venv here, because at
+	@# the time of writing this target is always FORCEd (so we'd end up
+	@# building it twice).
+	cd tools/chpl-language-server && $(MAKE) all install
+
+chpl-cmake-module-files: FORCE
+	@echo "Generating CMake module files..."
+	@cd compiler && $(MAKE) chpl-cmake-module-files
+
+lint-standard-modules: chplcheck FORCE
+	tools/chplcheck/chplcheck --skip-unstable \
+		--internal-prefix "_" \
+		--internal-prefix "chpl_" \
+		--disable-rule ControlFlowParentheses \
+		--disable-rule UnusedFormal \
+		--disable-rule LineLength \
+		$(MODULES_TO_LINT)
+
 compile-util-python: FORCE
 	@if $(CHPL_MAKE_PYTHON) -m compileall -h > /dev/null 2>&1 ; then \
 	  echo "Compiling Python scripts in util/" ; \
 	  $(CHPL_MAKE_PYTHON) -m compileall util/config -q ; \
 	  $(CHPL_MAKE_PYTHON) -m compileall util/chplenv -q ; \
+	  if [ -d third-party/chpl-venv/install/chpldeps ] ; then \
+	    echo "Compiling Python scripts in chpl-venv/" ; \
+	    $(CHPL_MAKE_PYTHON) -m compileall third-party/chpl-venv/install/chpldeps/ -q ; \
+	  fi ; \
 	else \
 	  echo "Not compiling Python scripts - missing compileall" ; \
 	fi
 
-third-party-fltk: FORCE
-	cd third-party/fltk && $(MAKE)
+chplenv-verify: FORCE
+	-@if [ -z "$$CHPLENV_SKIP_VERIFY" ]; then \
+	$(CHPL_MAKE_ALL_VARS) $(CHPL_MAKE_HOME)/util/printchplenv --verify >/dev/null ; \
+	fi
 
 clean: FORCE
 	cd compiler && $(MAKE) clean
 	cd modules && $(MAKE) clean
 	cd runtime && $(MAKE) clean
 	cd third-party && $(MAKE) clean
+	cd tools/chpldoc && $(MAKE) clean
 	if [ -e doc/Makefile ]; then cd doc && $(MAKE) clean; fi
 	rm -f util/chplenv/*.pyc
 
@@ -169,6 +253,7 @@ cleanall: FORCE
 	cd modules && $(MAKE) cleanall
 	cd runtime && $(MAKE) cleanall
 	cd third-party && $(MAKE) cleanall
+	cd tools/chpldoc && $(MAKE) cleanall
 	if [ -e doc/Makefile ]; then cd doc && $(MAKE) cleanall; fi
 	rm -f util/chplenv/*.pyc
 	rm -rf build
@@ -176,6 +261,9 @@ cleanall: FORCE
 cleandeps: FORCE
 	cd compiler && $(MAKE) cleandeps
 	cd runtime && $(MAKE) cleandeps
+
+clean-cmakecache: FORCE
+	cd compiler && $(MAKE) clean-cmakecache
 
 clobber: FORCE
 	cd compiler && $(MAKE) clobber
@@ -185,12 +273,19 @@ clobber: FORCE
 	cd tools/chplvis && $(MAKE) clobber
 	cd tools/c2chapel && $(MAKE) clobber
 	cd tools/mason && $(MAKE) clobber
-	cd tools/protoc-gen-chpl && $(MAKE) clobber
+	-cd tools/protoc-gen-chpl && $(MAKE) clobber
+	cd tools/chpldoc && $(MAKE) clobber
+	cd tools/chpl-language-server && $(MAKE) clobber
+	cd tools/chplcheck && $(MAKE) clobber
 	if [ -e doc/Makefile ]; then cd doc && $(MAKE) clobber; fi
 	rm -rf bin
 	rm -rf lib
 	rm -rf build
 	rm -f util/chplenv/*.pyc
+	rm -rf util/chplenv/__pycache__
+	rm -rf util/config/__pycache__
+	rm -rf util/test/__pycache__
+	rm -rf util/buildRelease/__pycache__
 	rm -f compiler/main/CONFIGURED_PREFIX
 # these files might be generated by ./configure
 	rm -f configured-chplconfig configured-prefix configured-chpl-home chplconfig
@@ -204,7 +299,7 @@ check:
 check-chpldoc: chpldoc third-party-test-venv
 	@bash $(CHPL_MAKE_HOME)/util/test/checkChplDoc
 
-install: comprt
+install:
 	@bash $(CHPL_MAKE_HOME)/util/buildRelease/install.sh --stage=${DESTDIR}
 
 -include Makefile.devel

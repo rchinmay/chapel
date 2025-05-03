@@ -19,7 +19,9 @@ GASNETI_BEGIN_NOWARN
 typedef enum {
     GEX_MK_CLASS_HOST,      // "normal" memory (eg GEX_MK_HOST)
     GEX_MK_CLASS_CUDA_UVA,  // CUDA UVA memory
-    GEX_MK_CLASS_HIP        // HIP device memory
+    GEX_MK_CLASS_HIP,       // HIP device memory
+    GEX_MK_CLASS_ZE,        // Level Zero device memory
+    _GEX_MK_CLASS_COUNT
 } gex_MK_Class_t;
 
 // Struct containing a union and an enum to indicate which member has been populated.
@@ -36,6 +38,11 @@ typedef struct {
         struct {
             int                    gex_hipDevice;
         }                    gex_class_hip;
+        struct {
+            void*                  gex_zeDevice;
+            void*                  gex_zeContext;
+            uint32_t               gex_zeMemoryOrdinal;
+        }                    gex_class_ze;
     }                    gex_args;
 } gex_MK_Create_args_t;
 
@@ -61,6 +68,7 @@ typedef struct gasneti_mk_impl_s gasneti_mk_impl_t;
     gasneti_Client_t       _client;     \
     gex_MK_Class_t         _mk_class;   \
     gasneti_mk_impl_t     *_mk_impl;    \
+    void                  *_mk_conduit; \
     gasneti_weakatomic32_t _ref_count;
   typedef struct { GASNETI_MK_COMMON } *gasneti_MK_t;
   #if GASNET_DEBUG
@@ -87,11 +95,33 @@ GASNETI_END_EXTERNC
   // HIP platform was determined at GASNet-EX configure time.
   // If these conflict with client code, then this is not the right GASNet-EX build
   #if GASNETI_HIP_PLATFORM_NVIDIA
+    #if defined(__HIP_PLATFORM_AMD__) || defined(__HIP_PLATFORM_HCC__)
+    #error Conflicting HIP platform at GASNet configure vs gasnet_mk.h compile
+    #endif
+    #ifndef __HIP_PLATFORM_NVCC__
     #define __HIP_PLATFORM_NVCC__ // legacy
+    #endif
+    #ifndef __HIP_PLATFORM_NVIDIA__
     #define __HIP_PLATFORM_NVIDIA__
+    #endif
   #else
+    #if defined(__HIP_PLATFORM_NVIDIA__) || defined(__HIP_PLATFORM_NVCC__)
+    #error Conflicting HIP platform at GASNet configure vs gasnet_mk.h compile
+    #endif
+    #ifndef __HIP_PLATFORM_HCC__
     #define __HIP_PLATFORM_HCC__ // legacy
+    #endif
+    #ifndef __HIP_PLATFORM_AMD__
     #define __HIP_PLATFORM_AMD__
+    #endif
+  #endif
+#endif
+
+// Things for use only in conduit code
+#if GASNETI_BUILDING_CONDUIT
+  #if GASNET_HAVE_MK_CLASS_ZE
+    extern int gasneti_mk_ze_device_ordinal(void *device_handle_arg, int gpu_only);
+    extern const char *gasneti_mk_ze_strerror(unsigned int result);
   #endif
 #endif
 

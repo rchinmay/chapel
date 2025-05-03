@@ -3,34 +3,16 @@
 # This should be sourced by other scripts that wish to make use of the
 # variables set here.
 
-CWD=$(cd $(dirname ${BASH_SOURCE[0]}) ; pwd)
-source $CWD/functions.bash
+UTIL_CRON_DIR=$(cd $(dirname ${BASH_SOURCE[0]}) ; pwd)
+source $UTIL_CRON_DIR/functions.bash
 
-# For our internal testing, this is necessary to get the latest version of gcc
-# on the system.
-if [ -z "${CHPL_SOURCED_BASHRC}" -a -f ~/.bashrc ] ; then
-    source ~/.bashrc
-    export CHPL_SOURCED_BASHRC=true
-fi
-
-if [ -z "${OFFICIAL_SYSTEM_LLVM}" ] ; then
-  if [ -f /data/cf/chapel/setup_system_llvm.bash ] ; then
-    source /data/cf/chapel/setup_system_llvm.bash
-  elif [ -f /cray/css/users/chapelu/setup_system_llvm.bash ] ; then
-    source /cray/css/users/chapelu/setup_system_llvm.bash
-  elif [ -f /cy/users/chapelu/setup_system_llvm.bash ] ; then
-    source /cy/users/chapelu/setup_system_llvm.bash
-  fi
-fi
-
-if [ -f /data/cf/chapel/setup_cmake_nightly.bash ] ; then
-  source /data/cf/chapel/setup_cmake_nightly.bash
-elif [ -f /cray/css/users/chapelu/setup_cmake_nightly.bash ] ; then
-  source /cray/css/users/chapelu/setup_cmake_nightly.bash
-fi
+source $UTIL_CRON_DIR/load-base-deps.bash
 
 log_info "gcc version: $(which gcc)"
 gcc --version
+
+log_info "python3 version: $(which python3)"
+python3 --version
 
 SCRIPT_NAME=$0
 start_time=$(date '+%s')
@@ -81,7 +63,7 @@ function with_logging()
 if [ "${CHPL_HOME+x}" = "x" ] ; then
     log_info "CHPL_HOME is already set to: ${CHPL_HOME}"
 else
-    export CHPL_HOME=$(cd $CWD/../.. ; pwd)
+    export CHPL_HOME=$(cd $UTIL_CRON_DIR/../.. ; pwd)
     log_info "CHPL_HOME is not set. Defaulting to: ${CHPL_HOME}"
 fi
 log_info "CHPL_HOME is: ${CHPL_HOME}"
@@ -101,11 +83,15 @@ export CHPL_TARGET_CPU=none
 
 explicit_prefix=${CHPL_NIGHTLY_LOG_PREFIX}
 default_prefix=${TMPDIR:-/tmp}/chapel_logs
-sea_prefix=/data/sea/chapel
+css_prefix=/hpcdc/project/chapel
+log_info "About to set log prefix. explicit: ${explicit_prefix}"
+log_info "About to set log prefix. default: ${default_prefix}"
+log_info "About to set log prefix. css: ${css_prefix}"
+
 if [ -n "$explicit_prefix" ]; then
     LOGDIR_PREFIX=$explicit_prefix
-elif [ -d $sea_prefix ] ; then
-    LOGDIR_PREFIX=$sea_prefix
+elif [ -d $css_prefix ] ; then
+    LOGDIR_PREFIX=$css_prefix
 else
     LOGDIR_PREFIX=$default_prefix
     if [ ! -d $LOGDIR_PREFIX ] ; then
@@ -115,7 +101,7 @@ else
 fi
 export LOGDIR_PREFIX
 
-default_perf_prefix=/cray/css/users/chapelu
+default_perf_prefix=/hpcdc/project/chapel
 if [ ! -d $default_perf_prefix ] ; then
   default_perf_prefix=/cy/users/chapelu
 fi
@@ -137,5 +123,7 @@ fi
 
 # Work-around to remove git submodules
 #   See Cray/chapel-private#1050 for long term solution
-log_info "Clearing out git submodules in test/mason/"
-git clean -ffdx ${CHPL_HOME}/test/mason
+if [ -z "${CHPL_NIGHTLY_DO_NOTHING:-}" ]; then
+  log_info "Clearing out git submodules in test/mason/"
+  git clean -ffdx ${CHPL_HOME}/test/mason
+fi

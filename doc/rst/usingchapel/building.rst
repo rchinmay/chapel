@@ -112,11 +112,11 @@ Chapel can be built and installed to a specific location as follows:
   make
   make install
 
-Running ``./configure`` will save your current configuration of
-``$CHPL_`` settings into a ``chplconfig`` file.  Running it with the
-``--prefix`` or ``--chpl-home`` options permits you to specify where
-and how Chapel should be installed during the ``make install`` step.
-Specifically:
+Running ``./configure`` will save your current configuration of ``$CHPL_``
+settings into a ``chplconfig`` file. This ``chplconfig`` file will be installed
+wherever ``CHPL_HOME`` is. Running ``./configure`` with the ``--prefix`` or
+``--chpl-home`` options permits you to specify where and how Chapel should be
+installed during the ``make install`` step. Specifically:
 
 * ``--prefix=/dir/for/install/`` causes the Chapel compiler,
   libraries, and supporting code to be installed into the directories:
@@ -128,12 +128,19 @@ Specifically:
   This technique is designed to install Chapel using a standard
   directory structure for the purposes of integrating it into a
   standard location that is already in your path, such as
-  ``/usr/local/`` or ``~/``.  Note that elevated privileges are likely
+  ``/usr/local/``.  Note that elevated privileges are likely
   to be required for any system-wide installation locations.
+
+  Please note that for any prefix-installed version of Chapel, the meaning of
+  ``$CHPL_HOME`` (e.g., as printed by compiler messages) is the path printed by
+  ``chpl --print-chpl-home``. This is typically
+  ``/dir/for/install/share/chapel/x.yz`` where ``x.yz`` is the Chapel version
+  that was installed.
 
 * ``--chpl-home=/dir/for/install`` copies key files and directories
   from the Chapel source tree into ``/dir/for/install``, preserving
-  Chapel's traditional directory structure.
+  Chapel's traditional directory structure.  As you might expect, the
+  meaning of ``$CHPL_HOME`` for such installs is ``/dir/for/install``.
 
 
 -----------------------------------------
@@ -193,7 +200,7 @@ Each target processes all subdirectories, then the current directory.
 Makefile Options
 ----------------
 
-The Chapel makefiles have a few options that enable or disable
+The Chapel Makefiles have a few options that enable or disable
 optimization, debugging support, profiling, and back-end C compiler
 warnings. The variables are described below. Set the value to 1 to
 enable the feature or 0 to disable it (e.g., ``make DEBUG=1 OPTIMIZE=1
@@ -202,12 +209,34 @@ WARNINGS=0``).
   ========  ================================================================
   Option    Effect
   ========  ================================================================
+  ASSERTS   Enables correctness assertions in the compiler and runtime
   DEBUG     Generate debug information (e.g., pass ``-g`` to the C compiler)
   OPTIMIZE  Enable optimizations (e.g., pass ``-O3`` to the C compiler)
   PROFILE   Enable profiling support (e.g., pass ``-pg`` to C compiler)
   WARNINGS  Enable more warnings and treat them as errors
-  ASSERTS   Enables correctness assertions in the compiler and runtime
   ========  ================================================================
 
+Note that these settings only affect how the ``chpl`` compiler and its
+runtime libraries are built, as well as the third-party packages that
+they rely upon.  In particular, building Chapel with ``DEBUG`` or
+``OPTIMIZE`` set will not cause invocations of the resulting ``chpl``
+compiler to automatically generate executables with debugging or
+optimizations enabled.
 
 
+------------------------
+Controlling Build Output
+------------------------
+
+Aside from the default build output, the Chapel compiler Makefile also supports
+two options to increase or decrease the verbosity of the build. These options
+can be set either on the command-line as arguments to ``make``, or through the
+environment. To enable either option, set the variable to 1
+(e.g., ``make VERBOSE=1`` or ``export VERBOSE=1``).
+
+  ========  ================================================================
+  Option    Effect
+  ========  ================================================================
+  VERBOSE   Print verbose CMake output and all commands executed by the Makefiles
+  QUIET     Print the minimum output from CMake (e.g., only errors, warnings)
+  ========  ================================================================

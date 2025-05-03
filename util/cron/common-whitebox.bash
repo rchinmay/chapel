@@ -15,8 +15,8 @@
 #
 # The default is cray-xc
 
-CWD=$(cd $(dirname ${BASH_SOURCE[0]}) ; pwd)
-source $CWD/functions.bash
+UTIL_CRON_DIR=$(cd $(dirname ${BASH_SOURCE[0]}) ; pwd)
+source $UTIL_CRON_DIR/functions.bash
 
 # Ensure module commands are available.
 local_bashrc=/etc/bash.bashrc.local
@@ -116,7 +116,7 @@ module unload cray-mpich
 log_info "Unloading atp module"
 module unload atp
 
-export CHPL_HOME=$(cd $CWD/../.. ; pwd)
+export CHPL_HOME=$(cd $UTIL_CRON_DIR/../.. ; pwd)
 
 # Set CHPL_HOST_COMPILER.
 if [ -n "${chpl_host_value}" ] ; then
@@ -134,7 +134,7 @@ export CHPL_LLVM=none
 
 
 # Set some vars that nightly cares about.
-export CHPL_NIGHTLY_LOGDIR=${CHPL_NIGHTLY_LOGDIR:-/data/sea/chapel/Nightly}
+export CHPL_NIGHTLY_LOGDIR=${CHPL_NIGHTLY_LOGDIR:-/hpcdc/project/chapel/Nightly}
 export CHPL_NIGHTLY_CRON_LOGDIR="$CHPL_NIGHTLY_LOGDIR"
 
 # Ensure compatible CPU targeting module is loaded. Unload any existing one
@@ -149,6 +149,10 @@ module load cray-fftw
 
 log_info "Current loaded modules:"
 module list
+
+log_info "Updating LD_LIBRARY_PATH to include CRAY_LD_LIBRARY_PATH"
+export LD_LIBRARY_PATH=$CRAY_LD_LIBRARY_PATH:$LD_LIBRARY_PATH
+echo $LD_LIBRARY_PATH
 
 log_info "Chapel environment:"
 $CHPL_HOME/util/printchplenv --all --no-tidy

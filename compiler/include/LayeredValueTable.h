@@ -1,16 +1,16 @@
 /*
- * Copyright 2020-2022 Hewlett Packard Enterprise Development LP
+ * Copyright 2020-2025 Hewlett Packard Enterprise Development LP
  * Copyright 2004-2019 Cray Inc.
  * Other additional copyright holders may be indicated within.
- * 
+ *
  * The entirety of this work is licensed under the Apache License,
  * Version 2.0 (the "License"); you may not use this file except
  * in compliance with the License.
- * 
+ *
  * You may obtain a copy of the License at
- * 
+ *
  *     http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -99,6 +99,9 @@ class LayeredValueTable
       bool addedToChapelAST;
       // Line and file info for the C declaration
       astlocT astloc;
+      // Store the type of the value so we can figure out the element type of
+      // LLVM opaque pointers.
+      Type* chplType;
 
       Storage() : astloc(0, NULL) {
         u.value = NULL;
@@ -113,22 +116,23 @@ class LayeredValueTable
         isLVPtr = GEN_VAL;
         isUnsigned = false;
         addedToChapelAST = false;
+        chplType = NULL;
       }
     };
-   
+
     typedef llvm::StringMap<Storage> map_type;//just map, key is string, value is Storage
     typedef std::list<map_type> layers_type;// each element of the list is a map
     typedef layers_type::iterator layer_iterator;
     typedef map_type::iterator value_iterator;
-    
+
     layers_type layers;
-  
+
   public:
     LayeredValueTable();
     void addLayer();
     void removeLayer();
     void addValue(llvm::StringRef name, llvm::Value *value, uint8_t isLVPtr, bool isUnsigned);
-    void addGlobalValue(llvm::StringRef name, llvm::Value *value, uint8_t isLVPtr, bool isUnsigned); //, Type* type=NULL);
+    void addGlobalValue(llvm::StringRef name, llvm::Value *value, uint8_t isLVPtr, bool isUnsigned, Type* type);
     void addGlobalValue(llvm::StringRef name, GenRet gend);
     void addGlobalType(llvm::StringRef name, llvm::Type *type, bool isUnsigned);
     void addGlobalCDecl(clang::NamedDecl* cdecl);
@@ -145,7 +149,7 @@ class LayeredValueTable
         astlocT *astlocOut=NULL);
     bool isCArray(llvm::StringRef name);
     VarSymbol* getVarSymbol(llvm::StringRef name);
-    const clang::MacroInfo* getMacro(llvm::StringRef name); 
+    const clang::MacroInfo* getMacro(llvm::StringRef name);
     bool isAlreadyInChapelAST(llvm::StringRef name);
     bool markAddedToChapelAST(llvm::StringRef name);
 

@@ -224,6 +224,7 @@
 /* memory kinds support */
 #undef GASNETI_MK_CLASS_CUDA_UVA_ENABLED
 #undef GASNETI_MK_CLASS_HIP_ENABLED
+#undef GASNETI_MK_CLASS_ZE_ENABLED
 
 /* HIP platform */
 #undef GASNETI_HIP_PLATFORM_AMD
@@ -246,6 +247,9 @@
 
 /* has sched_yield() */
 #undef HAVE_SCHED_YIELD
+
+/* has sigaction() and a definition of the SA_RESTART flag */
+#undef GASNETI_HAVE_SA_RESTART
 
 /* have sysctl machdep.tsc_freq */
 #undef GASNETI_HAVE_SYSCTL_MACHDEP_TSC_FREQ
@@ -292,6 +296,9 @@
 #undef GASNETI_PSHM_SYSV
 #undef GASNETI_PSHM_FILE
 #undef GASNETI_PSHM_XPMEM
+
+/* Set default for GASNET_HOST_DETECT env var */
+#undef GASNETI_HOST_DETECT_CONFIGURE
 
 /* How many cores/node must we support (255 is default) */
 #undef GASNETI_CONFIG_PSHM_MAX_NODES
@@ -431,6 +438,9 @@
 /* platform is Microsoft Windows Subsystem for Linux */
 #undef GASNETI_ARCH_WSL
 
+/* platform is an HPE Cray EX */
+#undef GASNETI_ARCH_CRAYEX
+
 /* have (potentially buggy) MIPS R10000 multiprocessor */
 #undef GASNETI_ARCH_SGI_IP27
 
@@ -462,22 +472,34 @@
 #undef GASNETI_DISABLE_ALIGNED_SEGMENTS
 
 /* GASNet smp-conduit */
+#undef GASNETC_SMP_SPAWNER_CONF
 #undef GASNETC_HAVE_O_ASYNC
 #undef GASNETC_USE_SOCKETPAIR
 
-/* GASNet aries-conduit settings */
-#undef GASNETC_GNI_MAX_MEDIUM_DFLT
-#undef GASNETC_GNI_MULTI_DOMAIN
-#undef GASNETC_GNI_UDREG
-
 /* GASNet ofi-conduit settings */
-#undef GASNETC_OFI_MAX_MEDIUM
+#undef GASNETC_OFI_SPAWNER_CONF
+#undef GASNETC_OFI_REFERENCE_EXTENDED
+#undef GASNETC_OFI_MAX_MEDIUM_DFLT
 #undef GASNETC_OFI_NUM_COMPLETIONS
-#undef GASNETC_OFI_HAS_MR_SCALABLE
+#undef GASNETC_OFI_HAS_MR_VIRT_ADDR_CONFIGURE
+#undef GASNETC_OFI_HAS_MR_PROV_KEY_CONFIGURE
+#undef GASNETC_OFI_USE_AV_MAP_CONFIGURE
 #undef GASNETC_OFI_USE_THREAD_DOMAIN
+#undef GASNETC_OFI_USE_MULTI_CQ
+#undef GASNETC_OFI_RETRY_RECVMSG
 #undef GASNETC_OFI_PROVIDER_LIST
+#undef GASNETC_OFI_PROVIDER_IDENT
+#undef GASNETC_HAVE_FI_MR_REG_ATTR
+#undef GASNETC_HAVE_FI_HMEM_CUDA
+#undef GASNETC_HAVE_FI_HMEM_ROCR
+#undef GASNETC_HAVE_FI_HMEM_ZE
+
+/* GASNet ucx-conduit settings */
+#undef GASNETC_UCX_SPAWNER_CONF
+#undef GASNETC_UCX_MAX_MEDIUM_DFLT
 
 /* GASNet ibv-conduit features and bug work-arounds */
+#undef GASNETC_IBV_SPAWNER_CONF
 #undef HAVE_IBV_SRQ
 #undef HAVE_IBV_TRANSPORT_TYPE
 #undef GASNETC_IBV_MAX_MEDIUM
@@ -486,6 +508,7 @@
 #undef GASNETC_IBV_ODP_CORE
 #undef GASNETC_IBV_ODP_DISABLED
 #undef GASNETC_IBV_RCV_THREAD
+#undef GASNETC_IBV_SND_THREAD
 #undef GASNETC_IBV_CONN_THREAD
 #undef GASNETC_IBV_MAX_HCAS_CONFIGURE
 #undef GASNETC_IBV_PHYSMEM_MAX_CONFIGURE
@@ -566,20 +589,14 @@
 /* Define to 1 if you have the `getrlimit64' function. */
 #undef HAVE_GETRLIMIT64
 
-/* Define to 1 if you have the <gni_pub.h> header file. */
-#undef HAVE_GNI_PUB_H
-
-/* Define to 1 if you have the <hugetlbfs.h> header file. */
-#undef HAVE_HUGETLBFS_H
-
-/* Define to 1 if you have the `hugetlbfs_unlinked_fd' function. */
-#undef HAVE_HUGETLBFS_UNLINKED_FD
-
 /* Define to 1 if you have the `ibv_cmd_open_xrcd' function. */
 #undef HAVE_IBV_CMD_OPEN_XRCD
 
 /* Define to 1 if you have the `ibv_open_xrc_domain' function. */
 #undef HAVE_IBV_OPEN_XRC_DOMAIN
+
+/* Define to 1 if you have the `ibv_wc_status_str' function. */
+#undef HAVE_IBV_WC_STATUS_STR
 
 /* Define to 1 if you have the <ifaddrs.h> header file. */
 #undef HAVE_IFADDRS_H
@@ -613,6 +630,9 @@
 
 /* Define to 1 if you have the `PMI_Bcast' function. */
 #undef HAVE_PMI_BCAST
+
+/* Define to 1 if you have the `PMI_Get_numpes_on_smp' function. */
+#undef HAVE_PMI_GET_NUMPES_ON_SMP
 
 /* Define to 1 if you have the `popen' function. */
 #undef HAVE_POPEN
@@ -703,9 +723,6 @@
 
 /* Define to 1 if you have the <ucontext.h> header file. */
 #undef HAVE_UCONTEXT_H
-
-/* Define to 1 if you have the <udreg_pub.h> header file. */
-#undef HAVE_UDREG_PUB_H
 
 /* Define to 1 if you have the <unistd.h> header file. */
 #undef HAVE_UNISTD_H

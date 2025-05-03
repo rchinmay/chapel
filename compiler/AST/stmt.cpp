@@ -1,5 +1,5 @@
 /*
- * Copyright 2020-2022 Hewlett Packard Enterprise Development LP
+ * Copyright 2020-2025 Hewlett Packard Enterprise Development LP
  * Copyright 2004-2019 Cray Inc.
  * Other additional copyright holders may be indicated within.
  *
@@ -35,6 +35,8 @@
 #include <cstring>
 #include <algorithm>
 #include <vector>
+
+#include "global-ast-vecs.h"
 
 // remember these so we can update their labels' iterResumeGoto
 Map<GotoStmt*,GotoStmt*> copiedIterResumeGotos;
@@ -158,8 +160,8 @@ void VisibilityStmt::validateRenamed() {
                        it->second);
       }
 
-      if (sym->hasFlag(FLAG_DEPRECATED)) {
-        sym->generateDeprecationWarning(this);
+      if (!fDynoScopeResolve) {
+        sym->maybeGenerateDeprecationWarning(this);
       }
 
     } else {
@@ -308,6 +310,7 @@ BlockStmt::copyInner(SymbolMap* map) {
   _this->useList   = COPY_INT(useList);
   _this->modRefs   = COPY_INT(modRefs);
   _this->byrefVars = COPY_INT(byrefVars);
+  _this->userLabel = this->userLabel;
 
   for_alist(expr, body) {
     Expr* copy = COPY_INT(expr);
@@ -597,6 +600,64 @@ BlockStmt::isCForLoop() const {
   return false;
 }
 
+CallExpr* BlockStmt::getMarkerPrimIfExists(PrimitiveTag markerType) {
+  if (!this->body.empty()) {
+    if (auto call = toCallExpr(this->body.first())) {
+      if (call->isPrimitive(markerType)) {
+        return call;
+      }
+    }
+  }
+  return nullptr;
+}
+
+// See docs on PRIM_GPU_ATTRIBUTE_BLOCK and PRIM_GPU_PRIMITIVE_BLOCK
+// in primitive.cpp for what they do.
+
+bool BlockStmt::isGpuAttributeBlock() {
+  return getMarkerPrimIfExists(PRIM_GPU_ATTRIBUTE_BLOCK) != nullptr;
+}
+
+bool BlockStmt::isGpuPrimitivesBlock() {
+  return getMarkerPrimIfExists(PRIM_GPU_PRIMITIVE_BLOCK) != nullptr;
+}
+
+bool BlockStmt::isGpuMetadata() {
+  return this->isGpuAttributeBlock() ||
+         this->isGpuPrimitivesBlock();
+}
+
+BlockStmt* BlockStmt::getPrimitivesBlock() {
+  if (isGpuAttributeBlock()) {
+    auto lastBlock = toBlockStmt(body.last());
+    INT_ASSERT(lastBlock && lastBlock->isGpuPrimitivesBlock());
+    return lastBlock;
+  }
+  return nullptr;
+}
+
+void BlockStmt::noteUseOfGpuAttributeBlock(FnSymbol* user) {
+  auto marker = getMarkerPrimIfExists(PRIM_GPU_ATTRIBUTE_BLOCK);
+  INT_ASSERT(marker);
+  marker->insertAtTail(user);
+}
+
+BlockStmt* findEnclosingGpuAttributeBlock(Expr* search) {
+  while (search) {
+    if (auto block = toBlockStmt(search)) {
+      if (block->isGpuAttributeBlock()) return block;
+    }
+    if (search->parentExpr) {
+      search = search->parentExpr;
+    } else if (search->parentSymbol) {
+      search = search->parentSymbol->defPoint;
+    } else {
+      break;
+    }
+  }
+  return nullptr;
+}
+
 void
 BlockStmt::checkConstLoops() {
 
@@ -673,14 +734,29 @@ BlockStmt::useListClear() {
 }
 
 void
-BlockStmt::modRefsAdd(ModuleSymbol* mod) {
+BlockStmt::modRefsEnsure() {
   if (modRefs == NULL) {
-    modRefs = new CallExpr(PRIM_REFERENCED_MODULES_LIST);
-
-    if (parentSymbol)
-      insert_help(modRefs, this, parentSymbol);
+    modRefsReplace(new CallExpr(PRIM_REFERENCED_MODULES_LIST));
   }
+}
 
+void
+BlockStmt::modRefsReplace(CallExpr* replacementRefs) {
+  modRefs = replacementRefs;
+
+  if (parentSymbol)
+    insert_help(modRefs, this, parentSymbol);
+}
+
+void
+BlockStmt::modRefsAdd(ModuleSymbol* mod) {
+  modRefsEnsure();
+  modRefs->insertAtTail(new SymExpr(mod));
+}
+
+void
+BlockStmt::modRefsAdd(TemporaryConversionSymbol* mod) {
+  modRefsEnsure();
   modRefs->insertAtTail(new SymExpr(mod));
 }
 

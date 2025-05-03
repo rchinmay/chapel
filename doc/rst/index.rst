@@ -22,11 +22,10 @@ Chapel Documentation
    Hello World Variants <examples/index>
    Primers <primers/index>
    Language Specification <language/spec/index>
-   builtins/index
    modules/standard
    modules/packages
    modules/layoutdist
-   mason-packages
+   mason-packages/index
    users-guide/index
 
 .. toctree::
@@ -38,9 +37,8 @@ Chapel Documentation
 
 
 
-Index
------
+Indexes
+-------
 
+* :ref:`Chapel Module Index <chpl-modindex>`
 * :ref:`Chapel Online Documentation Index <genindex>`
-
-.. COMMENT: clean this up before exposing:: * :chpl:chplref:`chplmodindex`

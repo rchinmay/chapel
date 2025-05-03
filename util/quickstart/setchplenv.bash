@@ -55,8 +55,11 @@ export CHPL_COMM=none
 echo "Setting CHPL_TASKS to fifo"
 export CHPL_TASKS=fifo
 
-echo "Setting CHPL_MEM to cstdlib"
-export CHPL_MEM=cstdlib
+echo "Setting CHPL_TARGET_MEM to cstdlib"
+export CHPL_TARGET_MEM=cstdlib
+
+echo "Setting CHPL_HOST_MEM to cstdlib"
+export CHPL_HOST_MEM=cstdlib
 
 echo "Setting CHPL_GMP to none"
 export CHPL_GMP=none
@@ -64,5 +67,6 @@ export CHPL_GMP=none
 echo "Setting CHPL_RE2 to none"
 export CHPL_RE2=none
 
-echo "Setting CHPL_LLVM to none"
-export CHPL_LLVM=none
+USE_LLVM=`$CHPL_PYTHON $chpl_home/util/chplenv/chpl_llvm.py --quickstart`
+echo "Setting CHPL_LLVM to $USE_LLVM"
+export CHPL_LLVM=$USE_LLVM

@@ -1,16 +1,16 @@
 /*
- * Copyright 2020-2022 Hewlett Packard Enterprise Development LP
+ * Copyright 2020-2025 Hewlett Packard Enterprise Development LP
  * Copyright 2004-2019 Cray Inc.
  * Other additional copyright holders may be indicated within.
- * 
+ *
  * The entirety of this work is licensed under the Apache License,
  * Version 2.0 (the "License"); you may not use this file except
  * in compliance with the License.
- * 
+ *
  * You may obtain a copy of the License at
- * 
+ *
  *     http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -57,6 +57,7 @@ extern "C" {
   m(SET_WIDE_STRING,      "set wide string",                          true ), \
   m(GET_WIDE_STRING,      "get wide string",                          true ), \
   m(COMMAND_BUFFER,       "command buffer",                           true ), \
+  m(FILENAME,             "filename string",                          true ), \
   m(COMM_UTIL,            "comm layer utility space",                 false), \
   m(COMM_XMIT_RCV_BUF,    "comm layer transmit/receive buffer",       false), \
   m(COMM_FRK_SND_INFO,    "comm layer sent remote fork info",         false), \
@@ -67,6 +68,7 @@ extern "C" {
   m(COMM_PER_LOC_INFO,    "comm layer per-locale information",        false), \
   m(COMM_PRV_OBJ_ARRAY,   "comm layer private objects array",         false), \
   m(COMM_PRV_BCAST_DATA,  "comm layer private broadcast data",        false), \
+  m(COMM_NB_HANDLE,       "comm layer non-blocking handle",           false), \
   m(MEM_HEAP_SPACE,       "mem layer heap expansion space",           false), \
   m(GLOM_STRINGS_DATA,    "glom strings data",                        true ), \
   m(STRING_LITERALS_BUF,  "string literals buffer",                   true ), \
@@ -95,8 +97,14 @@ extern "C" {
   m(GMP,                  "gmp data",                                 true ), \
   m(GETS_PUTS_STRIDES,    "put_strd/get_strd array of strides",       true ), \
   m(MLI_DATA,             "multilocale interop data",                 true ), \
-  m(NUM,                  "*** this must be the last entry ***",      true )
-
+  m(GPU_DATA,             "user data allocation on gpu",              true ), \
+  m(GPU_KERNEL_ARG,       "kernel data allocation on gpu",            false), \
+  m(GPU_UTIL,             "gpu layer utility space",                  false), \
+  m(GPU_KERNEL_PARAM,      "pointer to a kernel arg",                 true ), \
+  m(GPU_KERNEL_PARAM_BUFF, "array of pointers to kernel args",        true ), \
+  m(GPU_KERNEL_PARAM_META, "metadata about kernel parameters",        true ), \
+  m(ERROR_MSG,             "error message",                           true ), \
+  m(NUM,                   "*** this must be the last entry ***",     true )
 
 //
 // Define the enumeration constants for the memory descriptors.

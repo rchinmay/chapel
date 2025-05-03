@@ -1,5 +1,5 @@
 /*
- * Copyright 2020-2022 Hewlett Packard Enterprise Development LP
+ * Copyright 2020-2025 Hewlett Packard Enterprise Development LP
  * Copyright 2004-2019 Cray Inc.
  * Other additional copyright holders may be indicated within.
  *
@@ -28,6 +28,8 @@
 #include "resolution.h"
 #include "wellknown.h"
 
+#include "global-ast-vecs.h"
+
 static QualifiedType
 returnInfoUnknown(CallExpr* call) {
   return QualifiedType(dtUnknown);
@@ -51,6 +53,11 @@ returnInfoBool(CallExpr* call) {
 static QualifiedType
 returnInfoString(CallExpr* call) {
   return QualifiedType(dtString, QUAL_VAL);
+}
+
+static QualifiedType
+returnInfoBytes(CallExpr* call) {
+  return QualifiedType(dtBytes, QUAL_VAL);
 }
 
 static QualifiedType
@@ -96,12 +103,10 @@ returnInfoInt64(CallExpr* call) {
   return QualifiedType(dtInt[INT_SIZE_64], QUAL_VAL);
 }
 
-/*
 static QualifiedType
 returnInfoUInt64(CallExpr* call) {
   return QualifiedType(dtUInt[INT_SIZE_64], QUAL_VAL);
 }
-*/
 
 static QualifiedType
 returnInfoSizeType(CallExpr* call) {
@@ -120,7 +125,6 @@ returnInfoDefaultInt(CallExpr* call) {
   return returnInfoInt64(call);
 }
 
-/*
 static QualifiedType
 returnInfoUInt32(CallExpr* call) { // unexecuted none/gasnet on 4/25/08
   return QualifiedType(dtUInt[INT_SIZE_32], QUAL_VAL);
@@ -135,7 +139,6 @@ static QualifiedType
 returnInfoReal64(CallExpr* call) {
   return QualifiedType(dtReal[FLOAT_SIZE_64], QUAL_VAL);
 }
-*/
 
 static QualifiedType
 returnInfoComplexField(CallExpr* call) {  // for get real/imag primitives
@@ -151,8 +154,35 @@ returnInfoComplexField(CallExpr* call) {  // for get real/imag primitives
 }
 
 static QualifiedType
+returnInfoAbs(CallExpr* call) {
+  Type *t = call->get(1)->getValType();
+  if (t == dtComplex[COMPLEX_SIZE_64]) {
+    return QualifiedType(dtReal[FLOAT_SIZE_32], QUAL_VAL);
+  } else if (t == dtComplex[COMPLEX_SIZE_128]) {
+    return QualifiedType(dtReal[FLOAT_SIZE_64], QUAL_VAL);
+  } else if (t == dtImag[FLOAT_SIZE_32]) {
+    return QualifiedType(dtReal[FLOAT_SIZE_32], QUAL_VAL);
+  } else if (t == dtImag[FLOAT_SIZE_64]) {
+    return QualifiedType(dtReal[FLOAT_SIZE_64], QUAL_VAL);
+  }
+
+  return QualifiedType(t, QUAL_VAL);
+}
+
+
+static QualifiedType
 returnInfoFirst(CallExpr* call) {
   return call->get(1)->qualType();
+}
+
+static QualifiedType
+returnInfoSecond(CallExpr* call) {
+  return call->get(2)->qualType();
+}
+
+static QualifiedType
+returnInfoFirstAsValue(CallExpr* call) {
+  return QualifiedType(Qualifier::QUAL_CONST_VAL, call->get(1)->qualType().type());
 }
 
 static QualifiedType
@@ -170,6 +200,16 @@ returnInfoFirstDeref(CallExpr* call) {
 }
 
 static QualifiedType
+returnInfoFirstDerefNoRtti(CallExpr* call) {
+  auto qt = returnInfoFirstDeref(call);
+  if (qt.type()->symbol->hasFlag(FLAG_HAS_RUNTIME_TYPE)) {
+    USR_FATAL(call, "static variables do not support types with"
+                    "runtime type information (such as arrays)");
+  }
+  return qt;
+}
+
+static QualifiedType
 returnInfoScalarPromotionType(CallExpr* call) {
   QualifiedType tmp = call->get(1)->qualType();
   Type* type = tmp.type()->getValType();
@@ -178,6 +218,17 @@ returnInfoScalarPromotionType(CallExpr* call) {
     type = type->scalarPromotionType;
 
   return QualifiedType(type, QUAL_VAL);
+}
+
+static QualifiedType
+returnInfoThunkResultType(CallExpr* call) {
+  QualifiedType tmp = call->get(1)->qualType();
+  AggregateType* type = toAggregateType(tmp.type()->getValType());
+
+  INT_ASSERT(type);
+  INT_ASSERT(type->thunkInvoke);
+
+  return QualifiedType(type->thunkInvoke->retType, QUAL_VAL);
 }
 
 static QualifiedType
@@ -214,6 +265,26 @@ returnInfoCast(CallExpr* call) {
 }
 
 static QualifiedType
+returnInfoForProcTypeConverter(CallExpr* call) {
+  Type* t = call->get(1)->typeInfo();
+  int64_t mask = 0;
+
+  // Get the second arg as a 'param int' if it exists.
+  auto arg2 = call->numActuals() >= 2 ? call->get(2) : nullptr;
+  bool got = get_int(arg2, &mask);
+  INT_ASSERT(got || !arg2);
+
+  Type* typeToUse = dtUnknown;
+  if (auto ft1 = toFunctionType(t)) {
+    bool maskConflicts = false;
+    typeToUse = ft1->getWithMask(mask, maskConflicts);
+    std::ignore = maskConflicts;
+  }
+
+  return QualifiedType(typeToUse, QUAL_VAL);
+}
+
+static QualifiedType
 returnInfoVal(CallExpr* call) {
   AggregateType* ct = toAggregateType(call->get(1)->typeInfo());
 
@@ -231,6 +302,9 @@ returnInfoVal(CallExpr* call) {
 static QualifiedType
 returnInfoRef(CallExpr* call) {
   Type* t = call->get(1)->getValType();
+  if(t->symbol->hasFlag(FLAG_GENERIC))
+    // this will result in an error later on
+    return QualifiedType(t, QUAL_REF);
   if (!t->refType)
     INT_FATAL(call, "invalid attempt to get reference type");
   return QualifiedType(t->refType, QUAL_REF);
@@ -401,9 +475,9 @@ returnInfoEndCount(CallExpr* call) {
   static Type* endCountType = NULL;
   if (endCountType == NULL) {
     // Look for the type var `_remoteEndCountType` in ChapelBase.
+    const char* searchAstr = astr("_remoteEndCountType");
     forv_Vec(VarSymbol, var, gVarSymbols) {
-      const char* searchStr = "_remoteEndCountType";
-      if (strcmp(var->cname, searchStr) == 0) {
+      if (var->name == searchAstr) {
         endCountType = var->type;
         break;
       }
@@ -440,8 +514,11 @@ returnInfoCoerce(CallExpr* call) {
     // and return that type.
     SymExpr* actualOne = toSymExpr(call->get(1));
     SymExpr* actualTwo = toSymExpr(call->get(2));
-    t = getInstantiationType(call->get(1)->getValType(), actualOne->symbol(),
+    t = getInstantiationType(actualOne->getValType(), actualOne->symbol(),
                              t, actualTwo->symbol(), call);
+    if (t == nullptr)
+      USR_FATAL(call, "could not coerce a value of type '%s' to type '%s'",
+        actualOne->getValType()->symbol->name, actualTwo->symbol()->name);
   }
 
   return QualifiedType(t, QUAL_VAL);
@@ -469,6 +546,21 @@ returnInfoToUnmanaged(CallExpr* call) {
     }
   }
   return QualifiedType(t, QUAL_VAL);
+}
+
+static QualifiedType returnInfoSecondActualTypeSymbol(CallExpr* call) {
+  auto ret = QualifiedType(dtUnknown, QUAL_VAL);
+
+  if (call->numActuals() >= 2) {
+    if (SymExpr* se = toSymExpr(call->get(2))) {
+      if (auto ts = toTypeSymbol(se->symbol())) {
+        Type* t = ts->type;
+        ret = QualifiedType(t, QUAL_VAL);
+      }
+    }
+  }
+
+  return ret;
 }
 
 static QualifiedType
@@ -612,11 +704,11 @@ PrimitiveOp::PrimitiveOp(PrimitiveTag atag,
   primitives_map.put(name, this);
 }
 
-/* Primitive names appear both in PrimOpsList as well as
+/* Primitive names appear both in prim-ops-list.h as well as
    here. This routine checks that the name matches in both.
  */
 static void checkPrimName(PrimitiveTag tag, const char* name) {
-  // Check name matches the string in PrimOpsList.h
+  // Check name matches the string in prim-ops-list.h
   switch (tag) {
 #define PRIMITIVE(macroTag, macroName) \
     case PRIM_ ## macroTag: \
@@ -626,7 +718,7 @@ static void checkPrimName(PrimitiveTag tag, const char* name) {
 #define PRIMITIVE_R(macroTag, macroName) PRIMITIVE(macroTag, macroName)
 #define PRIMITIVE_G(macroTag, macroName) PRIMITIVE(macroTag, macroName)
 
-#include "chpl/uast/PrimOpsList.h"
+#include "chpl/uast/prim-ops-list.h"
 #undef PRIMITIVE
 #undef PRIMITIVE_R
 #undef PRIMITIVE_G
@@ -670,6 +762,15 @@ initPrimitive() {
   // use for any primitives not in this list
   primitives[PRIM_UNKNOWN] = NULL;
 
+  prim_def(PRIM_INNERMOST_CONTEXT, "innermost context", returnInfoFirstAsValue);
+  prim_def(PRIM_OUTER_CONTEXT, "outer context", returnInfoFirst);
+  prim_def(PRIM_HOIST_TO_CONTEXT, "hoist to context", returnInfoVoid);
+
+  prim_def(PRIM_CREATE_THUNK, "create thunk", returnInfoUnknown);
+  prim_def(PRIM_THUNK_RESULT, "thunk result", returnInfoFirst);
+  prim_def(PRIM_FORCE_THUNK, "force thunk", returnInfoUnknown);
+  prim_def(PRIM_THUNK_RESULT_TYPE, "thunk result type", returnInfoThunkResultType);
+
   prim_def(PRIM_ACTUALS_LIST, "actuals list", returnInfoVoid);
   prim_def(PRIM_NOOP, "noop", returnInfoVoid);
   // dst, src. PRIM_MOVE can set a reference.
@@ -698,6 +799,14 @@ initPrimitive() {
   // if the optional type is provided, it should match PRIM_INIT_VAR_SPLIT_DECL.
   prim_def(PRIM_INIT_VAR_SPLIT_INIT, "init var split init",   returnInfoVoid);
 
+  prim_def(PRIM_SPLIT_INIT_UPDATE_TYPE, "split init update type",
+           returnInfoVoid);
+
+  prim_def(PRIM_INIT_REF_DECL, "init ref decl", returnInfoVoid);
+
+  // indicates the body of the initializer is now in Phase 2
+  prim_def(PRIM_INIT_DONE, "init done", returnInfoVoid);
+
   prim_def(PRIM_REF_TO_STRING, "ref to string", returnInfoStringC);
   prim_def(PRIM_RETURN, "return", returnInfoFirst, true);
   prim_def(PRIM_THROW, "throw", returnInfoFirst, true, true);
@@ -714,11 +823,14 @@ initPrimitive() {
   prim_def(PRIM_UNARY_PLUS, "u+", returnInfoFirstDeref);
   prim_def(PRIM_UNARY_NOT, "u~", returnInfoFirstDeref);
   prim_def(PRIM_UNARY_LNOT, "u!", returnInfoBool);
+  prim_def(PRIM_SQRT, "sqrt", returnInfoFirst);
+  prim_def(PRIM_ABS, "abs", returnInfoAbs);
   prim_def(PRIM_ADD, "+", returnInfoNumericUp);
   prim_def(PRIM_SUBTRACT, "-", returnInfoNumericUp);
   prim_def(PRIM_MULT, "*", returnInfoNumericUp);
   prim_def(PRIM_DIV, "/", returnInfoNumericUp, true); // div by zero is visible
   prim_def(PRIM_MOD, "%", returnInfoFirstDeref); // mod by zero?
+  prim_def(PRIM_FMA, "fma", returnInfoFirstDeref);
   prim_def(PRIM_LSH, "<<", returnInfoFirstDeref);
   prim_def(PRIM_RSH, ">>", returnInfoFirstDeref);
   prim_def(PRIM_EQUAL, "==", returnInfoBool);
@@ -751,6 +863,8 @@ initPrimitive() {
   prim_def(PRIM_AND_ASSIGN, "&=", returnInfoVoid, true);
   prim_def(PRIM_OR_ASSIGN, "|=", returnInfoVoid, true);
   prim_def(PRIM_XOR_ASSIGN, "^=", returnInfoVoid, true);
+  prim_def(PRIM_LOGICALAND_ASSIGN, "&&=", returnInfoVoid, true);
+  prim_def(PRIM_LOGICALOR_ASSIGN, "||=", returnInfoVoid, true);
   prim_def(PRIM_REDUCE_ASSIGN, "reduce=", returnInfoVoid, true);
 
   prim_def(PRIM_MIN, "_min", returnInfoFirst);
@@ -787,9 +901,10 @@ initPrimitive() {
 
   // new keyword
   prim_def(PRIM_NEW, "new", returnInfoFirst);
-  // get complex real component
+  prim_def(PRIM_NEW_WITH_ALLOCATOR, "new with allocator", returnInfoSecond);
+  // given a complex value, produce a reference to the real component
   prim_def(PRIM_GET_REAL, "complex_get_real", returnInfoComplexField);
-  // get complex imag component
+  // given a complex value, produce a reference to the imag component
   prim_def(PRIM_GET_IMAG, "complex_get_imag", returnInfoComplexField);
   // query expression primitive
   prim_def(PRIM_QUERY, "query", returnInfoUnknown);
@@ -807,6 +922,7 @@ initPrimitive() {
   // local block primitives
   // assert that a wide ref is on this locale
   prim_def(PRIM_LOCAL_CHECK, "local_check", returnInfoVoid, true, true);
+  prim_def(PRIM_IS_LOCAL, "is_local", returnInfoBool, true, false);
 
   // get/set end count for 'begin' -
   // manipulates task-local storage
@@ -815,9 +931,6 @@ initPrimitive() {
 
   prim_def(PRIM_GET_DYNAMIC_END_COUNT, "get dynamic end count", returnInfoEndCount);
   prim_def(PRIM_SET_DYNAMIC_END_COUNT, "set dynamic end count", returnInfoVoid, true);
-
-  // this assumes the grid and the blocks are 1D
-  prim_def(PRIM_GPU_KERNEL_LAUNCH_FLAT, "gpu kernel launch flat", returnInfoVirtualMethodCall, true);
 
   // this requires sizes in all 3D to be specified. For 2D launches, 1 can be
   // passed as one or more of these arguments.
@@ -851,12 +964,47 @@ initPrimitive() {
   prim_def(PRIM_GPU_GRIDDIM_Y, "gpu gridDim y", returnInfoInt32, true);
   prim_def(PRIM_GPU_GRIDDIM_Z, "gpu gridDim z", returnInfoInt32, true);
 
-  // allocate data into shared memory (takes one paremter: number of bytes to allocate)
-  // and returns a c_void_ptr
+  prim_def(PRIM_GPU_INIT_KERNEL_CFG, "gpu init kernel cfg", returnInfoCVoidPtr, true, true);
+  prim_def(PRIM_GPU_INIT_KERNEL_CFG_3D, "gpu init kernel cfg 3d", returnInfoCVoidPtr, true, true);
+  prim_def(PRIM_GPU_DEINIT_KERNEL_CFG, "gpu deinit kernel cfg", returnInfoVoid, true);
+  prim_def(PRIM_GPU_ARG, "gpu arg", returnInfoVoid, true);
+  prim_def(PRIM_GPU_PID_OFFLOAD, "gpu pid offload", returnInfoVoid, true);
+  prim_def(PRIM_GPU_BLOCK_REDUCE, "gpu block reduce", returnInfoVoid, true);
+
+  // Marker for a scopeless block that denotes the "scope" of code to which
+  // GPU attributes are being applied. The block contains the primitives as the
+  // last child, and every promoted expression and foreach loop within this
+  // "scope" should have these primitives inserted.
+  //
+  // The marker prevents the block from being flattened by other passes.
+  prim_def(PRIM_GPU_ATTRIBUTE_BLOCK, "gpu attribute block", returnInfoVoid, true);
+
+  // Marker for a scopeless block that contains the primitives generated by
+  // GPU attributes.
+  //
+  // The marker prevents the block from being flattened by other passes.
+  prim_def(PRIM_GPU_PRIMITIVE_BLOCK, "gpu primitive block", returnInfoVoid, true);
+
+  // allocate data into shared memory (takes one parameter: number of bytes to allocate)
+  // and returns a raw_c_void_ptr
   prim_def(PRIM_GPU_ALLOC_SHARED, "gpu allocShared", returnInfoCVoidPtr, true);
 
   // synchronize threads in a GPU kernel (equivalent to CUDA __syncThreads)
   prim_def(PRIM_GPU_SYNC_THREADS, "gpu syncThreads", returnInfoVoid, true);
+
+  // If embedded inside a gpuizable loop will set the blocksize when the kernel
+  // for that loop launches.
+  prim_def(PRIM_GPU_SET_BLOCKSIZE, "gpu set blockSize", returnInfoVoid, true);
+
+  // If embedded inside a gpuizable loop, perform this many loop iterations
+  // within a single thread of the kernel.
+  prim_def(PRIM_GPU_SET_ITERS_PER_THREAD, "gpu set itersPerThread", returnInfoVoid, true);
+
+  // Generates call that produces runtime error when not run by a GPU
+  prim_def(PRIM_ASSERT_ON_GPU, "chpl_assert_on_gpu", returnInfoVoid, true, true);
+  prim_def(PRIM_ASSERT_GPU_ELIGIBLE, "assert gpu eligible", returnInfoVoid, true, true);
+  prim_def(PRIM_GPU_ELIGIBLE, "gpu eligible", returnInfoVoid, true, true);
+  prim_def(PRIM_GPU_REDUCE_WRAPPER, "gpu reduce wrapper", returnInfoVoid, true);
 
   // task primitives
   // get serial state
@@ -904,6 +1052,11 @@ initPrimitive() {
   // For an array, returns the compile-time type only.
   // There might be uninitialized memory if the run-time type is used.
   prim_def(PRIM_STATIC_TYPEOF, "static typeof", returnInfoFirstDeref);
+
+  prim_def(PRIM_STATIC_FUNCTION_VAR, "static function var", returnInfoFirst);
+  prim_def(PRIM_STATIC_FUNCTION_VAR_VALIDATE_TYPE, "static function validate type", returnInfoFirstDerefNoRtti);
+  prim_def(PRIM_STATIC_FUNCTION_VAR_WRAPPER, "static function var wrapper", returnInfoVoid);
+
 
   // As with PRIM_STATIC_TYPEOF, returns a compile-time component of
   // a type only. Returns the scalar promotion type (i.e. the type of the
@@ -953,6 +1106,8 @@ initPrimitive() {
   prim_def(PRIM_MAYBE_LOCAL_THIS, "may be local access", returnInfoUnknown);
   prim_def(PRIM_MAYBE_LOCAL_ARR_ELEM, "may be local array element", returnInfoUnknown);
   prim_def(PRIM_MAYBE_AGGREGATE_ASSIGN, "may be aggregated assignment", returnInfoUnknown);
+
+  prim_def(PRIM_PROTO_SLICE_ASSIGN, "assign proto slices", returnInfoVoid);
 
   prim_def(PRIM_ERROR, "error", returnInfoVoid, true);
   prim_def(PRIM_WARNING, "warning", returnInfoVoid, true);
@@ -1037,8 +1192,8 @@ initPrimitive() {
 
   prim_def(PRIM_INT_ERROR, "_internal_error", returnInfoVoid, true);
 
-  prim_def(PRIM_CAPTURE_FN_FOR_CHPL, "capture fn for chpl", returnInfoVoid);
-  prim_def(PRIM_CAPTURE_FN_FOR_C, "capture fn for C", returnInfoVoid);
+  prim_def(PRIM_CAPTURE_FN, "capture fn", returnInfoVoid);
+  prim_def(PRIM_CAPTURE_FN_TO_CLASS, "capture fn to class", returnInfoVoid);
   prim_def(PRIM_CREATE_FN_TYPE, "create fn type", returnInfoVoid);
 
   prim_def(PRIM_STRING_COMPARE, "string_compare", returnInfoDefaultInt, true);
@@ -1047,10 +1202,15 @@ initPrimitive() {
   prim_def(PRIM_STRING_LENGTH_BYTES, "string_length_bytes", returnInfoDefaultInt);
   prim_def(PRIM_STRING_LENGTH_CODEPOINTS, "string_length_codepoints", returnInfoDefaultInt);
   prim_def(PRIM_ASCII, "ascii", returnInfoUInt8);
+  prim_def(PRIM_STRING_ITEM, "string item", returnInfoString);
+  prim_def(PRIM_BYTES_ITEM, "bytes item", returnInfoBytes);
   prim_def(PRIM_STRING_INDEX, "string_index", returnInfoStringC, true, true);
   prim_def(PRIM_STRING_COPY, "string_copy", returnInfoStringC, false, true);
   // Cast the object argument to void*.
   prim_def(PRIM_CAST_TO_VOID_STAR, "cast_to_void_star", returnInfoCVoidPtr, true, false);
+  // Cast to the second argument. The conversion is done at codegen time.
+  // In most cases the cast is effectively a bitcast/'reinterpret_cast'.
+  prim_def(PRIM_CAST_TO_TYPE, "cast_to_type", returnInfoSecondActualTypeSymbol, true, false);
   prim_def(PRIM_STRING_SELECT, "string_select", returnInfoStringC, true, true);
   prim_def(PRIM_SLEEP, "sleep", returnInfoVoid, true);
   prim_def(PRIM_REAL_TO_INT, "real2int", returnInfoDefaultInt);
@@ -1059,6 +1219,7 @@ initPrimitive() {
 
   prim_def(PRIM_RT_ERROR, "chpl_error", returnInfoVoid, true, true);
   prim_def(PRIM_RT_WARNING, "chpl_warning", returnInfoVoid, true, true);
+  prim_def(PRIM_RT_GPU_HALT, "chpl_gpu_halt", returnInfoVoid, true, true);
 
   prim_def(PRIM_NEW_PRIV_CLASS, "chpl_newPrivatizedClass", returnInfoVoid);
 
@@ -1081,6 +1242,7 @@ initPrimitive() {
 
   prim_def(PRIM_VIRTUAL_METHOD_CALL, "virtual method call", returnInfoVirtualMethodCall, true);
 
+  prim_def(PRIM_SIMPLE_TYPE_NAME, "simple type name", returnInfoString);
   prim_def(PRIM_NUM_FIELDS, "num fields", returnInfoInt32);
   prim_def(PRIM_FIELD_NUM_TO_NAME, "field num to name", returnInfoString);
   prim_def(PRIM_FIELD_NAME_TO_NUM, "field name to num", returnInfoInt32);
@@ -1094,11 +1256,14 @@ initPrimitive() {
   prim_def(PRIM_IS_NILABLE_CLASS_TYPE, "is nilable class type", returnInfoBool);
   prim_def(PRIM_IS_NON_NILABLE_CLASS_TYPE, "is non nilable class type", returnInfoBool);
   prim_def(PRIM_IS_RECORD_TYPE, "is record type", returnInfoBool);
+  prim_def(PRIM_IS_PROC_TYPE, "is proc type", returnInfoBool);
+  prim_def(PRIM_TO_PROC_TYPE, "to proc type", returnInfoForProcTypeConverter);
   prim_def(PRIM_IS_UNION_TYPE, "is union type", returnInfoBool);
   prim_def(PRIM_IS_EXTERN_UNION_TYPE, "is extern union type", returnInfoBool);
   prim_def(PRIM_IS_ATOMIC_TYPE, "is atomic type", returnInfoBool);
   prim_def(PRIM_IS_REF_ITER_TYPE, "is ref iter type", returnInfoBool);
   prim_def(PRIM_IS_EXTERN_TYPE, "is extern type", returnInfoBool);
+  prim_def(PRIM_IS_BORROWED_CLASS_TYPE, "is borrowed class type", returnInfoBool);
   prim_def(PRIM_IS_ABS_ENUM_TYPE, "is abstract enum type", returnInfoBool);
 
   prim_def(PRIM_IS_POD, "is pod type", returnInfoBool);
@@ -1122,6 +1287,9 @@ initPrimitive() {
   // Like the previous two but also always attempts to resolve the called fn
   prim_def(PRIM_CALL_AND_FN_RESOLVES, "call and fn resolves", returnInfoBool);
   prim_def(PRIM_METHOD_CALL_AND_FN_RESOLVES, "method call and fn resolves", returnInfoBool);
+  prim_def(PRIM_RESOLVES, "resolves", returnInfoBool);
+
+  prim_def(PRIM_IMPLEMENTS_INTERFACE, "implements interface", returnInfoInt64);
 
   prim_def(PRIM_START_RMEM_FENCE, "chpl_rmem_consist_acquire", returnInfoVoid, true, true);
   prim_def(PRIM_FINISH_RMEM_FENCE, "chpl_rmem_consist_release", returnInfoVoid, true, true);
@@ -1218,6 +1386,33 @@ initPrimitive() {
   prim_def(PRIM_VERSION_SHA, "version sha", returnInfoString);
 
   prim_def(PRIM_REF_DESERIALIZE, "deserialize for ref fields", returnInfoCVoidPtr);
+
+  prim_def(PRIM_UINT32_AS_REAL32, "uint32 as real32", returnInfoReal32);
+  prim_def(PRIM_UINT64_AS_REAL64, "uint64 as real64", returnInfoReal64);
+  prim_def(PRIM_REAL32_AS_UINT32, "real32 as uint32", returnInfoUInt32);
+  prim_def(PRIM_REAL64_AS_UINT64, "real64 as uint64", returnInfoUInt64);
+
+  prim_def(PRIM_BREAKPOINT, "breakpoint", returnInfoVoid, true);
+
+  // Expects a single argument, which will be passed by pointer to an underlying
+  // runtime function, so that the memory can be hashed.
+  prim_def(PRIM_CONST_ARG_HASH, "hash const arguments", returnInfoUInt64, true);
+  // Expects five arguments:
+  // 1. hash of the const argument at the start of the function
+  // 2. hash of the const argument at the end of the function
+  // 3. the name of the const argument
+  // 4. and 5. the line number and file name where the argument was defined.
+  //
+  // The latter two will be inserted by the compiler before code generation
+  //
+  // 1 and 2 are used to determine if the argument has been indirectly modified,
+  // 3-5 are used to generate a warning message if it was.
+  prim_def(PRIM_CHECK_CONST_ARG_HASH, "check hashes of const arguments", returnInfoVoid, true, true);
+
+  // we need to carry information about 'in' intents lowered from foreach loops
+  // until gpu transforms. To do that we add an assignment
+  //   `taskIndVar = TASK_PRIVATE_SVAR_CAPTURE(capturedVar)` into the AST.
+  prim_def(PRIM_TASK_PRIVATE_SVAR_CAPTURE, "task private svar capture", returnInfoUnknown);
 }
 
 static Map<const char*, VarSymbol*> memDescsMap;

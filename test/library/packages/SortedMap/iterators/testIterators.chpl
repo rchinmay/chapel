@@ -13,7 +13,7 @@ record FacInt {
 
   proc init(n: uint) {
     this.n = n;
-    this.complete();
+    init this;
     this.nFac = factorial(n);
   }
 
@@ -35,7 +35,7 @@ operator FacInt.>(a: FacInt, b: FacInt) {
   return a.n > b.n;
 }
 
-var fac = new sortedMap(int, FacInt, false, defaultComparator);
+var fac = new sortedMap(int, FacInt, false, new defaultComparator());
 
 for i in 1..15 {
   fac[i] = new FacInt(i: uint);

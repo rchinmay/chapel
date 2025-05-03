@@ -1,5 +1,5 @@
 /*
- * Copyright 2020-2022 Hewlett Packard Enterprise Development LP
+ * Copyright 2020-2025 Hewlett Packard Enterprise Development LP
  * Copyright 2004-2019 Cray Inc.
  * Other additional copyright holders may be indicated within.
  *
@@ -57,6 +57,8 @@ static child type could end up calling something in the parent.
 #include "stmt.h"
 #include "symbol.h"
 #include "wrappers.h"
+
+#include "global-ast-vecs.h"
 
 #include <set>
 #include <vector>
@@ -133,7 +135,7 @@ static void collectMethods(FnSymbol*               pfn,
 
 static bool possibleSignatureMatch(FnSymbol* fn, FnSymbol* gn);
 
-static void resolveOverride(FnSymbol* pfn, FnSymbol* cfn);
+static void resolveOverrideAndAdjustMaps(FnSymbol* pfn, FnSymbol* cfn);
 
 static void overrideIterator(FnSymbol* pfn, FnSymbol* cfn);
 
@@ -144,8 +146,6 @@ static void virtualDispatchUpdateRoots(FnSymbol* pfn, FnSymbol* cfn);
 
 static bool isVirtualChild(FnSymbol* child, FnSymbol* parent);
 
-static bool isSubType(Type* sub, Type* super);
-
 static bool isOverrideableMethod(FnSymbol* fn);
 static bool isVirtualizableMethod(FnSymbol* fn);
 
@@ -155,8 +155,8 @@ static AggregateType* getReceiverClassType(FnSymbol* fn);
 static bool buildVirtualMaps() {
   int numTypes = gTypeSymbols.n;
 
-  forv_Vec(FnSymbol, fn, gFnSymbols) {
-    if (AggregateType* at = fn->getReceiverType()) {
+  forv_expanding_Vec(FnSymbol, fn, gFnSymbols) {
+    if (AggregateType* at = toAggregateType(fn->getReceiverType())) {
       if (at->isClass() == true) {
         if (at->isGeneric() == false) {
           if (fn->isResolved() && isVirtualizableMethod(fn)) {
@@ -173,7 +173,7 @@ static bool buildVirtualMaps() {
 // Add overrides of pfn to virtual maps down the inheritance hierarchy
 static void addAllToVirtualMaps(FnSymbol* pfn, AggregateType* pct) {
   forv_Vec(AggregateType, ct, pct->dispatchChildren) {
-    if (ct && ct->isGeneric() == false) {
+    if (ct && ct->symbol->hasFlag(FLAG_GENERIC) == false) {
       if (ct->mayHaveInstances() == true) {
         std::vector<FnSymbol*> methods;
 
@@ -202,6 +202,8 @@ static FnSymbol* getInstantiatedFunction(FnSymbol* pfn,
 
   if (_thisAt->isGeneric() == true) {
     subs.put(_this, ct->symbol);
+  } else {
+    INT_ASSERT(!_thisAt->symbol->hasFlag(FLAG_GENERIC));
   }
 
   for (int i = 3; i <= cfn->numFormals(); i++) {
@@ -230,7 +232,9 @@ static FnSymbol* getInstantiatedFunction(FnSymbol* pfn,
     // A smaller test case:
     //   types/type_variables/deitz/test_point_of_instantiation3.chpl
     //
-    fn->setInstantiationPoint(ct->symbol->instantiationPoint);
+    if (fn->instantiationPoint() == NULL) {
+      fn->setInstantiationPoint(ct->symbol->instantiationPoint);
+    }
 
     return fn;
   }
@@ -244,7 +248,7 @@ static void addToVirtualMaps(FnSymbol*      pfn,
 
   FnSymbol* fn = getInstantiatedFunction(pfn, ct, cfn);
 
-  resolveOverride(pfn, fn);
+  resolveOverrideAndAdjustMaps(pfn, fn);
 }
 
 // skips the first 2 formals (for method token and `this`)
@@ -441,13 +445,15 @@ static void printMismatchNote(FnSymbol* pfn, FnSymbol* cfn) {
 }
 
 
-static void resolveOverride(FnSymbol* pfn, FnSymbol* cfn) {
+static void resolveOverrideAndAdjustMaps(FnSymbol* pfn, FnSymbol* cfn) {
   resolveSignature(cfn);
 
   if (signaturesMatch(pfn, cfn) &&
       evaluateWhereClause(cfn) &&
-      evaluateWhereClause(pfn)) {
+      evaluateWhereClause(pfn) &&
+      !pfn->isPostInitializer()) {  // postinits don't override
 
+    resolveSpecifiedReturnType(cfn);
     resolveFunction(cfn);
 
     // check to see if we are using defaulted actual fns
@@ -607,7 +613,7 @@ static void overrideIterator(FnSymbol* pfn, FnSymbol* cfn) {
   }
 }
 
-static bool isSubType(Type* sub, Type* super) {
+bool isSubType(Type* sub, Type* super) {
   bool retval = false;
 
   if (sub == super) {
@@ -638,8 +644,8 @@ static bool isOverrideableMethod(FnSymbol* fn) {
     INT_ASSERT(at->isClass());
 
     return fn->name != astrInit &&
-           !fn->hasFlag(FLAG_WRAPPER) &&
-           !fn->hasFlag(FLAG_NO_PARENS);
+           fn->name != astrSuper &&
+           !fn->hasFlag(FLAG_WRAPPER);
   }
 
   return false;
@@ -648,18 +654,21 @@ static bool isOverrideableMethod(FnSymbol* fn) {
 static bool isVirtualizableMethod(FnSymbol *fn) {
   return isOverrideableMethod(fn) &&
          !fn->isTypeMethod() &&
+         !fn->hasFlag(FLAG_NO_PARENS) &&
          fn->retTag != RET_PARAM &&
          fn->retTag != RET_TYPE;
 }
 
 static void virtualDispatchUpdate(FnSymbol* pfn, FnSymbol* cfn) {
-  cfn->addFlag(FLAG_VIRTUAL);
-  pfn->addFlag(FLAG_VIRTUAL);
+  if (isVirtualizableMethod(pfn)) {
+    cfn->addFlag(FLAG_VIRTUAL);
+    pfn->addFlag(FLAG_VIRTUAL);
 
-  // There is the potential for a data dependency between these
-  virtualDispatchUpdateChildren(pfn, cfn);
-  virtualDispatchUpdateParents(pfn, cfn);
-  virtualDispatchUpdateRoots(pfn, cfn);
+    // There is the potential for a data dependency between these
+    virtualDispatchUpdateChildren(pfn, cfn);
+    virtualDispatchUpdateParents(pfn, cfn);
+    virtualDispatchUpdateRoots(pfn, cfn);
+  }
 }
 
 static void virtualDispatchUpdateChildren(FnSymbol* pfn, FnSymbol* cfn) {
@@ -766,7 +775,7 @@ static void buildVirtualMethodTable() {
     }
   }
 
-  forv_Vec(Type, t, ctq) {
+  forv_expanding_Vec(Type, t, ctq) {
     if (Vec<FnSymbol*>* parentFns = virtualMethodTable.get(t)) {
       forv_Vec(FnSymbol, pfn, *parentFns) {
         Vec<Type*> childSet;
@@ -820,6 +829,7 @@ static void buildVirtualMethodTable() {
 static void addVirtualMethodTableEntry(Type*     type,
                                        FnSymbol* fn,
                                        bool      exclusive) {
+  type = type->getValType();
   Vec<FnSymbol*>* fns   = virtualMethodTable.get(type);
   bool            found = false;
 
@@ -986,18 +996,25 @@ static void filterVirtualChildren() {
 typedef std::map<const char*, std::vector<FnSymbol*> > NameToFns;
 typedef std::map<AggregateType*, NameToFns > TypeToNameToFns;
 
+// Returns the receiver's canonical class type for a method on a class;
+// excludes methods on owned/shared records as they are not subject to
+// virtual dispatch
 static AggregateType* getReceiverClassType(FnSymbol* fn) {
-  if (fn->isMethod() && fn->_this != NULL) {
-    if (Type* cct = canonicalClassType(fn->_this->getValType())) {
+  Type* thisType = fn->getReceiverType();
+  // ignore methods on e.g. 'owned C'
+  if (thisType && !thisType->symbol->hasFlag(FLAG_MANAGED_POINTER)) {
+    // ignore distinction between generic management,
+    // unmanaged, borrowed here
+    if (Type* cct = canonicalClassType(thisType)) {
       if (AggregateType* at = toAggregateType(cct)) {
-        if (at->isClass()) {
+        if (at->isClass() == true) {
           return at;
         }
       }
     }
   }
 
-  return NULL;
+  return nullptr;
 }
 
 static void findFunctionsProbablyMatching(TypeToNameToFns & map,
@@ -1035,21 +1052,9 @@ static FnSymbol* getOverrideCandidate(FnSymbol* fn) {
         ret = getTheIteratorFn(iteratorClass);
   }
 
-  //
-  // TODO: Merging these code paths triggers weird forwarding errors for
-  // OwnedObject code. Might be because we discard "owned" in places
-  // we should not?
-  //
-  if (fn->isTypeMethod()) {
-    if (AggregateType* at = getReceiverClassType(ret)) {
-      INT_ASSERT(at->isClass());
-      return ret;
-    }
-  } else {
-    if (ret->_this)
-      if (AggregateType* at = toAggregateType(ret->_this->getValType()))
-        if (at->isClass())
-          return ret;
+  if (AggregateType* at = getReceiverClassType(ret)) {
+    INT_ASSERT(at->isClass());
+    return ret;
   }
 
   // otherwise, not a candidate.
@@ -1091,6 +1096,11 @@ static void checkMethodsOverride() {
     // output error for overriding for non-class methods
     if (aFn->hasFlag(FLAG_OVERRIDE)) {
 
+      if (aFn->_this == NULL) {
+        USR_FATAL("'override' cannot be applied to non-method '%s'",
+                  aFn->name);
+      }
+
       //
       // Type methods may have managed receiver types, which would normally
       // not be recognized as a class.
@@ -1124,9 +1134,7 @@ static void checkMethodsOverride() {
         if (fn->hasFlag(FLAG_OVERRIDE)) {
           const char* msg = NULL;
 
-          if (fn->hasFlag(FLAG_NO_PARENS))
-            msg = "parentheses-less methods cannot override";
-          else if (!isOverrideableMethod(fn))
+          if (!isOverrideableMethod(fn))
             msg = "signature is not overrideable";
 
           if (msg != NULL) {
@@ -1273,7 +1281,6 @@ static void checkMethodsOverride() {
                   FnSymbol* pfn = matches[0];
                   printMismatchNote(pfn, fn);
                 }
-
               } else {
                 USR_FATAL_CONT(fn, "%s.%s override keyword required for method "
                                    "matching signature of superclass method",
@@ -1311,7 +1318,7 @@ static void checkMethodsOverride() {
 static bool wasSuperDot(CallExpr* call);
 
 void insertDynamicDispatchCalls() {
-  forv_Vec(CallExpr, call, gCallExprs) {
+  forv_expanding_Vec(CallExpr, call, gCallExprs) {
     if (call->inTree()) {
       if (FnSymbol* fn = call->resolvedFunction()) {
 

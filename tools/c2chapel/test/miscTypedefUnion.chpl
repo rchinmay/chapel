@@ -5,13 +5,11 @@ require "miscTypedefUnion.h";
 
 // Note: Generated with fake std headers
 
-use CPtr;
-use SysCTypes;
-use SysBasic;
+use CTypes;
 extern "union simpleUnion" union simpleUnion {
   var a : c_int;
   var b : c_char;
-  var c : c_void_ptr;
+  var c : c_ptr(void);
   var d : my_int;
   var e : my_string;
 }
@@ -42,7 +40,7 @@ extern type fwdUnion = forwardUnion;
 
 extern type my_int = c_int;
 
-extern type my_string = c_string;
+extern type my_string = c_ptr(c_char);
 
 // Typedef'd pointer to union
 extern type recp;

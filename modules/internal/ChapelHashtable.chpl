@@ -1,5 +1,5 @@
 /*
- * Copyright 2020-2022 Hewlett Packard Enterprise Development LP
+ * Copyright 2020-2025 Hewlett Packard Enterprise Development LP
  * Copyright 2004-2019 Cray Inc.
  * Other additional copyright holders may be indicated within.
  *
@@ -31,7 +31,7 @@ module ChapelHashtable {
 
   use ChapelBase, DSIUtil;
 
-  private use CPtr;
+  private use CTypes, Math, OS.POSIX;
 
   // empty needs to be 0 so memset 0 sets it
   enum chpl__hash_status { empty=0, full, deleted };
@@ -78,17 +78,29 @@ module ChapelHashtable {
       }
       when ArrayInit.serialInit {
         for slot in _allSlots(size) {
-          c_memset(ptrTo(ret[slot]), 0:uint(8), sizeofElement);
+          memset(ptrTo(ret[slot]), 0:uint(8), sizeofElement.safeCast(c_size_t));
         }
       }
       when ArrayInit.parallelInit {
         // This should match the 'these' iterator in terms of idx->task
         forall slot in _allSlots(size) {
-          c_memset(ptrTo(ret[slot]), 0:uint(8), sizeofElement);
+          memset(ptrTo(ret[slot]), 0:uint(8), sizeofElement.safeCast(c_size_t));
+        }
+      }
+      when ArrayInit.gpuInit {
+        use ChplConfig;
+        if CHPL_LOCALE_MODEL=="gpu" {
+          extern proc chpl_gpu_memset(addr, byte, numBytes);
+          foreach slot in _allSlots(size) {
+            chpl_gpu_memset(ptrTo(ret[slot]), 0:uint(8), sizeofElement);
+          }
+        }
+        else {
+          halt("ArrayInit.gpuInit should not have been selected");
         }
       }
       otherwise {
-        halt("ArrayInit.heuristicInit should have been made concrete");
+        halt("ArrayInit.", initMethod, " should have been implemented");
       }
     }
 
@@ -132,7 +144,7 @@ module ChapelHashtable {
     const minSizePerTask = dataParMinGranularity;
 
     // We are simply slicing up the table here.  Trying to do something
-    //  more intelligent (like evenly dividing up the full slots, led
+    //  more intelligent (like evenly dividing up the full slots), led
     //  to poor speed ups.
 
     if debugAssocDataPar {
@@ -199,7 +211,7 @@ module ChapelHashtable {
   private iter _allSlots(size: int, followThis, param tag: iterKind)
     where tag == iterKind.follower {
 
-    var (chunk, followThisDom) = followThis;
+    var chunk = followThis;
 
     if debugDefaultAssoc then
       writeln("In associative domain _allSlots follower iterator: ",
@@ -235,9 +247,11 @@ module ChapelHashtable {
 
     const startingSize: int;
 
-    proc init(type keyType, type valType, resizeThreshold=0.5,
+    proc init(type keyType, type valType, resizeThreshold=defaultHashTableResizeThreshold,
               initialCapacity=16,
               in rehashHelpers: owned chpl__rehashHelpers? = nil) {
+      if isDomainType(keyType) then
+        compilerError("Values of 'domain' type do not support hash functions yet", 2);
       this.keyType = keyType;
       this.valType = valType;
       this.tableNumFullSlots = 0;
@@ -249,7 +263,7 @@ module ChapelHashtable {
       // Round initial capacity up to nearest power of 2
       this.startingSize = 2 << log2((initialCapacity/
                                      resizeThreshold):int-1);
-      this.complete();
+      init this;
 
       // allocates a _ddata(chpl_TableEntry(keyType,valType)) storing the table
       // All elements are memset to 0 (no initializer is run for the idxType)
@@ -261,8 +275,8 @@ module ChapelHashtable {
       // Go through the full slots in the current table and run
       // chpl__autoDestroy on the index
       if _typeNeedsDeinit(keyType) || _typeNeedsDeinit(valType) {
-        if _deinitElementsIsParallel(keyType) &&
-           _deinitElementsIsParallel(valType) {
+        if (!_typeNeedsDeinit(keyType) || _deinitElementsIsParallel(keyType, tableSize)) &&
+           (!_typeNeedsDeinit(valType) || _deinitElementsIsParallel(valType, tableSize)) {
           forall slot in _allSlots(tableSize) {
             ref aSlot = table[slot];
             if _isSlotFull(aSlot) {
@@ -290,7 +304,7 @@ module ChapelHashtable {
     }
 
     iter allSlots() {
-      for slot in _allSlots(tableSize) {
+      foreach slot in _allSlots(tableSize) {
         yield slot;
       }
     }
@@ -298,7 +312,7 @@ module ChapelHashtable {
     iter allSlots(param tag: iterKind)
       where tag == iterKind.standalone {
 
-      for slot in _allSlots(tableSize, tag=tag) {
+      foreach slot in _allSlots(tableSize, tag=tag) {
         yield slot;
       }
     }
@@ -306,7 +320,7 @@ module ChapelHashtable {
     iter allSlots(param tag: iterKind)
       where tag == iterKind.leader {
 
-      for followThis in _allSlots(tableSize, tag=tag) {
+      foreach followThis in _allSlots(tableSize, tag=tag) {
         yield followThis;
       }
     }
@@ -314,7 +328,7 @@ module ChapelHashtable {
     iter allSlots(followThis, param tag: iterKind)
       where tag == iterKind.follower {
 
-      for i in _allSlots(tableSize, followThis, tag=tag) {
+      foreach i in _allSlots(tableSize, followThis, tag=tag) {
         yield i;
       }
     }
@@ -366,7 +380,7 @@ module ChapelHashtable {
       var currentSlot = chpl__defaultHashWrapper(key):uint;
       const mask = numSlots-1;
 
-      foreach probe in 1..numSlots {
+      foreach probe in 1..numSlots with (ref currentSlot) {
         var uprobe = probe:uint;
 
         yield (currentSlot&mask):int;
@@ -382,7 +396,7 @@ module ChapelHashtable {
     // or a slot that was already present with that key.
     // It can rehash the table.
     // returns (foundFullSlot, slotNum)
-    proc findAvailableSlot(key: keyType): (bool, int) {
+    proc ref findAvailableSlot(key: keyType): (bool, int) {
       var slotNum = -1;
       var foundSlot = false;
 
@@ -413,16 +427,15 @@ module ChapelHashtable {
           // the deleted entries & the table should only ever be half
           // full of non-deleted entries.
           halt("couldn't add key -- ", tableNumFullSlots, " / ", tableSize, " taken");
-          return (false, -1);
         }
         return (foundSlot, slotNum);
       }
     }
 
-    proc fillSlot(ref tableEntry: chpl_TableEntry(keyType, valType),
+    proc ref fillSlot(ref tableEntry: chpl_TableEntry(keyType, valType),
                   in key: keyType,
                   in val: valType) {
-      use Memory.Initialization;
+      use MemMove;
 
       if tableEntry.status == chpl__hash_status.full {
         _deinitSlot(tableEntry);
@@ -438,7 +451,7 @@ module ChapelHashtable {
       moveInitialize(tableEntry.key, key);
       moveInitialize(tableEntry.val, val);
     }
-    proc fillSlot(slotNum: int,
+    proc ref fillSlot(slotNum: int,
                   in key: keyType,
                   in val: valType) {
       ref tableEntry = table[slotNum];
@@ -465,13 +478,13 @@ module ChapelHashtable {
     // Clears a slot that is full
     // (Should not be called on empty/deleted slots)
     // Returns the key and value that were removed in the out arguments
-    proc clearSlot(ref tableEntry: chpl_TableEntry(keyType, valType),
+    proc ref clearSlot(ref tableEntry: chpl_TableEntry(keyType, valType),
                    out key: keyType, out val: valType) {
-      use Memory.Initialization;
+      use MemMove;
 
       // move the table entry into the key/val variables to be returned
-      key = moveToValue(tableEntry.key);
-      val = moveToValue(tableEntry.val);
+      key = moveFrom(tableEntry.key);
+      val = moveFrom(tableEntry.val);
 
       // set the slot status to deleted
       tableEntry.status = chpl__hash_status.deleted;
@@ -480,13 +493,13 @@ module ChapelHashtable {
       tableNumFullSlots -= 1;
       tableNumDeletedSlots += 1;
     }
-    proc clearSlot(slotNum: int, out key: keyType, out val: valType) {
+    proc ref clearSlot(slotNum: int, out key: keyType, out val: valType) {
       // move the table entry into the key/val variables to be returned
       ref tableEntry = table[slotNum];
       clearSlot(tableEntry, key, val);
     }
 
-    proc maybeShrinkAfterRemove() {
+    proc ref maybeShrinkAfterRemove() {
       // The magic number of 4 was chosen here due to our power of 2
       // table sizes, where shrinking the table means halving the table
       // size, so if your table originally was 1/4 of `resizeThreshold`
@@ -531,8 +544,8 @@ module ChapelHashtable {
     // newSize is the new table size
     // newSizeNum is an index into chpl__primes == newSize
     // assumes the array is already locked
-    proc rehash(newSize:int) {
-      use Memory.Initialization;
+    proc ref rehash(newSize:int) {
+      use MemMove;
 
       // save the old table
       var oldSize = tableSize;
@@ -579,8 +592,8 @@ module ChapelHashtable {
             // move the key and value from the old entry into the new one
             ref dstSlot = table[newslot];
             dstSlot.status = chpl__hash_status.full;
-            moveInitialize(dstSlot.key, moveToValue(oldEntry.key));
-            moveInitialize(dstSlot.val, moveToValue(oldEntry.val));
+            moveInitialize(dstSlot.key, moveFrom(oldEntry.key));
+            moveInitialize(dstSlot.val, moveFrom(oldEntry.val));
 
             // move array elements to the new location
             if rehashHelpers != nil then
@@ -611,15 +624,15 @@ module ChapelHashtable {
       }
     }
 
-    proc requestCapacity(numKeys:int) {
+    proc ref requestCapacity(numKeys:int) {
       if tableNumFullSlots < numKeys {
         rehash(_findPowerOf2(numKeys));
       }
     }
 
-    proc resize(grow:bool) {
+    proc ref resize(grow:bool) {
       if postponeResize then return;
-      
+
       // double if you are growing, half if you are shrinking
       var newSize = if tableSize == 0 then startingSize else if grow then tableSize << 1 else tableSize >> 1;
 
@@ -630,6 +643,35 @@ module ChapelHashtable {
       }
 
       rehash(newSize);
+    }
+
+    iter _evenSlots(param tag) where tag == iterKind.leader {
+      for i in (0..<this.tableNumFullSlots).these(tag) {
+        yield i;
+      }
+    }
+
+
+    iter _evenSlots(followThis, param tag) ref
+      where tag == iterKind.follower {
+
+      var space = followThis(0);
+
+      var curNumFull = 0;
+
+      for i in 0..#(this.tableSize) {
+        if this.isSlotFull(i) {
+          if (curNumFull >= space.low) {
+            if (curNumFull <= space.high) {
+              yield this.table[i];
+            } else {
+              break;
+            }
+          }
+
+          curNumFull += 1;
+        }
+      }
     }
   }
 }

@@ -151,7 +151,7 @@ Deleting an IR-level Instruction
 
 When an ``Instruction`` is deleted, its debug uses change to ``undef``. This is
 a loss of debug info: the value of one or more source variables becomes
-unavailable, starting with the ``llvm.dbg.value(undef, ...)``. When there is no
+unavailable, starting with the ``#dbg_value(undef, ...)``. When there is no
 way to reconstitute the value of the lost instruction, this is the best
 possible outcome. However, it's often possible to do better:
 
@@ -172,7 +172,7 @@ possible outcome. However, it's often possible to do better:
   define i16 @foo(i16 %a) {
     %b = sext i16 %a to i32
     %c = and i32 %b, 15
-    call void @llvm.dbg.value(metadata i32 %c, ...)
+      #dbg_value(i32 %c, ...)
     %d = trunc i32 %c to i16
     ret i16 %d
   }
@@ -183,7 +183,7 @@ replaced with a simplified instruction:
 .. code-block:: llvm
 
   define i16 @foo(i16 %a) {
-    call void @llvm.dbg.value(metadata i32 undef, ...)
+      #dbg_value(i32 undef, ...)
     %simplified = and i16 %a, 15
     ret i16 %simplified
   }
@@ -204,7 +204,7 @@ This results in better debug info because the debug use of ``%c`` is preserved:
 
   define i16 @foo(i16 %a) {
     %simplified = and i16 %a, 15
-    call void @llvm.dbg.value(metadata i16 %simplified, ...)
+      #dbg_value(i16 %simplified, ...)
     ret i16 %simplified
   }
 
@@ -216,6 +216,15 @@ Deleting a MIR-level MachineInstr
 ---------------------------------
 
 TODO
+
+Rules for updating ``DIAssignID`` Attachments
+=============================================
+
+``DIAssignID`` metadata attachments are used by Assignment Tracking, which is
+currently an experimental debug mode.
+
+See :doc:`AssignmentTracking` for how to update them and for more info on
+Assignment Tracking.
 
 How to automatically convert tests into debug info tests
 ========================================================
@@ -229,8 +238,8 @@ An IR test case for a transformation can, in many cases, be automatically
 mutated to test debug info handling within that transformation. This is a
 simple way to test for proper debug info handling.
 
-The ``debugify`` utility
-^^^^^^^^^^^^^^^^^^^^^^^^
+The ``debugify`` utility pass
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 The ``debugify`` testing utility is just a pair of passes: ``debugify`` and
 ``check-debugify``.
@@ -240,7 +249,7 @@ module, and the second checks that this DI is still available after an
 optimization has occurred, reporting any errors/warnings while doing so.
 
 The instructions are assigned sequentially increasing line locations, and are
-immediately used by debug value intrinsics everywhere possible.
+immediately used by debug value records everywhere possible.
 
 For example, here is a module before:
 
@@ -262,10 +271,10 @@ and after running ``opt -debugify``:
    define void @f(i32* %x) !dbg !6 {
    entry:
      %x.addr = alloca i32*, align 8, !dbg !12
-     call void @llvm.dbg.value(metadata i32** %x.addr, metadata !9, metadata !DIExpression()), !dbg !12
+       #dbg_value(i32** %x.addr, !9, !DIExpression(), !12)
      store i32* %x, i32** %x.addr, align 8, !dbg !13
      %0 = load i32*, i32** %x.addr, align 8, !dbg !14
-     call void @llvm.dbg.value(metadata i32* %0, metadata !11, metadata !DIExpression()), !dbg !14
+       #dbg_value(i32* %0, !11, !DIExpression(), !14)
      store i32 10, i32* %0, align 4, !dbg !15
      ret void, !dbg !16
    }
@@ -345,6 +354,62 @@ tests. Changes to this pass are not allowed to break existing tests.
    be precise enough), moving the test to its own file is preferred.
 
 .. _MIRDebugify:
+
+Test original debug info preservation in optimizations
+------------------------------------------------------
+
+In addition to automatically generating debug info, the checks provided by
+the ``debugify`` utility pass can also be used to test the preservation of
+pre-existing debug info metadata. It could be run as follows:
+
+.. code-block:: bash
+
+  # Run the pass by checking original Debug Info preservation.
+  $ opt -verify-debuginfo-preserve -pass-to-test sample.ll
+
+  # Check the preservation of original Debug Info after each pass.
+  $ opt -verify-each-debuginfo-preserve -O2 sample.ll
+
+Limit number of observed functions to speed up the analysis:
+
+.. code-block:: bash
+
+  # Test up to 100 functions (per compile unit) per pass.
+  $ opt -verify-each-debuginfo-preserve -O2 -debugify-func-limit=100 sample.ll
+
+Please do note that running ``-verify-each-debuginfo-preserve`` on big projects
+could be heavily time consuming. Therefore, we suggest using
+``-debugify-func-limit`` with a suitable limit number to prevent extremely long
+builds.
+
+Furthermore, there is a way to export the issues that have been found into
+a JSON file as follows:
+
+.. code-block:: bash
+
+  $ opt -verify-debuginfo-preserve -verify-di-preserve-export=sample.json -pass-to-test sample.ll
+
+and then use the ``llvm/utils/llvm-original-di-preservation.py`` script
+to generate an HTML page with the issues reported in a more human readable form
+as follows:
+
+.. code-block:: bash
+
+  $ llvm-original-di-preservation.py sample.json sample.html
+
+Testing of original debug info preservation can be invoked from front-end level
+as follows:
+
+.. code-block:: bash
+
+  # Test each pass.
+  $ clang -Xclang -fverify-debuginfo-preserve -g -O2 sample.c
+
+  # Test each pass and export the issues report into the JSON file.
+  $ clang -Xclang -fverify-debuginfo-preserve -Xclang -fverify-debuginfo-preserve-export=sample.json -g -O2 sample.c
+
+Please do note that there are some known false positives, for source locations
+and debug record checking, so that will be addressed as a future work.
 
 Mutation testing for MIR-level transformations
 ----------------------------------------------

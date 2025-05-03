@@ -1,16 +1,16 @@
 /*
- * Copyright 2020-2022 Hewlett Packard Enterprise Development LP
+ * Copyright 2020-2025 Hewlett Packard Enterprise Development LP
  * Copyright 2004-2019 Cray Inc.
  * Other additional copyright holders may be indicated within.
- * 
+ *
  * The entirety of this work is licensed under the Apache License,
  * Version 2.0 (the "License"); you may not use this file except
  * in compliance with the License.
- * 
+ *
  * You may obtain a copy of the License at
- * 
+ *
  *     http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -153,7 +153,11 @@ typedef struct qio_style_s {
                  // 1 == write positive numbers preceded by positive_char
                  // 2 == write positive numbers preceded by pad_char
   uint8_t uppercase; // numeric stuff is uppercase
-  uint8_t leftjustify; // 1 == left, 0 == right
+  // control left/center/right justification:
+  //  Right padding is on by default. If leftjustify or centjustify is set to 1,
+  //  left or center justification will be used instead.
+  uint8_t leftjustify; // 1 == left, 0 == right || cent
+  uint8_t centjustify; // 1 == center, 0 == right || left
 
   // more numeric options that make the most sense for floating point but
   // also apply to integers. Thes only apply to printing (not reading).
@@ -229,7 +233,7 @@ typedef qio_style_t* qio_style_ptr_t;
 // and have constructor, new, methods, etc;
 // so we redefine it here to include...
 #ifdef _chplrt_H_
-typedef qio_style_t iostyle;
+typedef qio_style_t iostyleInternal;
 #endif
 
 

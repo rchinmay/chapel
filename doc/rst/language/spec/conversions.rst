@@ -1,5 +1,9 @@
 .. default-domain:: chpl
 
+.. index::
+   single: conversions
+   single: conversions; source type
+   single: conversions; target type
 .. _Chapter-Conversions:
 
 ===========
@@ -7,19 +11,25 @@ Conversions
 ===========
 
 A *conversion* converts an expression of one type to another type,
-possibly producing a new value. In certain cases noted below the source
-expression can be a type expression. We refer to these two types the
+possibly producing a new value. In certain cases noted below, the source
+expression can be a type expression. We refer to these two types as the
 *source* and *target* types. Conversions can be either
 implicit (:ref:`Implicit_Conversions`) or
 explicit (:ref:`Explicit_Conversions`).
 
+.. index::
+   single: conversions; implicit
+   single: implicit conversions
+   see: coercions; implicit conversions
+   single: implicit conversions; occurs at
+   single: implicit conversions; allowed types
 .. _Implicit_Conversions:
 
 Implicit Conversions
 --------------------
 
-An *implicit conversion* is a conversion that occurs implicitly - that is -
-without an explicit specification in the program. Implicit conversions
+An *implicit conversion* is a conversion that occurs implicitly—that
+is, without an explicit operation within the program. Implicit conversions
 fall into the following categories:
 
  * implicit conversions for initialization and assignment
@@ -29,12 +39,12 @@ fall into the following categories:
  * implicit conversions for conditionals
    (:ref:`Implicit_Conversion_Conditionals`)
 
-If implicit conversion for a function call is allowed from type ``T1`` to
+If an implicit conversion for a function call is allowed from type ``T1`` to
 type ``T2`` then implicit conversion for initialization and assignment is
 allowed.
 
 In addition, an implicit conversion from a type to the same type is
-allowed for any type. Such conversion does not change the value of the
+allowed for any type. Such a conversion does not change the value of the
 expression.
 
 Implicit conversion is not transitive. That is, if an implicit
@@ -46,12 +56,14 @@ Implicit conversion for function calls, initialization, and assignment
 are allowed between the following source and target types, as defined in
 the referenced subsections:
 
--  numeric and boolean
+-  boolean and numeric types
    types (:ref:`Implicit_NumBool_Conversions`),
 
 -  numeric types in the special case when the expression’s value is a
    compile-time
    constant (:ref:`Implicit_Compile_Time_Constant_Conversions`),
+
+-  ranges (:ref:`Implicit_Range_Conversions`),
 
 -  class types (:ref:`Implicit_Class_Conversions`), and
 
@@ -63,6 +75,14 @@ Additionally, implicit conversions for initialization and assignment can
 be defined for record types, as specified in
 :ref:`Implicit_Conversion_Init_Assign`.
 
+.. index::
+   single: implicit conversions; numeric
+   pair: implicit conversions; int
+   pair: implicit conversions; uint
+   pair: implicit conversions; real
+   pair: implicit conversions; imag
+   pair: implicit conversions; complex
+   pair: implicit conversions; bool
 .. _Implicit_NumBool_Conversions:
 
 Implicit Numeric and Bool Conversions
@@ -71,80 +91,165 @@ Implicit Numeric and Bool Conversions
 Implicit conversions among numeric types are allowed when all values
 representable in the source type can also be represented in the target
 type, retaining their full precision. In addition, implicit conversions
-from types ``int(64)`` and ``uint(64)`` to types ``real(64)`` and
-``complex(128)`` are allowed, even though they may result in a loss of
-precision.
+are permitted from ``int(s)`` and ``uint(s)`` values to ``real(t)`` and
+``complex(2*t)``, for any widths ``s`` and ``t``, even though these cases
+may result in a loss of precision.
 
    *Rationale*.
 
-   We allow these additional conversions because they are an important
-   convenience for application programmers. Therefore we are willing to
-   lose precision in these cases. The largest real and complex types are
-   chosen to retain precision as often as as possible.
+   We allow these additional conversions because they provide an
+   important convenience for application programmers who want to mix
+   integral and floating point values in mathematical expressions, and
+   for computing using values using a specific bit-width. For these
+   benefits, the loss of precision seemed like a reasonable tradeoff,
+   particularly given that floating point types are approximate by
+   nature.
 
-Any boolean type can be implicitly converted to any other boolean type,
-retaining the boolean value. Any boolean type can be implicitly
-converted to any integral type by representing ``false`` as 0 and
-``true`` as 1, except (if applicable) a boolean cannot be converted to
-``int(1)``.
+Signed integral types ``int(s)`` can implicitly convert to ``uint(t)``
+where ``s <= t``.
 
    *Rationale*.
 
-   We disallow implicit conversion of a boolean to a real, imaginary, or
-   complex type because of the following. We expect that the cases where
-   such a conversion is needed will more likely be unintended by the
-   programmer. Marking those cases as errors will draw the programmer’s
-   attention. If such a conversion is actually desired, a cast
-   :ref:`Explicit_Conversions` can be inserted.
+   We allow these conversions to avoid the situation that something
+   similar to a binary operator produces surprising results when mixing
+   ``int`` and ``uint`` types. In particular, without this rule, the
+   ``plus`` function defined below would surprisingly produce values of a
+   different width or a different kind:
+
+   .. code-block:: chapel
+
+     proc plus(a: int(32), b: int(32)) : int(32) { ... }
+     proc plus(a: int(64), b: int(64)) : int(64) { ... }
+     proc plus(a: uint(32), b: uint(32)) : uint(32) { ... }
+     proc plus(a: uint(32), b: uint(32)) : uint(32) { ... }
+     proc plus(a: real(64), b: real(64)) : real(64) { ... }
+
+     var myInt32: int(32);
+     var myUint32: uint(32);
+     plus(myInt32, myUint32); // calls 'uint(32)' version, but
+                              // without int->uint implicit conversion,
+                              // would call the 'int(64)' version
+     var myInt64: int(64);
+     var myUint64: uint(64);
+     plus(myInt64, myUint64); // calls 'uint(64)' version, but
+                              // without int->uint implicit conversion,
+                              // would call the 'real(64)' version
+
+   While implicitly converting an ``int`` to a ``uint`` can lead to
+   surprising behavior, this behavior is less problematic than the
+   surprising behavior that comes from the above scenario.
+
+A ``bool`` can be implicitly converted to any integral type by
+representing ``false`` as 0 and ``true`` as 1.
+
+   *Rationale*.
+
+   We disallow implicit conversion of a ``bool`` to a real, imaginary,
+   or complex type because we expect that such conversions are most
+   likely to be an unintended mistake by the programmer.
+   Marking such cases as errors will draw the programmer’s attention
+   to the issue, and if such a conversion is actually desired, a cast
+   can be used (see :ref:`Explicit_Conversions`).
 
 Legal implicit conversions with numeric and boolean types may thus be
-tabulated as follows:
+summarized as follows:
 
-==================== ================= ================= ============================== ======================= ================= =========================
-\                                                                                                                                
-Source Type          bool(\ :math:`t`) uint(\ :math:`t`) int(\ :math:`t`)               real(\ :math:`t`)       imag(\ :math:`t`) complex(\ :math:`t`)
-\                                                                                                                                
-bool(\ :math:`s`)    all :math:`s,t`   all :math:`s,t`   all :math:`s`; :math:`2 \le t`                                          
-uint(\ :math:`s`)                      :math:`s \le t`   :math:`s < t`                  :math:`s \le mant(t)`                     :math:`s \le mant(t/2)`
-uint(64)                                                                                real(64)                                  complex(128)
-int(\ :math:`s`)                                         :math:`s \le t`                :math:`s \le mant(t)+1`                   :math:`s \le mant(t/2)+1`
-int(64)                                                                                 real(64)                                  complex(128)
-real(\ :math:`s`)                                                                       :math:`s \le t`                           :math:`s \le t/2`
-imag(\ :math:`s`)                                                                                               :math:`s \le t`   :math:`s \le t/2`
-complex(\ :math:`s`)                                                                                                              :math:`s \le t`
-==================== ================= ================= ============================== ======================= ================= =========================
+==================== ================= ================ ================= ================= ====================
+\                                                **Destination Type**
+-------------------- -------------------------------------------------------------------------------------------
+**Source Type**      uint(\ :math:`t`) int(\ :math:`t`) real(\ :math:`t`) imag(\ :math:`t`) complex(\ :math:`t`)
+bool                 all :math:`t`     all :math:`t`
+uint(\ :math:`s`)    :math:`s \le t`   :math:`s < t`    all :math:`s,t`                     all :math:`s,t`
+int(\ :math:`s`)     :math:`s \le t`   :math:`s \le t`  all :math:`s,t`                     all :math:`s,t`
+real(\ :math:`s`)                                       :math:`s \le t`                     :math:`s \le t/2`
+imag(\ :math:`s`)                                                         :math:`s \le t`   :math:`s \le t/2`
+complex(\ :math:`s`)                                                                        :math:`s \le t`
+==================== ================= ================ ================= ================= ====================
 
-Here, :math:`mant(i)` is the number of bits in the (unsigned) mantissa
-of the :math:`i`-bit floating-point type. [1]_ Conversions for the
-default integral and real types (``uint``, ``complex``, etc.) are the
-same as for their explicitly-sized counterparts.
 
+.. index::
+   pair: implicit conversions; literals
+   pair: implicit conversions; params
 .. _Implicit_Compile_Time_Constant_Conversions:
 
 Implicit Compile-Time Constant Conversions
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-A parameter of numeric type can be implicitly converted to any other
-numeric type if the value of the parameter can be represented exactly by
-the target type. This rule does not allow conversions from ``real`` to
-``imag``, or from ``complex`` to a non-complex type. It does allow
-conversions from ``real`` or ``imag`` to ``complex``.
+A ``param`` of numeric type can be implicitly converted to another numeric
+type in some cases if the ``param`` value can be represented exactly by
+the target type. In particular:
 
+ * ``param`` ``int(s)`` and ``uint(s)`` values that are exactly
+   representable in the target type can implicit convert to ``int(t)``
+   and ``uint(t)`` regardless of the values of ``s`` and ``t``.
+ * ``param`` ``real(s)`` that is exactly representable in the target
+   type can implicitly convert to ``real(t)`` or to ``complex(t)``
+   regardless of the values of ``s`` and ``t``.
+ * ``param`` ``imag(s)`` that is exactly representable in the target
+   type can implicitly convert to ``imag(t)`` or to ``complex(t)``
+   regardless of the values of ``s`` and ``t``.
+ * ``param`` ``complex(s)`` that is exactly representable in the target
+   type can implicitly convert to ``complex(t)``.
+
+As with the implicit numeric conversions, integral ``param`` values can
+implicitly convert:
+
+ * to ``uint`` of matching or greater size or to ``real``
+ * or, to ``complex`` of any size.
+
+.. index::
+   pair: implicit conversions; ranges
+.. _Implicit_Range_Conversions:
+
+Implicit Range Conversions
+~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Implicit conversions among range types are allowed when all values
+representable in the source type can also be represented in the target
+type, retaining their full precision. In particular, an implicit
+conversion is allowed when:
+
+* the ``idxType`` of the source can be implicitly converted
+  to the ``idxType`` of the target,
+
+* the ``bounds`` of the source and the target are the same, and
+
+* one of the following holds:
+
+ - the ``strides`` of the source and the target are the same,
+ - the ``strides`` of the target is ``any``,
+ - the ``strides`` of the target is ``positive``
+   and the ``strides`` of the source is ``one``, or
+ - the ``strides`` of the target is ``negative``
+   and the ``strides`` of the source is ``negOne``.
+
+.. index::
+   pair: implicit conversions; classes
+   single: implicit conversions; nilability
+   single: implicit conversions; borrowing
 .. _Implicit_Class_Conversions:
 
 Implicit Class Conversions
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-An expression of class type can be implicitly converted to the borrow
-type; to a nilable type; or to a parent class type. The value ``nil``
-can be implicitly converted to any nilable class type.
+An expression of class type can be implicitly converted to:
+ * to a parent class type,
+ * to a nilable type, or
+ * to the borrow type.
 
-First, class types can be converted to the corresponding ``borrowed``
-type. For example, ``owned C`` can be implicitly converted to
-``borrowed C``, and ``shared C?`` can be implicitly converted to
-``borrowed C?``. This coercion is equivalent to calling the
-``.borrow()`` method. See :ref:`Class_Lifetime_and_Borrows`.
-For example:
+Any combination of these three conversions is allowed.
+
+The value ``nil`` can be implicitly converted to any nilable class type.
+
+Conversion to a parent class type or to a nilable type is a subtype
+conversion and is discussed in the next section
+(:ref:`Subtype_Arg_Conversions`).
+
+Class types can be converted to the corresponding ``borrowed`` type. For
+example, ``owned C`` can be implicitly converted to ``borrowed C``, and
+``shared C?`` can be implicitly converted to ``borrowed C?``. This
+coercion is equivalent to calling the ``.borrow()`` method.
+See :ref:`Class_Lifetime_and_Borrows`.  For example:
 
    *Example (implicit-conversion-to-borrow.chpl)*.
 
@@ -156,28 +261,12 @@ For example:
       proc f(arg: borrowed C) { }
       f(c); // equivalent to f(c.borrow())
 
-Second, an expression of non-nilable class type can be implicitly
-converted to the nilable class type. Continuing the above example:
 
-   *Example (implicit-conversion-to-nilable.chpl)*.
-
-   .. BLOCK-test-chapelpre
-
-      class C { }
-      var c:owned C = new owned C();
-
-   .. code-block:: chapel
-
-      var b:borrowed C = c.borrow();
-
-      proc g(arg: borrowed C?) { }
-      g(b); // equivalent to g(b:borrowed C?)
-
-Third, an implicit conversion from class type ``D`` to another class
-type ``C`` is allowed when ``D`` is a subclass of ``C``.
-
-Any combination of these three conversions is allowed.
-
+.. index::
+   single: implicit conversions; type arguments
+   single: implicit conversions; subtype
+   single: subtype
+.. _Subtype:
 .. _Subtype_Arg_Conversions:
 .. _Implicit_Type_Arg_Conversions:
 .. _Implicit_Generic_Type_Conversions:
@@ -191,49 +280,145 @@ subtype of the target type.
 Given any two types ``T1`` and ``T2``, the type ``T1`` is considered to be a
 subtype of a type ``T2`` if:
 
- * ``T2`` is a generic type (:ref:`Generic_Types`) and
-   the ``T1`` is an instantiation that type
- * ``T1`` is a class type that inherits from the the class ``T2``
- * or a combination of the two.
+ * ``T2`` is a generic type (:ref:`Generic_Types`) and ``T1`` is an
+   instantiation that type
+ * ``T1`` is a class type that inherits from the class ``T2``
+   (:ref:`Inheritance`)
+ * ``T1`` is a non-nilable class type (e.g. ``borrowed C``) and ``T2`` is
+   the nilable version of the same class type (e.g. ``borrowed C?``)
+   (:ref:`Nilable_Classes`)
+ * or a combination of the above.
 
-The below examples with the ``type`` intent demonstrate implicit subtype
-conversions.
+The below examples use :proc:`isSubtype <Types.isSubtype>` to demonstrate
+when one type is a subtype of another.
 
-   *Example (type-argument-conversion-error.chpl)*
+   *Example (not-a-subtype.chpl)*
 
-   The following code defines a function ``f`` accepting ``type t: int``
-   and then tries to pass ``int(8)`` to it. This will not compile,
-   because while an ``int(8)`` value can be implicitly converted to
-   ``int``, ``int(8)`` is not a subtype of ``int``.
+   The following code snippet demonstrates that ``int(8)`` is not a
+   subtype of ``int``. Note that, even though an ``int(8)`` value can be
+   implicitly converted to ``int``, ``int(8)`` is not a subtype of
+   ``int``.
+
+   .. BLOCK-test-chapelpre
+
+      param x =
 
    .. code-block:: chapel
 
-      proc f(type t: int) { }
-      f(int(8));
+      isSubtype(int(8), int); // evaluates to false
+
+   .. BLOCK-test-chapelpost
+
+      writeln(x);
 
    .. BLOCK-test-chapeloutput
 
-      type-argument-conversion-error.chpl:2: error: unresolved call 'f(type int(8))'
-      type-argument-conversion-error.chpl:1: note: this candidate did not match: f(type t: int)
-      type-argument-conversion-error.chpl:2: note: because actual argument #1 with type 'int(8)'
-      type-argument-conversion-error.chpl:1: note: is passed to formal 't: int(64)'
+      false
 
-   *Example (type-argument-conversion.chpl)*
+   *Example (subtype-int8-integral.chpl)*
 
-   In contrast, this code demonstrates an implicit conversion that
-   does succeed because a child class is a subtype of a parent class, and
-   an ``owned`` class type is a subtype of an undecorated (generic
-   management) class type.
+   However, ``int(8)`` is a subtype of the generic type ``integral``
+   according to the first rule above (:ref:`Built_in_Generic_Types`).
+
+   .. BLOCK-test-chapelpre
+
+      param x =
+
+   .. code-block:: chapel
+
+      isSubtype(int(8), integral); // evaluates to true
+
+   .. BLOCK-test-chapelpost
+
+      writeln(x);
+
+   .. BLOCK-test-chapeloutput
+
+      true
+
+   *Example (subtype-pass-int8-integral.chpl)*
+
+   Since ``int(8)`` is a subtype of ``integral``, the type ``int(8)`` can
+   be passed to the type argument ``type t: integral``
+   (:ref:`Legal_Argument_Mapping`). As a result the following program
+   will compile:
+
+   .. code-block:: chapel
+
+      proc f(type t: integral) { }
+      f(int(8));
+
+   *Example (subtype-parent-class.chpl)*
+
+   This example demonstrates that ``ChildClass`` is a subtype of
+   ``ParentClass``.
 
    .. code-block:: chapel
 
      class ParentClass { }
      class ChildClass : ParentClass { }
 
-     proc g(type t: ParentClass) { }
-     g(owned ChildClass);
+     writeln(isSubtype(ChildClass, ParentClass)); // outputs true
+     writeln(isSubtype(borrowed ChildClass, borrowed ParentClass)); // outputs true
 
+     proc f(type t: ParentClass) { }
+     f(ChildClass); // implicit subtype conversion
 
+     proc g(type t: borrowed ParentClass) { }
+     g(borrowed ChildClass); // implicit subtype conversion
+
+     // The implicit subtype conversion can also apply to non-type arguments:
+     proc h(in arg: owned ParentClass) { }
+     h(new owned ChildClass()); // implicit subtype conversion
+
+   .. BLOCK-test-chapeloutput
+
+     true
+     true
+
+   *Example (subtype-nilable.chpl)*.
+
+   This example shows that a non-nilable class type is a subtype of a
+   nilable class type with the same management.
+
+   .. code-block:: chapel
+
+      class C { }
+
+      writeln(isSubtype(C, C?)); // outputs true
+      writeln(isSubtype(owned C, owned C?)); // outputs true
+
+   .. BLOCK-test-chapeloutput
+
+     true
+     true
+
+   *Example (subtype-three.chpl)*.
+
+   This example demonstrates a combination of all three rules. Note that
+   ``ParentClass`` indicates a generic memory management strategy
+   (:ref:`Class_Types`).
+
+   .. code-block:: chapel
+
+     class ParentClass { }
+     class ChildClass : ParentClass { }
+
+     writeln(isSubtype(ChildClass, ParentClass?)); // outputs true
+
+     proc f(type t: ParentClass?) { }
+     f(ChildClass); // uses implicit subtype conversion
+
+     proc g(in arg: ParentClass?) { }
+     g(new owned ChildClass()); // uses implicit subtype conversion
+
+   .. BLOCK-test-chapeloutput
+
+     true
+
+.. index::
+   pair: implicit conversions; assignment
+   pair: implicit conversions; initialization
 .. _Implicit_Conversion_Init_Assign:
 
 Implicit Conversions for Initialization and Assignment
@@ -264,7 +449,8 @@ the following program locations:
 Implicit conversions for initialization or assignment are allowed between
 numeric and boolean types (:ref:`Implicit_NumBool_Conversions`), numeric
 types in the special case when the expression’s value is a compile-time
-constant (:ref:`Implicit_Compile_Time_Constant_Conversions`), class types
+constant (:ref:`Implicit_Compile_Time_Constant_Conversions`), ranges
+(:ref:`Implicit_Range_Conversions`), class types
 (:ref:`Implicit_Class_Conversions`), and for generic target types
 (:ref:`Subtype_Arg_Conversions`).
 
@@ -340,6 +526,9 @@ without ``init=`` or to provide ``init=`` without ``=``.
       c is (intValue = 3) : myInteger
       d is (intValue = 4) : myInteger
 
+.. index::
+   single: implicit conversions; for calls
+   single: calls; implicit conversion
 .. _Implicit_Conversion_Call:
 
 Implicit Conversions for Function Calls
@@ -348,20 +537,24 @@ Implicit Conversions for Function Calls
 An implicit conversion for a function call - also called a *coercion* -
 occurs when the actual argument of a function call is converted to the
 type of the corresponding formal argument, if the formal’s intent is
-``param``, ``in``, ``const in``, or an abstract intent
-(:ref:`Abstract_Intents`) with the semantics of ``in`` or ``const in``.
+``param``, ``in``, ``const in``, ``const``, or the default intent.
 
 Implicit conversions for function calls are allowed between numeric
 and boolean types (:ref:`Implicit_NumBool_Conversions`), numeric types
 in the special case when the expression’s value is a compile-time
-constant (:ref:`Implicit_Compile_Time_Constant_Conversions`), class
+constant (:ref:`Implicit_Compile_Time_Constant_Conversions`),
+ranges (:ref:`Implicit_Range_Conversions`), class
 types (:ref:`Implicit_Class_Conversions`), and for generic target
 types (:ref:`Subtype_Arg_Conversions`).
 
 Additionally, an implicit conversion for a function call occurs when the
 actual type is a subtype of the formal type. This rule applies to ``in``,
-``const in``, ``const ref``, and ``type`` intent formals and includes
-generic formal types. See :ref:`Subtype_Arg_Conversions`.
+``const in``, ``const ref``, ``const``, ``type``, and default intent formals
+and includes generic formal types. See :ref:`Subtype_Arg_Conversions`.
+
+Lastly, implicit conversion from a compile-time constant is always
+allowed when passing to a ``const ref`` formal. See
+:ref:`Implicit_Compile_Time_Constant_Conversions`.
 
 Implicit conversions are not applied for actual arguments passed to
 ``ref`` formal arguments.
@@ -377,6 +570,9 @@ Implicit conversions are not applied for actual arguments passed to
    Should Chapel allow user-defined implicit conversions for function
    calls?  If so, how would the user define them?
 
+.. index::
+   pair: implicit conversions; conditionals
+   single: implicit conversion; boolean
 .. _Implicit_Conversion_Conditionals:
 .. _Implicit_Statement_Bool_Conversions:
 
@@ -408,6 +604,11 @@ indicated in their documentation.
    conditionals? If so, how would the user define them?
 
 
+.. index::
+   single: conversions; explicit
+   single: conversions; casts
+   single: casts
+   see: explicit conversions; casts
 .. _Explicit_Conversions:
 
 Explicit Conversions
@@ -443,19 +644,24 @@ An explicit conversion from a type to the same type is allowed for any
 type. Such a conversion does not change the value of the expression.
 
 
+.. index::
+   single: casts; numeric
 .. _Explicit_Numeric_Conversions:
 
 Explicit Numeric Conversions
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Explicit conversions are allowed from any numeric type or boolean to
-bytes or string, and vice-versa.
+Explicit conversions are allowed from ``bool`` or any numeric type to
+``bytes`` or ``string``, and vice-versa.  When converting to ``bytes``
+or ``string`` the result will hold the string ``true`` or ``false``
+for a ``bool``, or a representation of the expression's numerical
+value in other cases.  When converting from a ``string`` or ``bytes``,
+the reverse occurs, converting the represented value into a numerical
+or ``bool`` value.  If the ``string``/``bytes`` does not represent a
+legal value of the given type, an ``IllegalArgumentError`` is thrown.
 
-When a ``bool`` is converted to a ``bool``, ``int`` or ``uint`` of equal
-or larger size, its value is zero-extended to fit the new
-representation. When a ``bool`` is converted to a smaller ``bool``,
-``int`` or ``uint``, its most significant bits are truncated (as
-appropriate) to fit the new representation.
+When a ``bool`` is converted to an ``int`` or ``uint``, ``false``
+converts to the value 0 and ``true`` to 1.
 
 When a ``int``, ``uint``, or ``real`` is converted to a ``bool``, the
 result is ``false`` if the number was equal to 0 and ``true`` otherwise.
@@ -501,7 +707,7 @@ truncated to fit the new representation.
 When converting from a ``real`` type to a larger ``real`` type, the
 represented value is preserved. When converting from a ``real`` type to
 a smaller ``real`` type, the closest representation in the target type
-is chosen. [2]_
+is chosen. [1]_
 
 When converting to a ``real`` type from an integer type, integer types
 smaller than ``int`` are first converted to ``int``. Then, the closest
@@ -520,6 +726,11 @@ for converting from real, except that the imaginary part of the result
 is set using the input value, and the real part of the result is set to
 zero.
 
+Explicitly converting between ``real(k)`` and ``imag(k)`` will copy the
+represented number while changing whether or not it is imaginary.
+
+.. index::
+   single: casts; tuple to complex
 .. _Explicit_Tuple_to_Complex_Conversion:
 
 Explicit Tuple to Complex Conversion
@@ -533,6 +744,8 @@ is ``complex(64)``, each member of the two-tuple must be convertible to
 resulting complex value; the second member of the tuple becomes the
 imaginary part of the resulting complex value.
 
+.. index::
+   single: casts; enums
 .. _Explicit_Enumeration_Conversions:
 
 Explicit Enumeration Conversions
@@ -566,7 +779,7 @@ When converting from an enum to a real, imaginary, or complex type,
 the value is first converted to the enum's underlying integer type and
 then to the target type.
 
-When converting from an enum to a boolean type, the value is first
+When converting from an enum to a ``bool``, the value is first
 converted to the enum's underlying integer type. If the result is
 zero, the value of the ``bool`` is ``false``; otherwise, it is
 ``true``.
@@ -577,6 +790,8 @@ the matching symbol.  If no symbol has the given integer value, an
 ``IllegalArgumentError`` is thrown.
 
 
+.. index::
+   pair: casts; classes
 .. _Explicit_Class_Conversions:
 
 Explicit Class Conversions
@@ -636,22 +851,40 @@ has different nilability or memory management strategy. Supposing that
 The conversions in this subsection apply when the source is either an
 expression or a type expression.
 
+.. index::
+   pair: casts; ranges
 .. _Explicit_Range_Conversions:
 
 Explicit Range Conversions
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-An expression of stridable range type can be explicitly converted to an
-unstridable range type, changing the stride to 1 in the process.
+An expression of a range type can be explicitly converted to another
+range type with the same ``bounds`` parameter. Upon such conversion,
+each non-infinite bound of the source is explicitly converted
+to the target's ``idxType``. The explicit conversion for ranges
+is not allowed when the explicit conversion between their ``idxTypes``
+is not allowed.
 
+The explicit conversion results in an error when the ``stride`` value
+of the source is not legal for the target type. This may be the case
+either because the source stride is not representable within the
+target's stride type or it is of the opposite sign than expected
+by the target's ``strides`` parameter.
+
+.. index::
+   pair: casts; domains
 .. _Explicit_Domain_Conversions:
 
 Explicit Domain Conversions
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-An expression of stridable domain type can be explicitly converted to an
-unstridable domain type, changing all strides to 1 in the process.
+An expression of a rectangular domain type can be explicitly converted
+to another rectangular domain type of the same ``rank``.
+Such conversion is performed dimension-wise following the rules
+for explicit range conversions (see :ref:`Explicit_Range_Conversions`).
 
+.. index::
+   pair: casts; string to bytes
 .. _Explicit_String_to_Bytes_Conversions:
 
 Explicit String to Bytes Conversions
@@ -662,6 +895,8 @@ An expression of ``string`` type can be explicitly converted to a
 contain arbitrary bytes. Instead, ``bytes.decode()`` method should be
 used to produce a ``string`` from a ``bytes``.
 
+.. index::
+   single: casts; type to string
 .. _Explicit_Type_to_String_Conversions:
 
 Explicit Type to String Conversions
@@ -685,7 +920,8 @@ resultant ``string`` is the name of the type.
 
    This program will print out the string ``"real(64)"``.
 
-
+.. index::
+   single: casts; user-defined
 .. _User_Defined_Casts:
 
 User-Defined Casts
@@ -734,9 +970,6 @@ arguments: the value to convert and the type to convert it to.
 
 
 .. [1]
-   For the IEEE 754 format, :math:`mant(32)=24` and :math:`mant(64)=53`.
-
-.. [2]
    When converting to a smaller real type, a loss of precision is
    *expected*. Therefore, there is no reason to produce a run-time
    diagnostic.

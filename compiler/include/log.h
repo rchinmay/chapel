@@ -1,16 +1,16 @@
 /*
- * Copyright 2020-2022 Hewlett Packard Enterprise Development LP
+ * Copyright 2020-2025 Hewlett Packard Enterprise Development LP
  * Copyright 2004-2019 Cray Inc.
  * Other additional copyright holders may be indicated within.
- * 
+ *
  * The entirety of this work is licensed under the Apache License,
  * Version 2.0 (the "License"); you may not use this file except
  * in compliance with the License.
- * 
+ *
  * You may obtain a copy of the License at
- * 
+ *
  *     http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -30,6 +30,8 @@ struct ArgumentDescription;
 #define LOG_NO_SHORT ' '
 #define LOG_NEVER    '\0'
 
+enum class LogFormat { DEFAULT, NPRINT };
+
 // runpasses uses this to configure the logger
 void logMakePassAvailable(const char* name, char shortname);
 
@@ -37,6 +39,8 @@ void logMakePassAvailable(const char* name, char shortname);
 // arg might be a pass name or a 1-character short name (e.g. 'R')
 void logSelectPass(const char* arg);
 
+// Also used by driver to configure the logger.
+void logSelectFormat(const char* arg);
 
 void  setupLogfiles();
 void  teardownLogfiles();
@@ -45,22 +49,22 @@ void  logWriteLog(const char* passName, int passNum, char logTag);
 
 bool  deletedIdON();
 
-extern char  log_dir   [FILENAME_MAX + 1];
-extern char  log_module[FILENAME_MAX + 1];
+extern std::string  log_dir;
+extern std::set<std::string> log_modules;
 
 extern bool  fLogDir; // was --log-dir passed?
 
 extern bool  fLog;
-extern bool  fLogNode;
 extern bool  fLogIds;
+extern LogFormat fLogFormat;
 
-extern int   fdump_html;
-extern char  fdump_html_chpl_home[FILENAME_MAX + 1];
-extern bool  fdump_html_include_system_modules;
-extern bool  fdump_html_wrap_lines;
-extern bool  fdump_html_print_block_IDs;
+extern int          fdump_html;
+extern std::string  fdump_html_chpl_home;
+extern bool         fdump_html_include_system_modules;
+extern bool         fdump_html_wrap_lines;
+extern bool         fdump_html_print_block_IDs;
 
-extern FILE* deletedIdHandle;
-extern char  deletedIdFilename[FILENAME_MAX + 1];
+extern FILE*        deletedIdHandle;
+extern std::string  deletedIdFilename;
 
 #endif

@@ -150,6 +150,15 @@
   #endif
 #endif
 
+// As reported in UPC++ issue #601, NVHPC 23.3 has a flawed implementation
+// of the "pure" attribute.
+// TODO: end version once fixed
+#if PLATFORM_COMPILER_NVHPC && PLATFORM_COMPILER_VERSION_GE(23,3,0)
+  #ifndef GASNETT_USE_GCC_ATTRIBUTE_PURE
+  #define GASNETT_USE_GCC_ATTRIBUTE_PURE 0
+  #endif
+#endif
+
 // token expansion: expands to configure-detected token GASNETI_<id>_<feature> for the current compiler
 //                  (which MUST NOT be #undef, although it can be #defined to blank)
 //                  or 'otherwise' in the case of a compiler mismatch
@@ -478,8 +487,9 @@ typedef union { uint64_t _u; char _c[8]; } gasneti_magic_t;
   #define GASNETI_PRAGMA(x) _Pragma ( #x )
 #endif
 
-#if GASNETI_COMPILER_HAS(PRAGMA_GCC_DIAGNOSTIC)
-  #define GASNETI_USE_PRAGMA_GCC_DIAGNOSTIC 1
+#if (!defined(GASNETT_USE_PRAGMA_GCC_DIAGNOSTIC) && GASNETI_COMPILER_HAS(PRAGMA_GCC_DIAGNOSTIC)) || \
+              GASNETT_USE_PRAGMA_GCC_DIAGNOSTIC
+  #define     GASNETT_USE_PRAGMA_GCC_DIAGNOSTIC 1
   #if defined(__cplusplus)
     #define _GASNETI_NOWARN_IGNORES_C_ONLY
   #else
@@ -670,7 +680,7 @@ typedef union { uint64_t _u; char _c[8]; } gasneti_magic_t;
   #define GASNETI_PURE 
 #endif
 /* pragma version of GASNETI_PURE */
-#if PLATFORM_COMPILER_XLC && \
+#if PLATFORM_COMPILER_XLC && PLATFORM_ARCH_BIG_ENDIAN && \
    !(PLATFORM_OS_DARWIN && __xlC__ <= 0x0600) /* bug 1542 */
   #define GASNETI_PUREP(fnname) GASNETI_PRAGMA(isolated_call(fnname))
 #else

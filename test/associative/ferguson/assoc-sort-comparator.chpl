@@ -19,12 +19,12 @@ A[5] = 5;
 A[7] = 3;
 
 writeln("reverse sorted D");
-for i in D.sorted(reverseComparator) {
+for i in sorted(D, new reverseComparator()) {
   writeln(i);
 }
 
 writeln("reverse sorted A");
-for x in A.sorted(reverseComparator) {
+for x in sorted(A, new reverseComparator()) {
   writeln(x);
 }
 

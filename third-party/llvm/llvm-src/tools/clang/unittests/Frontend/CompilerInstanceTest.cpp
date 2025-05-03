@@ -55,8 +55,10 @@ TEST(CompilerInstance, DefaultVFSOverlayFromInvocation) {
   IntrusiveRefCntPtr<DiagnosticsEngine> Diags =
       CompilerInstance::createDiagnostics(new DiagnosticOptions());
 
+  CreateInvocationOptions CIOpts;
+  CIOpts.Diags = Diags;
   std::shared_ptr<CompilerInvocation> CInvok =
-      createInvocationFromCommandLine(Args, Diags);
+      createInvocation(Args, std::move(CIOpts));
 
   if (!CInvok)
     FAIL() << "could not create compiler invocation";
@@ -89,7 +91,7 @@ TEST(CompilerInstance, AllowDiagnosticLogWithUnownedDiagnosticConsumer) {
       DiagOpts, DiagPrinter.get(), /*ShouldOwnClient=*/false);
 
   Diags->Report(diag::err_expected) << "no crash";
-  ASSERT_EQ(DiagnosticsOS.str(), "error: expected no crash\n");
+  ASSERT_EQ(DiagnosticOutput, "error: expected no crash\n");
 }
 
 } // anonymous namespace

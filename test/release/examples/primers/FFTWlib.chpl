@@ -10,14 +10,14 @@
 
   .. code-block:: text
 
-    chpl testFFTW.chpl
+    chpl FFTWlib.chpl
 
   Otherwise, use the following (where ``$FFTW_DIR`` points to your
   FFTW installation):
 
   .. code-block:: text
 
-    chpl testFFTW.chpl -I$FFTW_DIR/include -L$FFTW_DIR/lib
+    chpl FFTWlib.chpl -I$FFTW_DIR/include -L$FFTW_DIR/lib
 
   The :mod:`FFTW` module uses the FFTW3 API and currently just implements the
   basic, double-precision interface.  We will assume that the reader
@@ -26,7 +26,7 @@
   The code computes a series of 1D, 2D and 3D transforms, exercising
   the complex<->complex and real<->complex transforms (both in- and
   out-of-place). The output of the code should be a series of small
-  numbers ( ``<= 10^-13`` ); see ``testFFTW.good`` for example values, though
+  numbers ( ``<= 10^-13`` ); see ``FFTWlib.good`` for example values, though
   it is possible that your values may differ in practice.
 
   The input data for these tests is in ``arr{1,2,3}d.dat``. The format of
@@ -95,7 +95,7 @@ proc runtest(param ndim : int, fn : string) {
        of the complex array in a real<->complex in-place transform.
 */
   var D : domain(ndim);
-  var rD,cD,reD,imD : domain(ndim,int,true);
+  var rD,cD,reD,imD : domain(ndim,int,strideKind.any);
 
 
 /* Read in the arrays from the file below. ``A`` and ``B`` are the
@@ -120,7 +120,7 @@ proc runtest(param ndim : int, fn : string) {
   var A,B,goodA,goodB : [D] complex(128);
   {
     use IO;
-    var f = open(fn,iomode.r).reader(kind=iokind.little);
+    var f = open(fn,ioMode.r).reader(deserializer=new binaryDeserializer(endianness.little), locking=false);
 
     // Read in dimensions
     for d in dims {

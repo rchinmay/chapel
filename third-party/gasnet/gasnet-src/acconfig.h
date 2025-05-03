@@ -224,6 +224,7 @@
 /* memory kinds support */
 #undef GASNETI_MK_CLASS_CUDA_UVA_ENABLED
 #undef GASNETI_MK_CLASS_HIP_ENABLED
+#undef GASNETI_MK_CLASS_ZE_ENABLED
 
 /* HIP platform */
 #undef GASNETI_HIP_PLATFORM_AMD
@@ -246,6 +247,9 @@
 
 /* has sched_yield() */
 #undef HAVE_SCHED_YIELD
+
+/* has sigaction() and a definition of the SA_RESTART flag */
+#undef GASNETI_HAVE_SA_RESTART
 
 /* have sysctl machdep.tsc_freq */
 #undef GASNETI_HAVE_SYSCTL_MACHDEP_TSC_FREQ
@@ -292,6 +296,9 @@
 #undef GASNETI_PSHM_SYSV
 #undef GASNETI_PSHM_FILE
 #undef GASNETI_PSHM_XPMEM
+
+/* Set default for GASNET_HOST_DETECT env var */
+#undef GASNETI_HOST_DETECT_CONFIGURE
 
 /* How many cores/node must we support (255 is default) */
 #undef GASNETI_CONFIG_PSHM_MAX_NODES
@@ -431,6 +438,9 @@
 /* platform is Microsoft Windows Subsystem for Linux */
 #undef GASNETI_ARCH_WSL
 
+/* platform is an HPE Cray EX */
+#undef GASNETI_ARCH_CRAYEX
+
 /* have (potentially buggy) MIPS R10000 multiprocessor */
 #undef GASNETI_ARCH_SGI_IP27
 
@@ -462,22 +472,34 @@
 #undef GASNETI_DISABLE_ALIGNED_SEGMENTS
 
 /* GASNet smp-conduit */
+#undef GASNETC_SMP_SPAWNER_CONF
 #undef GASNETC_HAVE_O_ASYNC
 #undef GASNETC_USE_SOCKETPAIR
 
-/* GASNet aries-conduit settings */
-#undef GASNETC_GNI_MAX_MEDIUM_DFLT
-#undef GASNETC_GNI_MULTI_DOMAIN
-#undef GASNETC_GNI_UDREG
-
 /* GASNet ofi-conduit settings */
-#undef GASNETC_OFI_MAX_MEDIUM
+#undef GASNETC_OFI_SPAWNER_CONF
+#undef GASNETC_OFI_REFERENCE_EXTENDED
+#undef GASNETC_OFI_MAX_MEDIUM_DFLT
 #undef GASNETC_OFI_NUM_COMPLETIONS
-#undef GASNETC_OFI_HAS_MR_SCALABLE
+#undef GASNETC_OFI_HAS_MR_VIRT_ADDR_CONFIGURE
+#undef GASNETC_OFI_HAS_MR_PROV_KEY_CONFIGURE
+#undef GASNETC_OFI_USE_AV_MAP_CONFIGURE
 #undef GASNETC_OFI_USE_THREAD_DOMAIN
+#undef GASNETC_OFI_USE_MULTI_CQ
+#undef GASNETC_OFI_RETRY_RECVMSG
 #undef GASNETC_OFI_PROVIDER_LIST
+#undef GASNETC_OFI_PROVIDER_IDENT
+#undef GASNETC_HAVE_FI_MR_REG_ATTR
+#undef GASNETC_HAVE_FI_HMEM_CUDA
+#undef GASNETC_HAVE_FI_HMEM_ROCR
+#undef GASNETC_HAVE_FI_HMEM_ZE
+
+/* GASNet ucx-conduit settings */
+#undef GASNETC_UCX_SPAWNER_CONF
+#undef GASNETC_UCX_MAX_MEDIUM_DFLT
 
 /* GASNet ibv-conduit features and bug work-arounds */
+#undef GASNETC_IBV_SPAWNER_CONF
 #undef HAVE_IBV_SRQ
 #undef HAVE_IBV_TRANSPORT_TYPE
 #undef GASNETC_IBV_MAX_MEDIUM
@@ -486,6 +508,7 @@
 #undef GASNETC_IBV_ODP_CORE
 #undef GASNETC_IBV_ODP_DISABLED
 #undef GASNETC_IBV_RCV_THREAD
+#undef GASNETC_IBV_SND_THREAD
 #undef GASNETC_IBV_CONN_THREAD
 #undef GASNETC_IBV_MAX_HCAS_CONFIGURE
 #undef GASNETC_IBV_PHYSMEM_MAX_CONFIGURE

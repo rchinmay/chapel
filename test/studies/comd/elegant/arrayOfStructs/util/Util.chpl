@@ -5,14 +5,14 @@ public use Potential;
 
 record SubTimer {
   var D : domain(string);
-  var A : [D] Timer;
+  var A : [D] stopwatch;
 
   proc init(names : string...) {
-    this.complete();
+    init this;
     for n in names do D.add(n);
   }
 
-  proc this(idx:string) ref {
+  proc ref this(idx:string) ref {
     return A[idx];
   }
 
@@ -39,13 +39,13 @@ inline proc dot(A:vec3, B:vec3) {
 }
 
 proc dateString() {
-  use DateTime;
-  return datetime.now().strftime("%F, %T");
+  use Time;
+  return dateTime.now().strftime("%F, %T");
 }
 
 proc timestampMessage(msg : string) {
-  use DateTime;
-  const timeStr = datetime.now().ctime();
+  use Time;
+  const timeStr = dateTime.now().ctime();
   writeln(timeStr, ": ", msg);
   writeln();
 }
@@ -74,6 +74,7 @@ proc computeBoxInfo(PotLat, PotCutoff) {
   * :rtype: real
  **/
 proc gasdev(inout seed: uint(64)): real {
+  use Math; // for log()
   var rsq, v1, v2: real;
 
   do

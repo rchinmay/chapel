@@ -23,6 +23,10 @@ contains all and only the fields defined by that type
 (:ref:`Record_Types`). Value semantics imply that the type of a
 record variable is known at compile time (i.e. it is statically typed).
 
+
+.. index::
+   pair: keywords; new
+
 A record can be created using the ``new`` operator, which allocates
 storage, initializes it via a call to a record initializer, and returns
 it. A record is also created upon a variable declaration of a record
@@ -31,12 +35,16 @@ type.
 A record type is generic if it contains generic fields. Generic record
 types are discussed in detail in :ref:`Generic_Types`.
 
+.. index::
+   single: records; declarations
+   single: declarations; records
+   single: record
 .. _Record_Declarations:
 
 Record Declarations
 -------------------
 
-A record type is defined with the following syntax: 
+A record type is defined with the following syntax:
 
 .. code-block:: syntax
 
@@ -83,13 +91,16 @@ external records.
     as discussion is needed regarding its impact on inheritance, for
     instance.
 
+.. index::
+   single: records; record types
+   pair: records; types
 .. _Record_Types:
 
 Record Types
 ~~~~~~~~~~~~
 
 A record type specifier simply names a record type, using the following
-syntax: 
+syntax:
 
 .. code-block:: syntax
 
@@ -105,6 +116,8 @@ specify the type. Generic records must be instantiated to serve as a
 fully-specified type, for example to declare a variable. This is done
 with type constructors, which are defined in Section :ref:`Type_Constructors`.
 
+.. index::
+   pair: records; fields
 .. _Record_Fields:
 
 Record Fields
@@ -117,7 +130,7 @@ storage associated with a record.
 
    *Example (defineActorRecord.chpl)*.
 
-   The code 
+   The code
 
    .. code-block:: chapel
 
@@ -132,6 +145,8 @@ storage associated with a record.
    contained by an instance of the ``Actor`` class defined in the
    preceding chapter :ref:`Class_Fields`.
 
+.. index::
+   pair: records; methods
 .. _Record_Methods:
 
 Record Methods
@@ -141,10 +156,13 @@ A record method is a function or iterator that is bound to a record. See
 the methods section :ref:`Chapter-Methods` for more information
 about methods.
 
-Note that the receiver of a record method is passed by ``ref`` or
-``const ref`` intent by default, depending on whether or not ``this`` is
-modified in the body of the method.
+The receiver of a record method is passed by ``const`` intent by default.
+A method that modifies ``this`` must declare an explicit ``this-intent`` of
+``ref``, see :ref:`Method_receiver_and_this`.
 
+.. index::
+   single: nested records
+   single: records; nested
 .. _Nested_Record_Types:
 
 Nested Record Types
@@ -154,6 +172,9 @@ A record defined within another class or record is a nested record. A
 nested record can be referenced only within its immediately enclosing
 class or record.
 
+.. index::
+   single: records; variable declarations
+   single: variables; records
 .. _Record_Variable_Declarations:
 
 Record Variable Declarations
@@ -174,6 +195,8 @@ record type. The record variable is initialized with a call to an
 initializer (:ref:`Class_Initializers`) that accepts zero actual
 arguments.
 
+.. index::
+   single: records; allocation
 .. _Record_Storage:
 
 Storage Allocation
@@ -185,9 +208,18 @@ types directly contain the primitive values.  Unlike class variables, the
 field data of one record variable is not shared with data of another
 record variable.
 
+Note that the storage for a record's field does not necessarily directly contain
+all of the data stored in a type. In particular, a record with a field of array
+type actually stores a kind of array descriptor that points to memory for the
+elements elsewhere (see
+:ref:`Runtime Representation of Array Values <Array_Runtime_Representation>`).
+
 Record storage is reclaimed automatically. See :ref:`Variable_Lifetimes`
 for details on when a record becomes dead.
 
+.. index::
+   single: records; initialization
+   single: initialization; record
 .. _Record_Initialization:
 
 Record Initialization
@@ -201,6 +233,10 @@ record, the ``type`` and ``param`` arguments are passed by name.
 The compiler-generated default initializer for a record is defined in the
 same way as the default initializer for a class
 (:ref:`The_Compiler_Generated_Initializer`).
+
+Records containing fields without types or fields with generic types (see
+:ref:`Fields_without_Types` and :ref:`Fields_with_Generic_Types`) cannot
+be default-initialized.
 
 To create a record as an expression, i.e. without binding it to a
 variable, the ``new`` operator is required. In this case, storage is
@@ -216,7 +252,7 @@ initializers.
 
    *Example (recordCreation.chpl)*.
 
-   The program 
+   The program
 
    .. code-block:: chapel
 
@@ -240,7 +276,7 @@ initializers.
       writeln(new UniqueID());  // create and use a record value without a variable
       writeln(new UniqueID());
 
-   produces the output 
+   produces the output
 
    .. code-block:: printoutput
 
@@ -262,6 +298,9 @@ As with classes, the user can provide their own initializers
 initializers are supplied, the default initializer cannot be called
 directly.
 
+.. index::
+   single: records; deinitializer
+   single: deinitializer; records
 .. _Record_Deinitializer:
 
 Record Deinitializer
@@ -276,7 +315,7 @@ out of scope and before its memory is reclaimed.
 
    *Example (recordDeinitializer.chpl)*.
 
-   
+
 
    .. code-block:: chapel
 
@@ -313,6 +352,9 @@ out of scope and before its memory is reclaimed.
 
       --memLeaksByType
 
+.. index::
+   single: records; arguments
+   single: arguments; records
 .. _Record_Arguments:
 
 Record Arguments
@@ -327,7 +369,7 @@ by the record assignment function (:ref:`Record_Assignment`).
 
    *Example (paramPassing.chpl)*.
 
-   The program 
+   The program
 
    .. code-block:: chapel
 
@@ -350,7 +392,7 @@ by the record assignment function (:ref:`Record_Assignment`).
       modifyMyColor(mc2, 7);   // mc2 is affected because of the 'inout' intent
       printMyColor(mc2);
 
-   produces 
+   produces
 
    .. code-block:: printoutput
 
@@ -364,6 +406,9 @@ by the record assignment function (:ref:`Record_Assignment`).
    by the assignment in ``modifyMyColor`` because the intent ``inout``
    is used.
 
+.. index::
+   single: records; field access
+   single: field access
 .. _Record_Field_Access:
 
 Record Field Access
@@ -378,6 +423,8 @@ Accessing a parameter or type field returns a parameter or type,
 respectively. Also, parameter and type fields can be accessed from an
 instantiated record type in addition to from a record value.
 
+.. index::
+   single: records; getters
 .. _Field_Getter_Methods:
 
 Field Getter Methods
@@ -388,6 +435,9 @@ As in classes, field accesses are performed via getter methods
 a reference to the specified field (so they can be written as well as
 read). The user may redefine these as needed.
 
+.. index::
+   single: records; method calls
+   single: method calls
 .. _Record_Method_Access:
 
 Record Method Calls
@@ -401,6 +451,10 @@ always resolved at compile time.
 
 Common Operations
 -----------------
+
+.. index::
+   pair: records; copy initialization
+   single: init=
 
 .. _Copy_Initialization_of_Records:
 
@@ -548,6 +602,8 @@ declaration:
   var A : Wrapper(int) = 4;
   var B : Wrapper(string) = "hello";
 
+.. index::
+   pair: records; assignment
 .. _Record_Assignment:
 
 Record Assignment
@@ -573,7 +629,7 @@ The following example demonstrates record assignment.
 
    *Example (assignment.chpl)*.
 
-   
+
 
    .. code-block:: chapel
 
@@ -593,7 +649,7 @@ The following example demonstrates record assignment.
       C.x = 3.14;
       A.print();	// "i = 0, x = 0.0"
 
-   
+
 
    .. BLOCK-test-chapeloutput
 
@@ -611,6 +667,13 @@ The following example demonstrates record assignment.
    entities, rather than two references to the same object. Assigning
    ``3.14`` to ``C.x`` does not affect the ``x`` field in ``A``.
 
+.. index::
+   single: records; equality
+   single: records; inequality
+   single: records; ==
+   single: records; !=
+   single: == (record)
+   single: != (record)
 .. _Record_Comparison_Operators:
 
 Default Comparison Operators
@@ -643,33 +706,52 @@ order they are declared in the record definition.
 Hashing a Record
 ~~~~~~~~~~~~~~~~
 
-When a record is the key for a hashtable, including when using it as the index
-type for an associative domain, the compiler will generate a default hash
-function to use. This behavior can be overridden if more control of the
-hashing used is desired. This can be done by defining a ``hash`` method on
-a record.
+For any record that does not have a user-defined ``==`` or ``!=``
+operator, the compiler will automatically define a default hash method
+for it.  This allows values of that record type to be used as the
+indices of an associative domain, the elements of a set, or the keys
+of a map.  The user can override this default hash method (or provide
+one in cases that the compiler does not) by defining their own method
+named ``hash`` on the record which takes no arguments and returns a
+``uint``. To make the compiler aware of the ``hash`` method, the record
+must be made to implement the ``hashable`` interface.
 
-.. code-block:: chapel
+   *Example (userhash.chpl)*.
 
-   use Map;
-   var m = new map(R, int);
-   proc R.hash() {
-     writeln("In custom hash function");
-     return i;
-   }
-   var myR = new R();
-   // Indexing the map using an instance of R using the R.hash() method
-   m[myR] = 5;
-
-   var myD = domain(R);
-   myD += myR;
-
-Note that the compiler generated ``hash`` can only be overriden on records
-that have been defined in user code, and will not override the compiler hash
-for ``int.hash``, for example.
+   .. code-block:: chapel
 
 
+      record R : hashable {
+        var i: uint;
 
+        proc hash(): uint {
+          writeln("In custom hash function");
+          return i;
+        }
+      }
+
+      // Creating an associative domain with an 'idxType' of 'R'
+      // invokes R.hash() as part of its implementation
+
+      var r = new R(42);
+      const D = {r};
+      writeln(D);
+
+   .. BLOCK-test-chapeloutput
+
+      In custom hash function
+      {(i = 42)}
+
+Note that the compiler-generated ``hash`` can only be overridden for
+records that have been defined in user code.  As an result, this
+feature cannot be used to override the default hash for built-in types
+like ``int``.
+
+
+
+.. index::
+   single: records; differences from classes
+   single: classes; differences from records
 .. _Class_and_Record_Differences:
 
 Differences between Classes and Records
@@ -728,12 +810,9 @@ Assignment of a record to a class variable is not permitted.
 Arguments
 ~~~~~~~~~
 
-Record arguments use the ``const ref`` intent by default - in contrast
-to class arguments which pass by ``const in`` intent by default.
-
-Similarly, the ``this`` receiver argument is passed by ``const in`` by
-default for class methods. In contrast, it is passed by ``ref`` or
-``const ref`` by default for record methods.
+Record arguments use the ``const`` abstract intent by default.
+Similarly, the ``this`` receiver argument is passed by ``const`` by default.
+See :ref:`The_Default_Intent` and :ref:`Method_receiver_and_this`.
 
 No *nil* Value
 ~~~~~~~~~~~~~~

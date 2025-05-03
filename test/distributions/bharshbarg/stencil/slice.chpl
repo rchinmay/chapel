@@ -3,7 +3,7 @@ use util;
 
 config const debug = false;
 
-proc test(dom : domain) {
+proc test(dom : domain(?)) {
 
   if debug then writeln("Testing domain ", dom);
 
@@ -13,14 +13,14 @@ proc test(dom : domain) {
 
   const max = dom.expand(fluff*dom.stride);
 
-  var Space = dom dmapped Stencil(dom, fluff=fluff, periodic=true);
+  var Space = dom dmapped new stencilDist(dom, fluff=fluff, periodic=true);
   var abstr : rank*int;
   for i in 0..#rank do abstr(i) = abs(dom.dim(i).stride);
 
   {
     // Create a tuple of ranges where the first dimension is halved
     var rs : rank*Space.dim(0).type;
-    rs(0) = dom.dim(0)[dom.dim(0).low..dom.dim(0).high/2];
+    rs(0) = dom.dim(0)[dom.dim(0).lowBound..dom.dim(0).highBound/2];
     for param i in 1..rank-1 do rs(i) = dom.dim(i);
 
     var HalfDom = Space[(...rs)];
@@ -36,7 +36,7 @@ proc test(dom : domain) {
     assert(Data._value.dom.fluff == Half._value.dom.fluff);
 
     // Fill our array with dummy values
-    forall idx in Space {
+    forall idx in Space with (ref Data) {
       var temp = if isTuple(idx) then idx else (idx,);
       var m = 1;
       for i in temp do m *= i;
@@ -55,8 +55,8 @@ proc test(dom : domain) {
       // Translate our index if needed
       if !Space.contains(idx) {
         for param i in 0..rank-1 {
-          if idx(i) < Space.dim(i).low then idx(i) += Space.dim(i).size * abstr(i);
-          else if idx(i) > Space.dim(i).high then idx(i) -= Space.dim(i).size * abstr(i);
+          if idx(i) < Space.dim(i).lowBound then idx(i) += Space.dim(i).size * abstr(i);
+          else if idx(i) > Space.dim(i).highBound then idx(i) -= Space.dim(i).size * abstr(i);
         }
       }
 
@@ -65,8 +65,8 @@ proc test(dom : domain) {
   }
 
   {
-    // Test the 'noFluffView' feature of StencilDist, which gives us an
-    // array that behaves like a BlockDist
+    // Test the 'noFluffView' feature of stencilDist, which gives us an
+    // array that behaves like a blockDist
     var Data : [Space] int;
     ref Actual = Data.noFluffView();
     assert(Actual._value.dom.whole == Actual._value.dom.wholeFluff);
@@ -75,7 +75,7 @@ proc test(dom : domain) {
     // Ensure that we didn't somehow create a new array with noFluffView
     assert(Actual[Space.low] == Data[Space.low]);
 
-    forall idx in Space {
+    forall idx in Space with (ref Data) {
       var temp = if isTuple(idx) then idx else (idx,);
       var m = 1;
       for i in temp do m *= i;

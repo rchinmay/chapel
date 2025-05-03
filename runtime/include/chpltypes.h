@@ -1,16 +1,16 @@
 /*
- * Copyright 2020-2022 Hewlett Packard Enterprise Development LP
+ * Copyright 2020-2025 Hewlett Packard Enterprise Development LP
  * Copyright 2004-2019 Cray Inc.
  * Other additional copyright holders may be indicated within.
- * 
+ *
  * The entirety of this work is licensed under the Apache License,
  * Version 2.0 (the "License"); you may not use this file except
  * in compliance with the License.
- * 
+ *
  * You may obtain a copy of the License at
- * 
+ *
  *     http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -30,16 +30,18 @@
 #include <stddef.h> // for ptrdiff_t
 #include <string.h>
 #include <sys/time.h> // for struct timeval
+#include <wchar.h> // for wchar_t
 
-#ifndef __cplusplus
 #include <complex.h>
-typedef float complex        _complex64;
-typedef double complex       _complex128;
-#else
-#include <complex>
-typedef std::complex<float>  _complex64;
-typedef std::complex<double> _complex128;
+typedef float _Complex        _complex64;
+typedef double _Complex       _complex128;
+
+// clang doesn't have _Complex_I but it supports initializer lists for complex
+#ifndef _Complex_I
+static const _complex64 _Complex_I = {0.0f, 1.0f};
 #endif
+// C's complex I macro conflicts with some template parameters in e.g. rocPRIM
+#undef I
 
 #ifdef __cplusplus
 extern "C" {
@@ -59,11 +61,17 @@ typedef long long c_longlong;
 typedef unsigned long long c_ulonglong;
 typedef float c_float;
 typedef double c_double;
-typedef void* c_void_ptr;
+typedef void* raw_c_void_ptr;
 typedef void* c_fn_ptr;  // a white lie
+// Rehook used for convenience in unstable-izing this soon to be removed symbol,
+// similar to c_string_rehook.
+typedef c_fn_ptr c_fn_ptr_rehook;
 typedef uintptr_t c_uintptr;
 typedef intptr_t c_intptr;
 typedef ptrdiff_t c_ptrdiff;
+typedef size_t c_size_t;
+typedef ssize_t c_ssize_t;
+typedef wchar_t c_wchar_t;
 
 // C++ does not support c99 bools
 #ifndef __cplusplus
@@ -73,8 +81,9 @@ typedef bool chpl_bool;
 #endif
 
 static inline void* c_pointer_return(void* x) { return x; }
+static inline const void* c_pointer_return_const(const void* x) { return x; }
 static inline ptrdiff_t c_pointer_diff(void* a, void* b, ptrdiff_t eltSize) {
-  return (((unsigned char*)a) - ((unsigned char*)b))/eltSize;
+  return (((unsigned char*)a) - ((unsigned char*)b)) / eltSize;
 }
 
 // This allocation of bits is arbitrary.
@@ -88,15 +97,11 @@ typedef int32_t c_sublocid_t;
 #define SCN_c_sublocid_t SCNi32
 typedef int64_t c_localeid_t;
 
-// These are special values that mean "no", "any", and "all sublocales",
+// These are special values that mean "no" and "all sublocales",
 // respectively.
 #define c_sublocid_none_val -1
-#define c_sublocid_any_val  -2
-#define c_sublocid_all_val  -3
 
 static const c_sublocid_t c_sublocid_none = c_sublocid_none_val;
-static const c_sublocid_t c_sublocid_any  = c_sublocid_any_val;
-static const c_sublocid_t c_sublocid_all  = c_sublocid_all_val;
 
 static inline int isActualSublocID(c_sublocid_t subloc) {
   return subloc >= 0;
@@ -242,17 +247,46 @@ typedef struct chpl_main_argument_s {
 } chpl_main_argument;
 
 static inline _complex128 _chpl_complex128(_real64 re, _real64 im) {
-#ifndef __cplusplus
-  return re + im*_Complex_I;
+// though CMPLX works for some C++ compilers, it doesn't work for all in our
+// test environments, so dodge it to be safe;  Currently, we only compile
+// this header using a C++ compiler when compiling our re2 stubs, which
+// don't seem to use this routine anyway.
+#if defined(CMPLX) && !defined(__cplusplus)
+  return CMPLX(re, im);
 #else
-  return std::complex<double>(re, im);
+#ifndef CHPL_DONT_USE_CMPLX_PTR_ALIASING
+#define cmplx_re64(c) (((double *)&(c))[0])
+#define cmplx_im64(c) (((double *)&(c))[1])
+  _complex128 val;
+  cmplx_re64(val) = re;
+  cmplx_im64(val) = im;
+  return val;
+#else
+  // This can generate bad values in the face of inf/nan values
+  return re + im*_Complex_I;
+#endif
 #endif
 }
+
 static inline _complex64 _chpl_complex64(_real32 re, _real32 im) {
-#ifndef __cplusplus
-  return re + im*_Complex_I;
+// though CMPLXF works for some C++ compilers, it doesn't work for all in our
+// test environments, so dodge it to be safe;  Currently, we only compile
+// this header using a C++ compiler when compiling our re2 stubs, which
+// don't seem to use this routine anyway.
+#if defined(CMPLXF) && !defined(__cplusplus)
+  return CMPLXF(re, im);
 #else
-  return std::complex<float>(re, im);
+#ifndef CHPL_DONT_USE_CMPLX_PTR_ALIASING
+#define cmplx_re32(c) (((float *)&(c))[0])
+#define cmplx_im32(c) (((float *)&(c))[1])
+  _complex64 val;
+  cmplx_re32(val) = re;
+  cmplx_im32(val) = im;
+  return val;
+#else
+  // This can generate bad values in the face of inf/nan values
+  return re + im*_Complex_I;
+#endif
 #endif
 }
 
@@ -332,5 +366,7 @@ typedef int8_t chpl_arg_bundle_kind_t;
 #endif
 
 #include "chpl-string-support.h"
+
+#include "gdb.h"
 
 #endif

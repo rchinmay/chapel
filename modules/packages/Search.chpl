@@ -1,5 +1,5 @@
 /*
- * Copyright 2020-2022 Hewlett Packard Enterprise Development LP
+ * Copyright 2020-2025 Hewlett Packard Enterprise Development LP
  * Copyright 2004-2019 Cray Inc.
  * Other additional copyright holders may be indicated within.
  *
@@ -18,15 +18,11 @@
  * limitations under the License.
  */
 
-/*
-   The `Search` module is designed to support standard search routines on 1D
-   arrays
+/* Support for standard search routines on 1D arrays.
  */
 module Search {
-  public use Sort only defaultComparator, DefaultComparator,
-                       reverseComparator, ReverseComparator;
+  public use Sort only defaultComparator, reverseComparator;
   private use Sort;
-
 
 /*
   A note about lo/hi arguments:
@@ -66,7 +62,8 @@ module Search {
       been if it was not found.
    :rtype: (`bool`, `Dom.idxType`)
  */
-proc search(Data:[?Dom], val, comparator:?rec=defaultComparator, lo=Dom.alignedLow, hi=Dom.alignedHigh, sorted=false) {
+proc search(Data:[?Dom], val, comparator:?rec = new defaultComparator(),
+            lo = Dom.low, hi = Dom.high, sorted = false) {
   if sorted then
     return binarySearch(Data, val, comparator, lo, hi);
   else
@@ -74,9 +71,10 @@ proc search(Data:[?Dom], val, comparator:?rec=defaultComparator, lo=Dom.alignedL
 }
 
 
-pragma "no doc"
+@chpldoc.nodoc
 /* Error message for multi-dimension arrays */
-proc search(Data:[?Dom], val, comparator:?rec=defaultComparator, lo=Dom.alignedLow, hi=Dom.alignedHigh, sorted=false)
+proc search(Data:[?Dom], val, comparator:?rec = new defaultComparator(),
+            lo = Dom.low, hi = Dom.high, sorted = false)
   where Dom.rank != 1 {
     compilerError("search() requires 1-D array");
 }
@@ -106,30 +104,25 @@ proc search(Data:[?Dom], val, comparator:?rec=defaultComparator, lo=Dom.alignedL
    :rtype: (`bool`, `Dom.idxType`)
 
  */
-proc linearSearch(Data:[?Dom], val, comparator:?rec=defaultComparator, lo=Dom.alignedLow, hi=Dom.alignedHigh) {
+proc linearSearch(Data:[?Dom], val, comparator:?rec = new defaultComparator(),
+                   lo = Dom.low, hi = Dom.high) {
 
  chpl_check_comparator(comparator, Data.eltType);
 
- const stride = if Dom.stridable then abs(Dom.stride) else 1;
- if Dom.stridable {
-   for i in lo..hi by stride {
-     if chpl_compare(Data[i], val, comparator=comparator) == 0 then
-       return (true, i);
-   }
- } else {
-   for i in lo..hi {
-     if chpl_compare(Data[i], val, comparator=comparator) == 0 then
-       return (true, i);
-   }
- }
+ const stride = abs(Dom.stride);
+
+ for i in lo..hi by if Dom.hasPosNegUnitStride() then 1 else stride:uint do
+   if chpl_compare(Data[i], val, comparator=comparator) == 0 then
+     return (true, i);
 
  return (false, hi+stride);
 }
 
 
-pragma "no doc"
+@chpldoc.nodoc
 /* Error message for multi-dimension arrays */
-proc linearSearch(Data:[?Dom], val, comparator:?rec=defaultComparator, lo=Dom.alignedLow, hi=Dom.alignedHigh)
+proc linearSearch(Data:[?Dom], val, comparator:?rec = new defaultComparator(),
+                  lo = Dom.low, hi = Dom.high)
   where Dom.rank != 1 {
     compilerError("linearSearch() requires 1-D array");
 }
@@ -160,10 +153,12 @@ proc linearSearch(Data:[?Dom], val, comparator:?rec=defaultComparator, lo=Dom.al
    :rtype: (`bool`, `Dom.idxType`)
 
  */
-proc binarySearch(Data:[?Dom], val, comparator:?rec=defaultComparator, in lo=Dom.alignedLow, in hi=Dom.alignedHigh) {
+proc binarySearch(Data:[?Dom], val, comparator:?rec = new defaultComparator(),
+                  in lo=Dom.low, in hi=Dom.high) {
   chpl_check_comparator(comparator, Data.eltType);
+  if Dom.rank != 1 then compilerError("binarySearch() requires 1-D array");
 
-  const stride = if Dom.stridable then abs(Dom.stride) else 1;
+  const stride = abs(Dom.stride);
 
   while (lo <= hi) {
     const size = (hi - lo) / stride,
@@ -182,11 +177,14 @@ proc binarySearch(Data:[?Dom], val, comparator:?rec=defaultComparator, in lo=Dom
 }
 
 
-pragma "no doc"
+@chpldoc.nodoc
 /* Non-stridable binarySearch */
-proc binarySearch(Data:[?Dom], val, comparator:?rec=defaultComparator, in lo=Dom.alignedLow, in hi=Dom.alignedHigh)
-  where !Dom.stridable {
+proc binarySearch(Data:[?Dom], val, comparator:?rec = new defaultComparator(),
+                  in lo = Dom.low, in hi = Dom.high)
+  where Dom.hasUnitStride()
+{
   chpl_check_comparator(comparator, Data.eltType);
+  if Dom.rank != 1 then compilerError("binarySearch() requires 1-D array");
 
   while (lo <= hi) {
     const mid = (hi - lo)/2 + lo;
@@ -200,11 +198,4 @@ proc binarySearch(Data:[?Dom], val, comparator:?rec=defaultComparator, in lo=Dom
   return (false, lo);
 }
 
-
-pragma "no doc"
-/* Error message for multi-dimension arrays */
-proc binarySearch(Data:[?Dom], val, comparator:?rec=defaultComparator, in lo=Dom.alignedLow, in hi=Dom.alignedHigh)
-  where Dom.rank != 1 {
-    compilerError("binarySearch() requires 1-D array");
-}
 } // Search module

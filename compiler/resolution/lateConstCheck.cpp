@@ -1,5 +1,5 @@
 /*
- * Copyright 2020-2022 Hewlett Packard Enterprise Development LP
+ * Copyright 2020-2025 Hewlett Packard Enterprise Development LP
  * Copyright 2004-2019 Cray Inc.
  * Other additional copyright holders may be indicated within.
  *
@@ -28,11 +28,13 @@
 #include "resolveIntents.h"
 #include "symbol.h"
 
+#include "global-ast-vecs.h"
+
 #include <set>
 
 /* This file implements late (after cull over references)
    const checking.
-   
+
    Const checking can't be complete before then since
    it's not known if ref or value or const ref return
    overloads will be used.
@@ -244,7 +246,7 @@ static bool checkTupleFormalUses(FnSymbol* calledFn, ArgSymbol* formal,
                         intentDescrString(formal->intent),
                         fieldIdx);
     }
-    
+
     // Check ref/ref-if-modified fields in "checkTupleFormalToActual".
     if (fieldIntent == INTENT_REF_MAYBE_CONST ||
         fieldIntent == INTENT_REF) {
@@ -268,7 +270,7 @@ static bool checkTupleFormalUses(FnSymbol* calledFn, ArgSymbol* formal,
                           "cannot be modified",
                           formal->name,
                           calledFn->name);
-                          
+
       // TODO: Pin IFF the element is a user type.
       USR_PRINT("tuple element #%d of type %s",
                 fieldIdx-1,
@@ -319,7 +321,7 @@ static Symbol* getOriginalTupleFromCoerceTmp(Symbol* sym) {
       continue;
     }
 
-    // Third argument should be the read temp. 
+    // Third argument should be the read temp.
     SymExpr* fromReadTmp = toSymExpr(set->get(3));
     if (fromReadTmp == NULL) {
       continue;
@@ -379,7 +381,7 @@ static bool checkTupleFormalToActual(ArgSymbol* formal, Expr* actual,
   if (isTupleFunctionToSkip(calledFn)) {
     return false;
   }
- 
+
   AggregateType* at = toAggregateType(formal->getValType());
   if (at == NULL || !at->symbol->hasFlag(FLAG_TUPLE)) {
     return false;
@@ -746,11 +748,33 @@ void lateConstCheck(std::map<BaseAST*, BaseAST*> * reasonNotConst) {
             calleeParens = "";
           }
 
-          USR_FATAL_CONT(actual,
-                         "const actual is passed to %s formal '%s' of %s%s",
-                         formal->intentDescrString(),
-                         formal->name,
-                         calledName, calleeParens);
+          //
+          // special case error for const errors on implicit array formals for
+          // task functions
+          //
+          // this makes nicer error messages in the short term to deprecate
+          // REF_MAYBE_CONST, but can be removed when that is removed
+          //
+          bool isArrayFormalOnTaskFunction = false;
+          if(calledFn->hasEitherFlag(FLAG_COBEGIN_OR_COFORALL, FLAG_BEGIN) &&
+             formal->type &&
+             formal->type->symbol &&
+             formal->type->symbol->hasFlag(FLAG_ARRAY)) {
+            isArrayFormalOnTaskFunction = true;
+              // this error message is a bit of lie, we are in this code path
+              // because we are passing a const actual to a ref formal, but the
+              // error should say you cannot modify a const formal. This is
+              // because a const actual array has a default intent of const
+            USR_FATAL_CONT(actual,
+                          "cannot assign to const variable");
+          }
+          else {
+            USR_FATAL_CONT(actual,
+                          "const actual is passed to %s formal '%s' of %s%s",
+                          formal->intentDescrString(),
+                          formal->name,
+                          calledName, calleeParens);
+          }
 
           BaseAST* lastPrintedReason = NULL;
 
@@ -759,8 +783,15 @@ void lateConstCheck(std::map<BaseAST*, BaseAST*> * reasonNotConst) {
           SymExpr* actSe = toSymExpr(actual);
 
           if (actSe != NULL &&
-              actSe->symbol()->hasFlag(FLAG_CONST_DUE_TO_TASK_FORALL_INTENT)) {
+              (actSe->symbol()->hasFlag(FLAG_CONST_DUE_TO_TASK_FORALL_INTENT)
+               || isArrayFormalOnTaskFunction)
+              ) {
             printTaskOrForallConstErrorNote(actSe->symbol());
+          }
+
+          if (isArrayFormalOnTaskFunction) {
+            // the rest of the errors we can get for this case will be wrong and misleading, skip it
+            continue;
           }
 
           printReason(formal, &lastPrintedReason);
@@ -844,7 +875,7 @@ void lateConstCheck(std::map<BaseAST*, BaseAST*> * reasonNotConst) {
         if (formal->intent == INTENT_REF) {
           Type* vt = formal->getValType();
           if (vt->scalarPromotionType == NULL &&
-              !(isAtomicType(vt) || isSyncType(vt) || isSingleType(vt)) &&
+              !(isAtomicType(vt) || isSyncType(vt)) &&
               !formal->hasFlag(FLAG_ERROR_VARIABLE)) {
             if (formal == fn->_this)
               USR_FATAL_CONT(fn, "Racy promotion of scalar method receiver");

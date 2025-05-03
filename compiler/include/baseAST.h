@@ -1,5 +1,5 @@
 /*
- * Copyright 2020-2022 Hewlett Packard Enterprise Development LP
+ * Copyright 2020-2025 Hewlett Packard Enterprise Development LP
  * Copyright 2004-2019 Cray Inc.
  * Other additional copyright holders may be indicated within.
  *
@@ -48,10 +48,14 @@
 //              invocations by ;
 //
 #define foreach_ast_sep(macro, sep)                \
+  macro(TemporaryConversionThunk)  sep             \
+                                                   \
   macro(PrimitiveType) sep                         \
   macro(ConstrainedType) sep                       \
   macro(EnumType) sep                              \
   macro(AggregateType) sep                         \
+  macro(FunctionType) sep                          \
+  macro(TemporaryConversionType)  sep              \
   macro(DecoratedClassType) sep                    \
                                                    \
   macro(ModuleSymbol) sep                          \
@@ -63,6 +67,7 @@
   macro(InterfaceSymbol) sep                       \
   macro(EnumSymbol)   sep                          \
   macro(LabelSymbol)  sep                          \
+  macro(TemporaryConversionSymbol)  sep            \
                                                    \
   macro(SymExpr) sep                               \
   macro(UnresolvedSymExpr) sep                     \
@@ -90,15 +95,13 @@
 #define foreach_ast(macro)                         \
   foreach_ast_sep(macro, ;)
 
-#define for_alive_in_Vec(TYPE, VAR, VEC)           \
-  forv_Vec(TYPE, VAR, VEC) if (VAR->inTree())
-
 class BaseAST;
 class AstVisitor;
 class Expr;
 class GenRet;
 class LcnSymbol;
 class Symbol;
+class TemporaryConversionType;
 class Type;
 
 class BlockStmt;
@@ -127,17 +130,7 @@ def_vec_hash(BaseAST);
 
 #undef def_vec_hash
 
-//
-// declare global vectors for all AST node types
-//
-// These global vectors, named gSymExprs, gCallExprs, gFnSymbols, ...,
-// contain all existing nodes of the given AST node type; they are
-// updated automatically as new AST nodes are constructed.  Nodes are
-// removed from these vectors between passes.
-//
-#define decl_gvecs(type) extern Vec<type*> g##type##s
-foreach_ast(decl_gvecs);
-#undef decl_gvecs
+// global vectors now defined in global-ast-vecs.h
 
 //
 // type definitions for common maps
@@ -180,7 +173,9 @@ enum AstTag {
   E_ForallStmt,
   E_ImplementsStmt,
   E_ExternBlockStmt,
+  E_TemporaryConversionThunk,
 
+  E_TemporaryConversionSymbol,
   E_ModuleSymbol,
   E_VarSymbol,
   E_ArgSymbol,
@@ -195,14 +190,16 @@ enum AstTag {
   E_ConstrainedType,
   E_EnumType,
   E_AggregateType,
-  E_DecoratedClassType
+  E_FunctionType,
+  E_TemporaryConversionType,
+  E_DecoratedClassType,
 };
 
 static inline bool isExpr(AstTag tag)
-{ return tag >= E_SymExpr        && tag <= E_ExternBlockStmt; }
+{ return tag >= E_SymExpr && tag <= E_TemporaryConversionThunk; }
 
 static inline bool isSymbol(AstTag tag)
-{ return tag >= E_ModuleSymbol   && tag <= E_LabelSymbol; }
+{ return tag >= E_TemporaryConversionSymbol && tag <= E_LabelSymbol; }
 
 static inline bool isType(AstTag tag)
 { return tag >= E_PrimitiveType  && tag <= E_DecoratedClassType; }
@@ -257,6 +254,7 @@ public:
   virtual GenRet    codegen()                                          = 0;
   virtual bool      inTree()                                           = 0;
   virtual QualifiedType qualType()                                     = 0;
+  virtual Type*     typeInfo()                                         = 0;
   virtual void      verify()                                           = 0;
   virtual void      accept(AstVisitor* visitor)                        = 0;
 
@@ -264,7 +262,14 @@ public:
   int               linenum()                                    const;
   const char*       stringLoc()                                  const;
 
-  Type*             typeInfo(); // note: calls qualType
+  // This AST is a symbol with the flag 'FLAG_RESOLVED_EARLY' or it is
+  // contained in a symbol marked with that flag. It should be handled
+  // differently by compiler passes prior to the end of 'callDestructors',
+  // in particular it should not be mutated by those passes (except in
+  // rare cases, e.g., the symbol is a module and needs to have other
+  // symbols inserted into it that the old compiler generated).
+  bool              wasResolvedEarly();
+
   bool              isRef();
   bool              isWideRef();
   bool              isRefOrWideRef();
@@ -278,13 +283,6 @@ public:
   AstTag            astTag;     // BaseAST subclass
   int               id;         // Unique ID
   astlocT           astloc;     // Location of this node in the source code
-
-  void              printTabs(std::ostream *file, unsigned int tabs);
-  void              printDocsDescription(const char *doc, std::ostream *file, unsigned int tabs);
-  void              printDocsDeprecation(const char *doc, std::ostream *file,
-                                         unsigned int tabs,
-                                         const char* deprecationMsg,
-                                         bool extraLine);
 
   static  const     std::string tabText;
 
@@ -338,6 +336,7 @@ static inline bool isCallExpr(const BaseAST* a)
     return a && a->astTag == E_##Type;            \
   }
 
+def_is_ast(TemporaryConversionThunk)
 def_is_ast(SymExpr)
 def_is_ast(UnresolvedSymExpr)
 def_is_ast(DefExpr)
@@ -366,10 +365,13 @@ def_is_ast(FnSymbol)
 def_is_ast(InterfaceSymbol)
 def_is_ast(EnumSymbol)
 def_is_ast(LabelSymbol)
+def_is_ast(TemporaryConversionSymbol)
 def_is_ast(PrimitiveType)
+def_is_ast(FunctionType)
 def_is_ast(ConstrainedType)
 def_is_ast(EnumType)
 def_is_ast(AggregateType)
+def_is_ast(TemporaryConversionType)
 def_is_ast(DecoratedClassType)
 #undef def_is_ast
 
@@ -391,6 +393,7 @@ bool isCForLoop(const BaseAST* a);
   static inline const Type * toConst##Type(const BaseAST* a) \
     { return is##Type(a) ? (const Type*)a : NULL; }
 
+def_to_ast(TemporaryConversionThunk)
 def_to_ast(SymExpr)
 def_to_ast(UnresolvedSymExpr)
 def_to_ast(DefExpr)
@@ -421,11 +424,14 @@ def_to_ast(FnSymbol)
 def_to_ast(InterfaceSymbol)
 def_to_ast(EnumSymbol)
 def_to_ast(LabelSymbol)
+def_to_ast(TemporaryConversionSymbol)
 def_to_ast(Symbol)
 def_to_ast(PrimitiveType)
+def_to_ast(FunctionType)
 def_to_ast(ConstrainedType)
 def_to_ast(EnumType)
 def_to_ast(AggregateType)
+def_to_ast(TemporaryConversionType)
 def_to_ast(DecoratedClassType)
 def_to_ast(Type)
 
@@ -451,6 +457,7 @@ def_to_ast(ParamForLoop);
     }; \
   }
 
+def_less_ast(TemporaryConversionThunk)
 def_less_ast(SymExpr)
 def_less_ast(UnresolvedSymExpr)
 def_less_ast(DefExpr)
@@ -481,11 +488,13 @@ def_less_ast(FnSymbol)
 def_less_ast(InterfaceSymbol)
 def_less_ast(EnumSymbol)
 def_less_ast(LabelSymbol)
+def_less_ast(TemporaryConversionSymbol)
 def_less_ast(Symbol)
 def_less_ast(PrimitiveType)
 def_less_ast(ConstrainedType)
 def_less_ast(EnumType)
 def_less_ast(AggregateType)
+def_less_ast(TemporaryConversionType)
 def_less_ast(DecoratedClassType)
 def_less_ast(Type)
 
@@ -554,6 +563,9 @@ static inline const CallExpr* toConstCallExpr(const BaseAST* a)
 
 #define AST_CHILDREN_CALL(_a, call, ...)                                \
   switch (_a->astTag) {                                                 \
+  case E_TemporaryConversionThunk:                                      \
+    AST_CALL_LIST(_a, TemporaryConversionThunk, children, call, __VA_ARGS__); \
+    break;                                                              \
   case E_CallExpr:                                                      \
     AST_CALL_CHILD(_a, CallExpr, baseExpr, call, __VA_ARGS__);          \
     AST_CALL_LIST(_a, CallExpr, argList, call, __VA_ARGS__);            \
@@ -562,7 +574,6 @@ static inline const CallExpr* toConstCallExpr(const BaseAST* a)
     AST_CALL_LIST(_a, ContextCallExpr, options, call, __VA_ARGS__);     \
     break;                                                              \
   case E_LoopExpr:                                                      \
-    AST_CALL_LIST(_a,  LoopExpr, defIndices,   call, __VA_ARGS__);      \
     AST_CALL_CHILD(_a, LoopExpr, indices,      call, __VA_ARGS__);      \
     AST_CALL_CHILD(_a, LoopExpr, iteratorExpr, call, __VA_ARGS__);      \
     AST_CALL_CHILD(_a, LoopExpr, cond,         call, __VA_ARGS__);      \
@@ -602,6 +613,7 @@ static inline const CallExpr* toConstCallExpr(const BaseAST* a)
       AST_CALL_CHILD(_a, WhileStmt,    condExprGet(),  call, __VA_ARGS__); \
                                                                            \
     } else if (isForLoop(_a)      == true) {                               \
+      AST_CALL_LIST (_a, ForLoop,      shadowVariables(), call, __VA_ARGS__); \
       AST_CALL_LIST (_a, ForLoop,      body,           call, __VA_ARGS__); \
       AST_CALL_CHILD(_a, ForLoop,      indexGet(),     call, __VA_ARGS__); \
       AST_CALL_CHILD(_a, ForLoop,      iteratorGet(),  call, __VA_ARGS__); \

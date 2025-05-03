@@ -1,5 +1,5 @@
 /*
- * Copyright 2020-2022 Hewlett Packard Enterprise Development LP
+ * Copyright 2020-2025 Hewlett Packard Enterprise Development LP
  * Copyright 2004-2019 Cray Inc.
  * Other additional copyright holders may be indicated within.
  *
@@ -25,7 +25,9 @@ module LocaleModelHelpFlat {
 
   public use LocaleModelHelpSetup;
   public use LocaleModelHelpRuntime;
-  use SysCTypes;
+  use CTypes;
+  use ChapelBase;
+  use ChapelLocale;
 
   //////////////////////////////////////////
   //
@@ -58,7 +60,7 @@ module LocaleModelHelpFlat {
   proc chpl_executeOn(in loc: chpl_localeID_t, // target locale
                       fn: int,              // on-body function idx
                       args: chpl_comm_on_bundle_p,     // function args
-                      args_size: size_t     // args size
+                      args_size: c_size_t     // args size
                      ) {
     const node = chpl_nodeFromLocaleID(loc);
     if (node == chpl_nodeID) {
@@ -84,7 +86,7 @@ module LocaleModelHelpFlat {
   proc chpl_executeOnFast(in loc: chpl_localeID_t, // target locale
                           fn: int,              // on-body function idx
                           args: chpl_comm_on_bundle_p,     // function args
-                          args_size: size_t     // args size
+                          args_size: c_size_t     // args size
                          ) {
     const node = chpl_nodeFromLocaleID(loc);
     if (node == chpl_nodeID) {
@@ -106,7 +108,7 @@ module LocaleModelHelpFlat {
   proc chpl_executeOnNB(in loc: chpl_localeID_t, // target locale
                         fn: int,              // on-body function idx
                         args: chpl_comm_on_bundle_p,     // function args
-                        args_size: size_t     // args size
+                        args_size: c_size_t     // args size
                        ) {
     //
     // If we're in serial mode, we should use blocking rather than
@@ -121,14 +123,14 @@ module LocaleModelHelpFlat {
         chpl_ftable_call(fn, args);
       } else {
         chpl_task_data_setup(chpl_comm_on_bundle_task_bundle(args), tls);
-        chpl_comm_taskCallFTable(fn, args, args_size, c_sublocid_any);
+        chpl_comm_taskCallFTable(fn, args, args_size, c_sublocid_none);
       }
     } else {
       chpl_task_data_setup(chpl_comm_on_bundle_task_bundle(args), tls);
       if isSerial {
-        chpl_comm_execute_on(node, c_sublocid_any, fn, args, args_size);
+        chpl_comm_execute_on(node, c_sublocid_none, fn, args, args_size);
       } else {
-        chpl_comm_execute_on_nb(node, c_sublocid_any, fn, args, args_size);
+        chpl_comm_execute_on_nb(node, c_sublocid_none, fn, args, args_size);
       }
     }
   }

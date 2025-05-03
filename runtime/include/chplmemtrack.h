@@ -1,16 +1,16 @@
 /*
- * Copyright 2020-2022 Hewlett Packard Enterprise Development LP
+ * Copyright 2020-2025 Hewlett Packard Enterprise Development LP
  * Copyright 2004-2019 Cray Inc.
  * Other additional copyright holders may be indicated within.
- * 
+ *
  * The entirety of this work is licensed under the Apache License,
  * Version 2.0 (the "License"); you may not use this file except
  * in compliance with the License.
- * 
+ *
  * You may obtain a copy of the License at
- * 
+ *
  *     http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -56,6 +56,11 @@ void chpl_stopVerboseMem(void);
 void chpl_startVerboseMemHere(void);
 void chpl_stopVerboseMemHere(void);
 
+int chpl_memtable_size(void);
+void* chpl_memtable_entry(int idx);
+void* chpl_memtable_next_entry(void* entry);
+uintptr_t chpl_memtable_entry_addr(void* entry);
+size_t chpl_memtable_entry_size(void* entry);
 
 ///// These entry points are the essential memory tracking interface, called
 //    at memory allocation and deallocation points.
@@ -65,12 +70,24 @@ void chpl_track_malloc(void* memAlloc, size_t number, size_t size,
 void chpl_track_free(void* memAlloc, size_t approximateSize, int32_t lineno,
                      int32_t filename);
 void chpl_track_realloc_pre(void* memAlloc, size_t size,
-                         chpl_mem_descInt_t description,
-                         int32_t lineno, int32_t filename);
-void chpl_track_realloc_post(void* moreMemAlloc,
-                         void* memAlloc, size_t size,
-                         chpl_mem_descInt_t description,
-                         int32_t lineno, int32_t filename);
+                            chpl_mem_descInt_t description,
+                            int32_t lineno, int32_t filename);
+void chpl_track_realloc_post(void* newMemAlloc,
+                             intptr_t oldMemAlloc, size_t size,
+                             chpl_mem_descInt_t description,
+                             int32_t lineno, int32_t filename);
+
+static inline void chpl_track_gen_subloc_info(char* subloc_info,
+                                              c_sublocid_t subloc) {
+#ifdef HAS_GPU_LOCALE
+  if (subloc >= 0) {
+    snprintf(subloc_info, 16, " (gpu %" PRI_c_sublocid_t ")", subloc);
+  }
+  else {
+    snprintf(subloc_info, 16, " (cpu)");
+  }
+#endif
+}
 
 #else // LAUNCHER
 

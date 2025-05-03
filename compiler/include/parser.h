@@ -1,5 +1,5 @@
 /*
- * Copyright 2020-2022 Hewlett Packard Enterprise Development LP
+ * Copyright 2020-2025 Hewlett Packard Enterprise Development LP
  * Copyright 2004-2019 Cray Inc.
  * Other additional copyright holders may be indicated within.
  *
@@ -24,38 +24,38 @@
 class BlockStmt;
 class VisibilityStmt;
 
+#include "chpl/framework/ID.h"
 #include "symbol.h"
+
+extern bool fDetailedErrors;
 
 extern int         chplLineno;
 extern bool        chplParseString;
 extern const char* chplParseStringMsg;
 
-extern ModTag      currentModuleType;
-extern bool        currentFileNamedOnCommandLine;
 extern const char* currentModuleName;
 
 extern int         yystartlineno;
 extern const char* yyfilename;
-extern BlockStmt*  yyblock;
 
-void               parse();
+extern bool parsingPrivate;
+
+extern bool countTokens;
+extern bool printTokens;
+
+// Used to communicate to production the last declaration we used to print
+// the "In {function|module|class} 'foo'" header for error messages.
+extern chpl::ID dynoIdForLastContainingDecl;
+
+void               parseAndConvertUast();
 
 void addInternalModulePath(const ArgumentDescription* desc,
                            const char* newpath);
 void addStandardModulePath(const ArgumentDescription* desc,
                            const char* newpath);
+void addDynoGenLib(const ArgumentDescription* desc,
+                   const char* newpath);
 
-void               setupModulePaths();
-
-void               addFlagModulePath(const char* newpath);
-
-void               addModuleToParseList(const char* name,
-                                        VisibilityStmt* newUse);
-
-BlockStmt*         parseString(const char* string,
-                               const char* filename,
-                               const char* msg);
-
-ModuleSymbol*      parseIncludedSubmodule(const char* name);
+void noteParsedIncludedModule(ModuleSymbol* mod, const char* path);
 
 #endif

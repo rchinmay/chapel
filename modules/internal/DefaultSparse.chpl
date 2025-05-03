@@ -1,5 +1,5 @@
 /*
- * Copyright 2020-2022 Hewlett Packard Enterprise Development LP
+ * Copyright 2020-2025 Hewlett Packard Enterprise Development LP
  * Copyright 2004-2019 Cray Inc.
  * Other additional copyright holders may be indicated within.
  *
@@ -32,25 +32,21 @@ module DefaultSparse {
 
   config param defaultSparseSupportsAutoLocalAccess = true;
 
-  class DefaultSparseDom: BaseSparseDomImpl {
+  class DefaultSparseDom: BaseSparseDomImpl(?) {
     var dist: unmanaged DefaultDist;
     var _nnz = 0;
 
     pragma "local field"
     var _indices: [nnzDom] index(rank, idxType);
 
-    override proc linksDistribution() param return false;
-    override proc dsiLinksDistribution() return false;
+    override proc linksDistribution() param do return false;
+    override proc dsiLinksDistribution() do return false;
 
     proc init(param rank, type idxType, dist: unmanaged DefaultDist,
         parentDom: domain) {
       super.init(rank, idxType, parentDom);
 
       this.dist = dist;
-    }
-
-    proc stridable param {
-      return parentDom.stridable;
     }
 
     override proc getNNZ(): int{
@@ -149,11 +145,17 @@ module DefaultSparse {
       return found;
     }
 
-    proc dsiFirst {
+    proc parSafe param { dnsError("parSafe"); }
+
+    override proc dsiFirst {
+      if boundsChecking && _indices.isEmpty() then
+        halt("'first' is invoked on an empty sparse domain");
       return _indices[_indices.domain.first];
     }
 
-    proc dsiLast {
+    override proc dsiLast {
+      if boundsChecking && _indices.isEmpty() then
+        halt("'last' is invoked on an empty sparse domain");
       return _indices[_nnz-1];
     }
 
@@ -260,7 +262,7 @@ module DefaultSparse {
     }
 
     // this returns the position for the last sparse index added
-    override proc bulkAdd_help(inds: [?indsDom] index(rank, idxType),
+    override proc bulkAdd_help(ref inds: [?indsDom] index(rank, idxType),
         dataSorted=false, isUnique=false, addOn=nilLocale){
       import Sort;
 
@@ -271,7 +273,8 @@ module DefaultSparse {
         }
       }
 
-      bulkAdd_prepareInds(inds, dataSorted, isUnique, Sort.defaultComparator);
+      bulkAdd_prepareInds(inds, dataSorted, isUnique,
+                          new Sort.defaultComparator());
 
       if _nnz == 0 {
 
@@ -280,11 +283,11 @@ module DefaultSparse {
         _nnz += inds.size-dupCount;
         _bulkGrow();
 
-        var indIdx = _indices.domain.low;
-        var prevIdx = parentDom.low-1;
+        var indIdx = _indices.domain.lowBound;
+        var prevIdx = parentDom.lowBound-1;
 
         if isUnique {
-          _indices[_indices.domain.low..#inds.size]=inds;
+          _indices[_indices.domain.lowBound..#inds.size]=inds;
           return inds.size;
         }
         else {
@@ -309,12 +312,12 @@ module DefaultSparse {
       _bulkGrow();
 
       //linearly fill the new colIdx from backwards
-      var newIndIdx = indsDom.high; //index into new indices
+      var newIndIdx = indsDom.highBound; //index into new indices
       var oldIndIdx = oldnnz-1; //index into old indices
       var newLoc = actualInsertPts[newIndIdx]; //its position-to-be in new dom
       while newLoc == -1 {
         newIndIdx -= 1;
-        if newIndIdx == indsDom.low-1 then break; //there were duplicates -- now done
+        if newIndIdx == indsDom.lowBound-1 then break; //there were duplicates -- now done
         newLoc = actualInsertPts[newIndIdx];
       }
       var arrShiftMap: [0..#oldnnz] int; //to map where data goes
@@ -326,17 +329,17 @@ module DefaultSparse {
           arrShiftMap[oldIndIdx] = i;
           oldIndIdx -= 1;
         }
-        else if newIndIdx >= indsDom.low && i == newLoc {
+        else if newIndIdx >= indsDom.lowBound && i == newLoc {
           //put the new guy in
           _indices[i] = inds[newIndIdx];
           newIndIdx -= 1;
-          if newIndIdx >= indsDom.low then
+          if newIndIdx >= indsDom.lowBound then
             newLoc = actualInsertPts[newIndIdx];
           else
             newLoc = -2; //finished new set
           while newLoc == -1 {
             newIndIdx -= 1;
-            if newIndIdx == indsDom.low-1 then break; //there were duplicates -- now done
+            if newIndIdx == indsDom.lowBound-1 then break; //there were duplicates -- now done
             newLoc = actualInsertPts[newIndIdx];
           }
         }
@@ -386,7 +389,11 @@ module DefaultSparse {
       }
     }
 
-    proc dsiHasSingleLocalSubdomain() param return true;
+    proc dsiTargetLocales() const ref {
+      return chpl_getSingletonLocaleArray(this.locale);
+    }
+
+    proc dsiHasSingleLocalSubdomain() param do return true;
 
     proc dsiLocalSubdomain(loc: locale) {
       if this.locale == loc {
@@ -400,10 +407,20 @@ module DefaultSparse {
     override proc dsiSupportsAutoLocalAccess() param {
       return defaultSparseSupportsAutoLocalAccess;
     }
+
+    proc getCoordinates() const ref : [] rank*idxType {
+      _fit(_nnz);  // shrink the coordinate array to be "just the right size"
+      return _indices;
+    }
+
+    proc getCoordinates() ref : [] rank*idxType {
+      _fit(_nnz);  // shrink the coordinate array to be "just the right size"
+      return _indices;
+    }
   }
 
 
-  class DefaultSparseArr: BaseSparseArrImpl {
+  class DefaultSparseArr: BaseSparseArrImpl(?) {
 
     proc init(type eltType,
               param rank : int,
@@ -416,56 +433,20 @@ module DefaultSparse {
     // dsiDestroyArr is defined in BaseSparseArrImpl
 
     // ref version
-    proc dsiAccess(ind: idxType) ref where rank == 1 {
-      // make sure we're in the dense bounding box
-      if boundsChecking then
-        if !(dom.parentDom.contains(ind)) {
-          if debugDefaultSparse {
-            writeln("On locale ", here.id);
-            writeln("In dsiAccess, got index ", ind);
-            writeln("dom.parentDom = ", dom.parentDom);
-          }
-
-          halt("array index out of bounds: ", ind);
-        }
-
-
-      // lookup the index and return the data or IRV
-      const (found, loc) = dom.find(ind);
-      if found then
-        return data(loc);
-      else // ?fromMMS: is this error message correct? Not actually looking at value.
-        halt("attempting to assign a 'zero' value in a sparse array: ", ind);
-    }
-    // value version
-    proc dsiAccess(ind: idxType) const ref where rank == 1 {
-      // make sure we're in the dense bounding box
-      if boundsChecking then
-        if !(dom.parentDom.contains(ind)) then
-          halt("array index out of bounds: ", ind);
-
-      // lookup the index and return the data or IRV
-      const (found, loc) = dom.find(ind);
-      if found then
-        return data(loc);
-      else
-        return irv;
-    }
-
-
-    // ref version
     proc dsiAccess(ind: rank*idxType) ref {
       // make sure we're in the dense bounding box
       if boundsChecking then
         if !(dom.parentDom.contains(ind)) then
-          halt("array index out of bounds: ", ind);
+          halt("array index out of bounds: ", if rank==1 then ind(0) else ind);
 
       // lookup the index and return the data or IRV
       const (found, loc) = dom.find(ind);
       if found then
         return data(loc);
       else
-        halt("attempting to assign a 'zero' value in a sparse array: ", ind);
+        // MMS+Vass: we should reword this error message to "assign or access"
+        halt("attempting to assign a 'zero' value in a sparse array at index ",
+             if rank == 1 then ind(0) else ind);
     }
     // value version for POD types
     proc dsiAccess(ind: rank*idxType)
@@ -473,7 +454,7 @@ module DefaultSparse {
       // make sure we're in the dense bounding box
       if boundsChecking then
         if !(dom.parentDom.contains(ind)) then
-          halt("array index out of bounds: ", ind);
+          halt("array index out of bounds: ", if rank==1 then ind(0) else ind);
 
       // lookup the index and return the data or IRV
       const (found, loc) = dom.find(ind);
@@ -487,7 +468,7 @@ module DefaultSparse {
       // make sure we're in the dense bounding box
       if boundsChecking then
         if !(dom.parentDom.contains(ind)) then
-          halt("array index out of bounds: ", ind);
+          halt("array index out of bounds: ", if rank==1 then ind(0) else ind);
 
       // lookup the index and return the data or IRV
       const (found, loc) = dom.find(ind);
@@ -544,11 +525,11 @@ module DefaultSparse {
       yield 0;  // dummy
     }
 
-    proc dsiTargetLocales() {
-      compilerError("targetLocales is unsupported by sparse domains");
+    proc dsiTargetLocales() const ref {
+      return chpl_getSingletonLocaleArray(this.locale);
     }
 
-    proc dsiHasSingleLocalSubdomain() param return true;
+    proc dsiHasSingleLocalSubdomain() param do return true;
 
     proc dsiLocalSubdomain(loc: locale) {
       if this.locale == loc {
@@ -557,34 +538,52 @@ module DefaultSparse {
         return dom.dsiLocalSubdomain(loc);
       }
     }
+
+    proc doiBulkTransferToKnown(srcDom, destClass: this.type, destDom) {
+      if !boundsChecking || srcDom == destDom {
+        destClass.data = this.data;
+        return true;
+      } else {
+        return false;
+      }
+    }
+
+    proc doiBulkTransferFromKnown(destDom, srcClass: this.type, srcDom): bool {
+      if !boundsChecking || srcDom == destDom {
+        this.data = srcClass.data;
+        return true;
+      } else {
+        return false;
+      }
+    }
   }
 
 
   proc DefaultSparseDom.dsiSerialWrite(f, printBrackets=true) throws {
     if (rank == 1) {
-      if printBrackets then f <~> "{";
+      if printBrackets then f.write("{");
       if (_nnz >= 1) {
-        f <~> _indices(0);
+        f.write(_indices(0));
         for i in 1.._nnz-1 {
-          f <~> " " <~> _indices(i);
+          f.write(" ", _indices(i));
         }
       }
-      if printBrackets then f <~> "}";
+      if printBrackets then f.write("}");
     } else {
-      if printBrackets then f <~> "{\n";
+      if printBrackets then f.write("{\n");
       if (_nnz >= 1) {
         var prevInd = _indices(0);
-        f <~> " " <~> prevInd;
+        f.write(" ", prevInd);
         for i in 1.._nnz-1 {
           if (prevInd(0) != _indices(i)(0)) {
-            f <~> "\n";
+            f.write("\n");
           }
           prevInd = _indices(i);
-          f <~> " " <~> prevInd;
+          f.write(" ", prevInd);
         }
-        f <~> "\n";
+        f.write("\n");
       }
-      if printBrackets then f <~> "}\n";
+      if printBrackets then f.write("}\n");
     }
   }
 
@@ -592,25 +591,25 @@ module DefaultSparse {
   proc DefaultSparseArr.dsiSerialWrite(f) throws {
     if (rank == 1) {
       if (dom._nnz >= 1) {
-        f <~> data(0);
+        f.write(data(0));
         for i in 1..dom._nnz-1 {
-          f <~> " " <~> data(i);
+          f.write(" ", data(i));
         }
       }
     } else {
       if (dom._nnz >= 1) {
         var prevInd = dom._indices(0);
-        f <~> data(0);
+        f.write(data(0));
         for i in 1..dom._nnz-1 {
           if (prevInd(0) != dom._indices(i)(0)) {
-            f <~> "\n";
+            f.write("\n");
           } else {
-            f <~> " ";
+            f.write(" ");
           }
           prevInd = dom._indices(i);
-          f <~> data(i);
+          f.write(data(i));
         }
-        f <~> "\n";
+        f.write("\n");
       }
     }
   }

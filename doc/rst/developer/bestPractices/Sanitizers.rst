@@ -15,27 +15,36 @@ require recompilation. Note that only GCC and Clang support sanitizers.
 How-to
 ------
 
-To use AddressSanitizer with Chapel (compiler and executables):
+To use AddressSanitizer with Chapel-generated executables only:
 
 .. code-block:: bash
 
-     export CHPL_MEM=cstdlib
+     export CHPL_TARGET_MEM=cstdlib
      export CHPL_TASKS=fifo
-     export CHPL_LLVM=none
-     export CHPL_SANITIZE=address
-     export ASAN_OPTIONS=detect_leaks=0
+     export CHPL_LLVM=none   # or set CHPL_TARGET_COMPILER to gnu, clang, etc.
+     export CHPL_SANITIZE_EXE=address
+     export ASAN_OPTIONS="use_sigaltstack=0,detect_leaks=0"
 
      cd $CHPL_HOME
      make
      chpl <program.chpl>
      ./<program>
 
-To only sanitize executables and not the compiler:
+To use it with both the Chapel compiler and its generated executables:
 
 .. code-block:: bash
 
-     unset CHPL_SANITIZE
-     export CHPL_SANITIZE_EXE=address
+     export CHPL_TARGET_MEM=cstdlib
+     export CHPL_TASKS=fifo
+     export CHPL_LLVM=none
+     export CHPL_HOST_MEM=cstdlib
+     export CHPL_SANITIZE=address
+     export ASAN_OPTIONS="use_sigaltstack=0,detect_leaks=0"
+
+     cd $CHPL_HOME
+     make
+     chpl <program.chpl>
+     ./<program>
 
 To get better stack traces when optimizations are enabled:
 
@@ -48,8 +57,9 @@ To get better stack traces when optimizations are enabled:
 
      Non-chplenv environment variables aren't propagated by paratest. So,
      to turn off leak checking, it is necessary to either pass
-     ``-env ASAN_OPTIONS=detect_leaks=0`` or to include
-     ``export ASAN_OPTIONS=detect_leaks=0`` in .bashrc or the equivalent.
+     ``-env ASAN_OPTIONS="use_sigaltstack=0,detect_leaks=0"`` or to include
+     ``export ASAN_OPTIONS="use_sigaltstack=0,detect_leaks=0"`` in .bashrc or
+     the equivalent.
 
 Limitations
 -----------
@@ -100,6 +110,10 @@ sanitizers. In particular:
   Chapel intentionally leaks some memory in the runtime, so we disable
   that tracking for now. See :ref:`readme-debugging` for more info about
   debugging memory leaks in Chapel.
+- An upstream bug_ can result in false-positives for some gcc versions.
+  ``use_sigaltstack=0`` works around this.
+
+  .. _bug: https://gcc.gnu.org/bugzilla//show_bug.cgi?id=101476
 
 
 Other Sanitizers

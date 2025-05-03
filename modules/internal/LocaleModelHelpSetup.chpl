@@ -1,6 +1,6 @@
 /*
  * Copyright 2017 Advanced Micro Devices, Inc.
- * Copyright 2020-2022 Hewlett Packard Enterprise Development LP
+ * Copyright 2020-2025 Hewlett Packard Enterprise Development LP
  * Copyright 2004-2019 Cray Inc.
  * Other additional copyright holders may be indicated within.
  *
@@ -31,11 +31,10 @@
 module LocaleModelHelpSetup {
 
   use ChapelLocale;
-  public use DefaultRectangular;
-  public use ChapelNumLocales;
-  use ChapelEnv;
-  use Sys;
-  use SysCTypes;
+  use DefaultRectangular;
+  use ChapelNumLocales;
+  use OS.POSIX;
+  use CTypes;
 
   config param debugLocaleModel = false;
 
@@ -55,8 +54,16 @@ module LocaleModelHelpSetup {
     // than 'int' formals)
     proc init() {
     }
+    proc init=(other: chpl_root_locale_accum) {
+      init this;
+      this.nPUsPhysAcc.write(other.nPUsPhysAcc.read());
+      this.nPUsPhysAll.write(other.nPUsPhysAll.read());
+      this.nPUsLogAcc.write(other.nPUsLogAcc.read());
+      this.nPUsLogAll.write(other.nPUsLogAll.read());
+      this.maxTaskPar.write(other.maxTaskPar.read());
+    }
 
-    proc accum(loc:locale) {
+    proc ref accum(loc:locale) {
       nPUsPhysAcc.add(loc.nPUsPhysAcc);
       nPUsPhysAll.add(loc.nPUsPhysAll);
       nPUsLogAcc.add(loc.nPUsLogAcc);
@@ -85,10 +92,12 @@ module LocaleModelHelpSetup {
   }
 
   proc helpSetupRootLocaleNUMA(dst:borrowed RootLocale) {
+    extern proc chpl_task_setSubloc(subloc: int(32));
+
     var root_accum:chpl_root_locale_accum;
 
     forall locIdx in dst.chpl_initOnLocales() with (ref root_accum) {
-      chpl_task_setSubloc(c_sublocid_any);
+      chpl_task_setSubloc(c_sublocid_none);
       const node = new locale(new unmanaged LocaleModel(new locale (dst)));
       dst.myLocales[locIdx] = node;
       root_accum.accum(node);
@@ -97,25 +106,13 @@ module LocaleModelHelpSetup {
     root_accum.setRootLocaleValues(dst);
   }
 
-  proc helpSetupRootLocaleAPU(dst:borrowed RootLocale) {
-    var root_accum:chpl_root_locale_accum;
-
-    forall locIdx in dst.chpl_initOnLocales() with (ref root_accum) {
-      chpl_task_setSubloc(c_sublocid_any);
-      const node = new locale(new unmanaged LocaleModel(new locale(dst)));
-      dst.myLocales[locIdx] = node;
-      root_accum.accum(node);
-    }
-
-    root_accum.setRootLocaleValues(dst);
-    here.runningTaskCntSet(0);  // locale init parallelism mis-sets this
-  }
-
   proc helpSetupRootLocaleGPU(dst:borrowed RootLocale) {
+    extern proc chpl_task_setSubloc(subloc: int(32));
+
     var root_accum:chpl_root_locale_accum;
 
     forall locIdx in dst.chpl_initOnLocales() with (ref root_accum) {
-      chpl_task_setSubloc(c_sublocid_any);
+      chpl_task_setSubloc(c_sublocid_none);
       const node = new locale(new unmanaged LocaleModel(new locale (dst)));
       dst.myLocales[locIdx] = node;
       root_accum.accum(node);
@@ -126,11 +123,16 @@ module LocaleModelHelpSetup {
 
   // gasnet-smp and gasnet-udp w/ GASNET_SPAWNFN=L are local spawns
   private inline proc localSpawn() {
+    use ChplConfig;
     if CHPL_COMM == "gasnet" {
-      var spawnfn: c_string;
-      if (CHPL_COMM_SUBSTRATE == "udp" &&
-         sys_getenv(c"GASNET_SPAWNFN", spawnfn) == 1 && spawnfn == c"L") {
-        return true;
+      if CHPL_COMM_SUBSTRATE == "udp" {
+        try! {
+          const spawnfn = getenv("GASNET_SPAWNFN");
+          const spawnfnS = string.createBorrowingBuffer(spawnfn);
+          if spawnfn != nil && spawnfnS == "L" {
+            return true;
+          }
+        }
       } else if (CHPL_COMM_SUBSTRATE == "smp") {
         return true;
       }
@@ -144,10 +146,10 @@ module LocaleModelHelpSetup {
     // current node.  For this reason (as well), the constructor (or
     // at least this setup method) must be run on the node it is
     // intended to describe.
-    extern proc chpl_nodeName(): c_string;
+    extern proc chpl_nodeName(): c_ptrConst(c_char);
     var _node_name: string;
     try! {
-      _node_name = createStringWithNewBuffer(chpl_nodeName());
+      _node_name = string.createCopyingBuffer(chpl_nodeName());
     }
     const _node_id = (chpl_nodeID: int): string;
 
@@ -156,9 +158,6 @@ module LocaleModelHelpSetup {
 
   proc helpSetupLocaleFlat(dst:borrowed LocaleModel, out local_name:string) {
     local_name = getNodeName();
-
-    extern proc chpl_task_getCallStackSize(): size_t;
-    dst.callStackSize = chpl_task_getCallStackSize();
 
     extern proc chpl_topo_getNumCPUsPhysical(accessible_only: bool): c_int;
     dst.nPUsPhysAcc = chpl_topo_getNumCPUsPhysical(true);
@@ -170,6 +169,9 @@ module LocaleModelHelpSetup {
 
     extern proc chpl_task_getMaxPar(): uint(32);
     dst.maxTaskPar = chpl_task_getMaxPar();
+
+    extern proc chpl_get_num_colocales_on_node(): c_int;
+    dst.numColocales = chpl_get_num_colocales_on_node();
   }
 
   proc helpSetupLocaleNUMA(dst:borrowed LocaleModel, out local_name:string, numSublocales, type NumaDomain) {
@@ -201,36 +203,27 @@ module LocaleModelHelpSetup {
     }
   }
 
-  proc helpSetupLocaleAPU(dst:borrowed LocaleModel, out local_name:string, out
-      numSublocales, type CPULocale, type GPULocale) {
-    helpSetupLocaleFlat(dst, local_name);
-
-    extern proc chpl_task_getMaxPar(): uint(32);
-
-    // Comment out HSA initialization until runtime HSA support is checked in
-
-    //    extern proc chpl_hsa_initialize(): c_int;
-    //    var initHsa =  chpl_hsa_initialize();
-    //    if (initHsa == 1) {
-    //      halt("Could not initialize HSA");
-    //    }
-
-    // Hardcode two sublocales, 1 CPU and 1 GPU
-    numSublocales = 2;
-
-    const origSubloc = chpl_task_getRequestedSubloc();
-
-    chpl_task_setSubloc(0:chpl_sublocID_t);
-    dst.CPU = new unmanaged CPULocale(0:chpl_sublocID_t, dst);
-
-    chpl_task_setSubloc(1:chpl_sublocID_t);
-
-    dst.GPU = new unmanaged GPULocale(1:chpl_sublocID_t, dst);
-    chpl_task_setSubloc(origSubloc);
-  }
-
   proc helpSetupLocaleGPU(dst: borrowed LocaleModel, out local_name:string,
-      numSublocales: int, type CPULocale, type GPULocale){
+      numSublocales: int, type GPULocale){
+
+    local_name = getNodeName();
+
+    extern proc chpl_topo_getNumCPUsPhysical(accessible_only: bool): c_int;
+    dst.nPUsPhysAcc = chpl_topo_getNumCPUsPhysical(true);
+    dst.nPUsPhysAll = chpl_topo_getNumCPUsPhysical(false);
+
+    extern proc chpl_topo_getNumCPUsLogical(accessible_only: bool): c_int;
+    dst.nPUsLogAcc = chpl_topo_getNumCPUsLogical(true);
+    dst.nPUsLogAll = chpl_topo_getNumCPUsLogical(false);
+
+    // Cyclic (and likely other) distributions uses this variable to determine
+    // how many data-parallel tasks to have per locale. If this gets set to 0
+    // then we end up not processing things in the first locale.
+    extern proc chpl_task_getMaxPar(): uint(32);
+    dst.maxTaskPar = chpl_task_getMaxPar();
+
+    extern proc chpl_get_num_colocales_on_node(): c_int;
+    dst.numColocales = chpl_get_num_colocales_on_node();
 
     var childSpace = {0..#numSublocales};
 
@@ -238,13 +231,10 @@ module LocaleModelHelpSetup {
 
     for i in childSpace {
       chpl_task_setSubloc(i:chpl_sublocID_t);
-      if i == 0 {
-        dst.childLocales[i] = new unmanaged CPULocale(i:chpl_sublocID_t, dst);
-      }
-      else {
-        dst.childLocales[i] = new unmanaged GPULocale(i:chpl_sublocID_t, dst);
-        dst.childLocales[i].maxTaskPar = 1;
-      }
+      dst.childLocales[i] = new unmanaged GPULocale(i:chpl_sublocID_t, dst);
+      dst.childLocales[i].maxTaskPar = 1;
+
+      dst.gpuSublocales[i] = new locale(dst.childLocales[i]);
     }
     chpl_task_setSubloc(origSubloc);
   }

@@ -1,3 +1,4 @@
+import Sort;
 use HashedDist;
 
 record MyMapper {
@@ -8,7 +9,7 @@ record MyMapper {
   }
 }
 
-var newDist = new dmap(new unmanaged Hashed(idxType=real, mapper=new MyMapper()));
+var newDist = new hashedDist(idxType=real, mapper=new MyMapper());
 
 var D: domain(real) dmapped newDist;
 
@@ -37,7 +38,7 @@ D += 3.5;
 
 // check .sorted()
 writeln("D is:");
-for d in D.sorted() {
+for d in Sort.sorted(D) {
   writeln(d);
 }
 

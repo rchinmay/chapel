@@ -1,5 +1,5 @@
 /*
- * Copyright 2020-2022 Hewlett Packard Enterprise Development LP
+ * Copyright 2020-2025 Hewlett Packard Enterprise Development LP
  * Copyright 2004-2019 Cray Inc.
  * Other additional copyright holders may be indicated within.
  *
@@ -24,14 +24,16 @@
 #include <cstdio>
 #include <map>
 #include <string>
+#include <string_view>
 #include <vector>
+#include <functional>
 #include "vec.h"
 
-extern char executableFilename[FILENAME_MAX+1];
-extern char libmodeHeadername[FILENAME_MAX+1];
-extern char fortranModulename[FILENAME_MAX+1];
-extern char pythonModulename[FILENAME_MAX+1];
-extern char saveCDir[FILENAME_MAX+1];
+extern std::string executableFilename;
+extern std::string libmodeHeadername;
+extern std::string fortranModulename;
+extern std::string pythonModulename;
+extern std::string saveCDir;
 extern std::string ccflags;
 extern std::string ldflags;
 extern bool ccwarnings;
@@ -51,12 +53,10 @@ void codegen_makefile(fileinfo* mainfile, const char** tmpbinname=NULL,
                       const std::vector<const char *>& splitFiles
                         = std::vector<const char*>());
 
-void ensureDirExists(const char* /* dirname */, const char* /* explanation */);
+void ensureDirExists(const char* dirname, const char* explanation,
+                     bool checkWriteable = true);
 const char* getCwd();
-void ensureTmpDirExists();
-const char* makeTempDir(const char* dirPrefix);
 void deleteDir(const char* dirname);
-void deleteTmpDir();
 const char* objectFileForCFile(const char* cfile);
 
 const char* genIntermediateFilename(const char* filename);
@@ -80,25 +80,62 @@ void      closefile(FILE*     thefile);
 
 FILE* openInputFile(const char* filename);
 void closeInputFile(FILE* infile);
+std::vector<std::string> getChplFilenames();
 bool isChplSource(const char* filename);
 bool isCHeader(const char* filename);
 bool isCSource(const char* filename);
+bool isStaticLibrary(const char* filename);
+bool isSharedLibrary(const char* filename);
 bool isObjFile(const char* filename);
+bool isDynoLib(const char* filename);
 void addSourceFiles(int numFilenames, const char* filename[]);
 void addSourceFile(const char* filename, const char* modFilename);
+void assertSourceFilesFound();
 const char* nthFilename(int i);
-void addLibPath(const char* filename);
-void addLibFile(const char* filename);
-void addIncInfo(const char* incDir);
+// Functions to add C library or include dir information.
+// If running in driver compilation phase and the information is not from
+// parsing the command line, these will also save to a tmp dir for later use.
+void addLibPath(const char* filename, bool fromCmdLine = false);
+void addLibFile(const char* filename, bool fromCmdLine = false);
+void addIncInfo(const char* incDir, bool fromCmdLine = false);
+
+// Save (append) provided string into the given tmp file.
+// Input string is assumed to be null-terminated.
+// For storing information that needs to be saved between driver phases.
+void saveDriverTmp(const char* tmpFilePath, std::string_view stringToSave,
+                   bool appendNewline = true);
+// Like saveDriverTmp, but accepts a vector of strings to save in one go without
+// repeatedly opening/closing file. Newline separated by default unless
+// noNewlines is true.
+void saveDriverTmpMultiple(const char* tmpFilePath,
+                           std::vector<std::string_view> stringsToSave,
+                           bool noNewlines = false);
+// Feed strings from the specified tmp file (one per line) into the given
+// restoring function, which should copy any it needs to keep.
+// Restored string will be null-terminated.
+// For accessing information saved between driver phases with saveDriverTmp.
+void restoreDriverTmp(const char* tmpFilePath,
+                      std::function<void(std::string_view)> restoreSavedString);
+// Like restoreDriverTmp, but just saves the entire contents of the file into
+// the given string including newlines.
+void restoreDriverTmpMultiline(
+    const char* tmpFilePath,
+    std::function<void(std::string_view)> restoreSavedString);
+
+// Restore lib dir, lib name, and inc dir info that was saved to disk, for
+// compiler-driver use.
+void restoreLibraryAndIncludeInfo();
+// Restore source file names that were saved to disk, for compiler-driver use.
+void restoreAdditionalSourceFiles();
 
 void genIncludeCommandLineHeaders(FILE* outfile);
 
 const char* createDebuggerFile(const char* debugger, int argc, char* argv[]);
 
-std::string runPrintChplEnv(const std::map<std::string, const char*>& varMap);
 std::string getChplDepsApp();
 bool compilingWithPrgEnv();
-std::string runCommand(std::string& command);
+std::string runCommand(const std::string& command,
+                       const std::string& description);
 
 const char* filenameToModulename(const char* filename);
 
@@ -111,6 +148,7 @@ void expandInstallationPaths(std::string& arg);
 void expandInstallationPaths(std::vector<std::string>& args);
 
 bool isDirectory(const char* path);
+bool pathExists(const char* path);
 
 char*       chplRealPath(const char* path);
 char*       dirHasFile(const char* dir, const char* file);

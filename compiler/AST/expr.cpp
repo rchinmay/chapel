@@ -1,5 +1,5 @@
 /*
- * Copyright 2020-2022 Hewlett Packard Enterprise Development LP
+ * Copyright 2020-2025 Hewlett Packard Enterprise Development LP
  * Copyright 2004-2019 Cray Inc.
  * Other additional copyright holders may be indicated within.
  *
@@ -38,6 +38,7 @@
 #include "wellknown.h"
 #include "WhileStmt.h"
 
+#include "global-ast-vecs.h"
 
 #include <cstdio>
 #include <cstdlib>
@@ -194,29 +195,11 @@ bool Expr::isStmtExpr() const {
 }
 
 Expr* Expr::getStmtExpr() {
-  for (Expr* expr = this; expr; expr = expr->parentExpr) {
-    if (expr->isStmt() == true) {
+  for (Expr* expr = this; expr; expr = expr->parentExpr)
+    if (expr->isStmtExpr())
       return expr;
 
-    // NOAKES 2014/11/28 A WhileStmt is currently a BlockStmt
-    // but needs special handling
-    } else if (WhileStmt* parent = toWhileStmt(expr->parentExpr)) {
-      if (parent->condExprGet() != expr) {
-        return expr;
-      }
-
-    // NOAKES 2014/11/30 A ForLoop is currently a BlockStmt
-    // but needs special handling
-    } else if (ForLoop* parent = toForLoop(parentExpr)) {
-      if (parent->indexGet() != this && parent->iteratorGet() != this)
-        return expr;
-
-    } else if (isBlockStmt(expr->parentExpr)) {
-      return expr;
-    }
-  }
-
-  return NULL;
+  return nullptr;
 }
 
 Expr* Expr::getNextExpr(Expr* expr) {
@@ -286,14 +269,6 @@ void Expr::verifyParent(const Expr* child) {
   if (child && child->parentExpr != this)
     INT_FATAL(this, "bad parent of a child node");
 }
-
-bool Expr::inTree() {
-  if (parentSymbol)
-    return true;
-  else
-    return false;
-}
-
 
 QualifiedType Expr::qualType() {
   INT_FATAL(this, "Illegal call to Expr::qualType()");
@@ -608,8 +583,9 @@ SymExpr* SymExpr::copyInner(SymbolMap* map) {
 }
 
 QualifiedType SymExpr::qualType(void) {
-  if (toFnSymbol(var)) {
-    return QualifiedType(dtCFnPtr);
+  if (auto fn = toFnSymbol(var)) {
+    INT_ASSERT(fn->type);
+    return QualifiedType(fn->type);
   } else {
     return var->qualType();
   }

@@ -11,27 +11,26 @@ var baseDom = {1..10};
 }
 
 {
-  use LayoutCS;
+  use CompressedSparseLayout;
 
   var dom2D = {1..10, 1..10};
 
-  var csrDom: sparse subdomain(dom2D) dmapped CS(compressRows=true);
+  var csrDom: sparse subdomain(dom2D) dmapped new csrLayout();
   csrDom += [(3,3),(4,4),(5,5)];
   test(csrDom);
 
-  var cscDom: sparse subdomain(dom2D) dmapped CS(compressRows=false);
+  var cscDom: sparse subdomain(dom2D) dmapped new cscLayout();
   cscDom += [(3,3),(4,4),(5,5)];
   test(cscDom);
 }
 
 {
-  var assocDom: domain(string);
-  assocDom += ["foo", "bar"];
+  var assocDom: domain(string)  = {"foo", "bar"};
   test(assocDom);
 }
 
 
-proc test(dom: domain) {
+proc test(dom: domain(?)) {
   var arr: [dom] int;
 
   for i in dom {

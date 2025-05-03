@@ -1,15 +1,15 @@
-# Copyright 2020-2022 Hewlett Packard Enterprise Development LP
+# Copyright 2020-2025 Hewlett Packard Enterprise Development LP
 # Copyright 2004-2019 Cray Inc.
 # Other additional copyright holders may be indicated within.
-# 
+#
 # The entirety of this work is licensed under the Apache License,
 # Version 2.0 (the "License"); you may not use this file except
 # in compliance with the License.
-# 
+#
 # You may obtain a copy of the License at
-# 
+#
 #     http://www.apache.org/licenses/LICENSE-2.0
-# 
+#
 # Unless required by applicable law or agreed to in writing, software
 # distributed under the License is distributed on an "AS IS" BASIS,
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -51,6 +51,8 @@ ifneq ($(CHPL_MAKE_LAUNCHER),none)
 	@$(MAKE) -f Makefile.help MAKE_LAUNCHER=1 CHPL_MAKE_RULE=$* $*
 endif
 
+# save output of printchplenv into #defines but munge away
+# characters that can't be in #defines
 $(CHPL_ENV_HEADER): $(CHPL_MAKE_HOME)/util/printchplenv $(CHPL_MAKE_HOME)/util/chplenv/*
 	@mkdir -p $(CHPL_ENV_HEADER_DIR)
 	@echo "Generating $(CHPL_ENV_HEADER)"
@@ -59,13 +61,9 @@ $(CHPL_ENV_HEADER): $(CHPL_MAKE_HOME)/util/printchplenv $(CHPL_MAKE_HOME)/util/c
 	@echo "#ifndef _CHPL_ENV_GEN_H_" >> $(CHPL_ENV_HEADER)
 	@echo "#define _CHPL_ENV_GEN_H_" >> $(CHPL_ENV_HEADER)
 	@$(CHPL_MAKE_HOME)/util/printchplenv --runtime --no-tidy --anonymize --simple | \
-          grep -v CHPL_HOST_CC | \
-          grep -v CHPL_HOST_CXX | \
-          grep -v CHPL_TARGET_CC | \
-          grep -v CHPL_TARGET_CXX | \
-          sed s/[-+.\/]/_/g | \
-          sed s/\=/' '/ | \
-          awk '{ print "#define " $$1 "_" toupper($$2) }' >> $(CHPL_ENV_HEADER)
+	  sed 's/^ *//;s/ *$$//' | \
+	  sed 's/[^0-9A-Za-z]/_/g' | \
+	  awk '{ print "#define " toupper($$1) }' >> $(CHPL_ENV_HEADER)
 	@echo "#endif /* _CHPL_ENV_GEN_H_ */" >> $(CHPL_ENV_HEADER)
 
 THIRD_PARTY_PKGS = $(shell $(CHPL_MAKE_PYTHON) $(CHPL_MAKE_HOME)/util/chplenv/third-party-pkgs)
@@ -80,6 +78,10 @@ endif
 ifneq (, $(filter $(THIRD_PARTY_PKGS),jemalloc))
 	@echo "Making jemalloc..."
 	@$(MAKE) -C $(THIRD_PARTY_DIR) CHPL_MAKE_HOST_TARGET=--target jemalloc
+endif
+ifneq (, $(filter $(THIRD_PARTY_PKGS),mimalloc))
+	@echo "Making mimalloc..."
+	@$(MAKE) -C $(THIRD_PARTY_DIR) CHPL_MAKE_HOST_TARGET=--target mimalloc
 endif
 	@echo "Making third-party-packages..."
 	@$(MAKE) -C $(THIRD_PARTY_DIR) $(THIRD_PARTY_PKGS)

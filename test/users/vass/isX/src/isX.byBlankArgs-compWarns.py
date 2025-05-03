@@ -5,10 +5,6 @@ import re
 
 varList = [
   ("b0",  "bool"),
-  ("b8",  "bool(8)"),
-  ("b16", "bool(16)"),
-  ("b32", "bool(32)"),
-  ("b64", "bool(64)"),
 
   ("i8",  "int(8)"),
   ("i16", "int(16)"),
@@ -37,7 +33,7 @@ varList = [
   ("unn",  "UnionType"),
 
   ("rng1", "range"),
-  ("rng2", "range(uint(8), BoundedRangeType.boundedNone, true)"),
+  ("rng2", "range(uint(8), boundKind.neither, true)"),
 
   ("dmp",  "defaultDist"),
   ("dom1", "DomType1"),
@@ -47,8 +43,6 @@ varList = [
 
   ("syInt",  "sync int"),
   ("syReal", "sync real"),
-  ("siInt",  "single int"),
-  ("siReal", "single real"),
   ("aInt",   "atomic int"),
   ("aReal",  "atomic real"),
 ]
@@ -71,11 +65,9 @@ predList = [
   "isDomain",
   "isArray",
   "isSync",
-  "isSingle",
   "isAtomic",
 
   "isIntegral",
-  "isFloat",
   "isNumeric",
   "isPrimitive",
 ]
@@ -98,7 +90,7 @@ for pred in predList:
   say("  report(", pred, "Value(arg), \"",      pred, "Value\");")
   say("  report(", pred,  "Type(arg.type), \"", pred,  "Type\");")
 
-say("  if isTuple(arg) {");
+say("  if isTuple(arg) {")
 say("    report(isHomogeneousTuple(arg),\"isHomogeneousTuple\");")
 say("    report(isHomogeneousTupleValue(arg),\"isHomogeneousTupleValue\");")
 say("    report(isHomogeneousTupleType(arg.type),\"isHomogeneousTupleType\");")

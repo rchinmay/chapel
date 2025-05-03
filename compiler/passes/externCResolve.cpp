@@ -1,5 +1,5 @@
 /*
- * Copyright 2020-2022 Hewlett Packard Enterprise Development LP
+ * Copyright 2020-2025 Hewlett Packard Enterprise Development LP
  * Copyright 2004-2019 Cray Inc.
  * Other additional copyright holders may be indicated within.
  *
@@ -78,27 +78,28 @@ static Expr* convertPointerToChplType(ModuleSymbol* module,
                                       const char* typedefName=NULL) {
 
 
-  //Pointers to c_char must be converted to Chapel's C string type
-  // but only if they are const char*.
-  if (pointeeType.isConstQualified() &&
-      pointeeType.getTypePtr()->isCharType()) {
-    return tryCResolveExpr(module, "c_string");
-  }
 
   // Pointers to C functions become c_fn_ptr
   if (pointeeType.getTypePtr()->isFunctionType()) {
     return tryCResolveExpr(module, "c_fn_ptr");
   }
 
-  // Pointers to void (aka void*) convert to c_void_ptr
-  if (pointeeType.getTypePtr()->isVoidType()) {
-    return tryCResolveExpr(module, "chpl__c_void_ptr");
-  }
-
   Expr* pointee = convertToChplType(module, pointeeType.getTypePtr());
 
-  // Other pointers are represented as a call to c_ptr.
-  return new CallExpr(new UnresolvedSymExpr("c_ptr"), pointee);
+  // Other pointers are represented as a call to c_ptr or c_ptrConst.
+  if (pointeeType.isConstQualified()) {
+    return new CallExpr(new UnresolvedSymExpr("c_ptrConst"), pointee);
+  } else {
+    return new CallExpr(new UnresolvedSymExpr("c_ptr"), pointee);
+  }
+}
+
+static unsigned getMinSignedBits(const llvm::APInt& size) {
+#if HAVE_LLVM_VER >= 170
+  return size.getSignificantBits();
+#else
+  return size.getMinSignedBits();
+#endif
 }
 
 static
@@ -111,7 +112,7 @@ Expr* convertFixedSizeArrayToChplType(ModuleSymbol* module,
 
   Expr* eltTypeChapel = convertToChplType(module, eltType.getTypePtr());
 
-  if (size.getMinSignedBits() > 64)
+  if (getMinSignedBits(size) > 64)
     USR_FATAL("C array is too large");
 
   int64_t isize = size.getSExtValue();
@@ -130,7 +131,11 @@ Expr* convertArrayToChplType(ModuleSymbol* module,
   Expr* eltTypeChapel = convertToChplType(module, eltType.getTypePtr());
 
   // For now, just represent it as a c_ptr
-  return new CallExpr("c_ptr", eltTypeChapel);
+  if (eltType.isConstQualified()) {
+    return new CallExpr("c_ptrConst", eltTypeChapel);
+  } else {
+    return new CallExpr("c_ptr", eltTypeChapel);
+  }
 }
 
 static
@@ -162,7 +167,8 @@ Expr* convertStructToChplType(ModuleSymbol* module,
   }
 
   // Don't convert it if it's already converted
-  if (Symbol* sym = lookup(chpl_name, module->block))
+  int ignoredCount = 0;
+  if (Symbol* sym = lookupInModuleOrBuiltins(module, chpl_name, ignoredCount))
     return new SymExpr(sym);
 
   // Create an empty struct and add it to the AST
@@ -177,6 +183,8 @@ Expr* convertStructToChplType(ModuleSymbol* module,
   TypeSymbol* ts = new TypeSymbol(chpl_name, ct);
   ts->cname = cname;
   ts->addFlag(FLAG_EXTERN);
+  if (structType->isIncompleteType())
+    ts->addFlag(FLAG_INCOMPLETE);
   DefExpr* def = new DefExpr(ts);
 
   addCDef(module, def);
@@ -222,8 +230,7 @@ static Expr* convertToChplType(ModuleSymbol* module,
                                const char* typedefName) {
 
   //typedefs
-  if (const clang::TypedefType *td =
-      llvm::dyn_cast_or_null<clang::TypedefType>(type)) {
+  if (auto td = type->getAs<clang::TypedefType>()) {
 
     return convertTypedefToChplType(module, td, typedefName);
 
@@ -236,14 +243,18 @@ static Expr* convertToChplType(ModuleSymbol* module,
 
   //arrays
   } else if (type->isArrayType()) {
+    // TODO: `getAsArrayTypeUnsafe` is required to desugar types. A better
+    // solution which doesn't discard qualifiers would be
+    // `Ctx.getAsConstantArrayType(type)` where `Ctx` is a `clang::AstContext`,
+    // however that would require some heavy rewrites
+    const clang::ArrayType* at = type->getAsArrayTypeUnsafe();
 
     if (type->isConstantArrayType()) {
       const clang::ConstantArrayType* cat =
-        llvm::dyn_cast<clang::ConstantArrayType>(type);
+        llvm::dyn_cast<clang::ConstantArrayType>(at);
 
       return convertFixedSizeArrayToChplType(module, cat, typedefName);
     } else {
-      const clang::ArrayType* at = llvm::dyn_cast<clang::ArrayType>(type);
 
       return convertArrayToChplType(module, at, typedefName);
     }
@@ -292,8 +303,9 @@ static Expr* convertToChplType(ModuleSymbol* module,
       INT_ASSERT(type && "Could not get enum integer type pointer");
     }
 
-    if (type->isVoidType())
-      return NULL;
+    if (type->isVoidType()) {
+      return new SymExpr(dtVoid->symbol);
+    }
 
     // handle numeric types
 
@@ -395,7 +407,8 @@ static const char* convertTypedef(ModuleSymbol*           module,
 
   if( do_typedef ) {
     // Don't convert it if it's already converted
-    if (lookup(typedef_name, module->block))
+    int ignoredCount = 0;
+    if (lookupInModuleOrBuiltins(module, typedef_name, ignoredCount))
       return typedef_name;
 
     // Create a a DefExpr without the initializing expression
@@ -432,7 +445,8 @@ void convertDeclToChpl(ModuleSymbol* module,
   INT_ASSERT(module->extern_info != NULL);
 
   // Don't convert it if it's already converted
-  if (lookup(cname, module->block) != NULL)
+  int ignoredCount = 0;
+  if (lookupInModuleOrBuiltins(module, cname, ignoredCount))
     return;
 
   clang::TypeDecl* cType = NULL;
@@ -517,8 +531,8 @@ void convertDeclToChpl(ModuleSymbol* module,
                                            false,  // throws
                                            NULL, // where
                                            NULL, // lifetime constraints
-                                           NULL, // body
-                                           NULL); // docs
+                                           NULL // body
+                                         );
 
     //convert args
     for (clang::FunctionDecl::param_iterator it=fd->param_begin(); it < fd->param_end(); ++it) {
@@ -549,53 +563,27 @@ void convertDeclToChpl(ModuleSymbol* module,
   }
 }
 
-static Symbol* tryCResolve(BaseAST* context,
-                           ModuleSymbol* module,
-                           const char* name,
-                           llvm::SmallSet<ModuleSymbol*, 24> &visited);
-
 Symbol* tryCResolveLocally(ModuleSymbol* module, const char* name) {
   // Is it resolveable in this module?
   if (module->extern_info != NULL) {
+    // Convert it and update the scope table
     convertDeclToChpl(module, name);
-    // Try to resolve it again.
-    return lookup(name, module->block);
+    // Look it up again using the scope table
+    int ignoredCount = 0;
+    return lookupInModuleOrBuiltins(module, name, ignoredCount);
   }
 
   return NULL;
 }
 
-Symbol* tryCResolve(BaseAST* context, const char* name) {
-  Symbol* retval = NULL;
-
-  ModuleSymbol* module = context->getModule();
-
-  // Try looking up the symbol with scope resolve's tables.
-  // This covers the case of finding a symbol already converted.
-  int nSymbolsFound = 0;
-  Symbol* got = lookupAndCount(name, context, nSymbolsFound);
-  if (nSymbolsFound != 0)
-    return got;
-
-  if (fAllowExternC == true) {
-    llvm::SmallSet<ModuleSymbol*, 24> visited;
-
-    retval = tryCResolve(context, module, name, visited);
-  }
-
-  return retval;
-}
-
-static Symbol* tryCResolve(BaseAST* context,
-                           ModuleSymbol* module,
-                           const char*                       name,
-                           llvm::SmallSet<ModuleSymbol*, 24> &visited) {
+static Symbol* doTryCResolve(ModuleSymbol* module,
+                             const char*                       name,
+                             llvm::SmallSet<ModuleSymbol*, 24> &visited) {
 
   if (module == NULL) {
     return NULL;
 
   } else if (visited.insert(module).second) {
-    // visited.insert(module)) {
     // we added it to the set, so continue.
 
   } else {
@@ -603,17 +591,39 @@ static Symbol* tryCResolve(BaseAST* context,
     return NULL;
   }
 
-  // try the modules used by this module.
+  // Try the modules used by this module.
+  // It is important to consider them first, so that a module that is 'use'd
+  // that has an extern block will generate the Defs there, rather than
+  // getting another copy here.
   // TODO: handle only, except, etc
-  forv_Vec(ModuleSymbol, usedMod, module->modUseList) {
+  for (ModuleSymbol* usedMod : module->modUseList) {
     if (usedMod->modTag == MOD_USER) { // no extern blocks in internal code
-      Symbol* got = tryCResolve(context, usedMod, name, visited);
+      Symbol* got = doTryCResolve(usedMod, name, visited);
       if (got != NULL)
         return got;
     }
   }
 
   return tryCResolveLocally(module, name);
+}
+
+Symbol* tryCResolve(ModuleSymbol* mod, const char* name) {
+  Symbol* retval = NULL;
+
+  // Try looking up the symbol with scope resolve's tables.
+  // This covers the case of finding a symbol already converted.
+  int nSymbolsFound = 0;
+  Symbol* got = lookupInModuleOrBuiltins(mod, name, nSymbolsFound);
+  if (nSymbolsFound != 0)
+    return got;
+
+  if (fAllowExternC == true) {
+    llvm::SmallSet<ModuleSymbol*, 24> visited;
+
+    retval = doTryCResolve(mod, name, visited);
+  }
+
+  return retval;
 }
 
 static void addCDef(ModuleSymbol* module, DefExpr* def) {
@@ -623,22 +633,20 @@ static void addCDef(ModuleSymbol* module, DefExpr* def) {
 }
 
 static Expr* tryCResolveExpr(ModuleSymbol* module, const char* name) {
-  BaseAST* context = module->block;
-  Symbol* sym = tryCResolve(context, astr(name));
+  Symbol* sym = tryCResolveLocally(module, astr(name));
   if (sym == NULL)
-    USR_FATAL(context, "Could not find C type %s", name);
+    USR_FATAL("Could not find C type %s", name);
 
   return new SymExpr(sym);
 }
 
 static Expr* lookupExpr(ModuleSymbol* module, const char* name) {
-  BaseAST* context = module->block;
-  Symbol* sym = lookup(astr(name), context);
+  int ignoredCount = 0;
+  Symbol* sym = lookupInModuleOrBuiltins(module, astr(name), ignoredCount);
   if (sym == NULL)
-    USR_FATAL(context, "Could not find type %s", name);
+    USR_FATAL("Could not find C type %s", name);
 
   return new SymExpr(sym);
 }
 
 #endif
-

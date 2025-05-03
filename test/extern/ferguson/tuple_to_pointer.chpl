@@ -1,5 +1,5 @@
-use CPtr;
-use SysCTypes;
+
+use CTypes;
 
 extern proc printarr(x:c_ptr(c_int), n:c_int);
 
@@ -9,7 +9,7 @@ proc go() {
 
   writeln(t);
   printarr(c_ptrTo(t[0]), 10);
-  printarr(c_ptrTo(t):c_ptr(c_int), 10);
+  printarr(c_ptrTo(t):c_ptr(void):c_ptr(c_int), 10);
 }
 
 go();

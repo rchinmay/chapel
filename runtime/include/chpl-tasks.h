@@ -1,5 +1,5 @@
 /*
- * Copyright 2020-2022 Hewlett Packard Enterprise Development LP
+ * Copyright 2020-2025 Hewlett Packard Enterprise Development LP
  * Copyright 2004-2019 Cray Inc.
  * Other additional copyright holders may be indicated within.
  *
@@ -33,6 +33,15 @@
 extern "C" {
 #endif
 
+#ifdef HAS_GPU_LOCALE
+// Engin: normally, I wanted to stick this into chpl-gpu.h. However, circular
+// dependency between headers was a bit difficult to break. chpl-gpu.h needs
+// chpl_task_getRequestedSubloc from here (well, actually chpl-tasks-impl-fns)
+typedef struct {
+  void** streams;
+} chpl_gpu_taskPrvData_t;
+#endif
+
 //
 // This holds per-runtime-task information the tasking layer maintains
 // on behalf of other runtime layers.  Its components are intended to
@@ -43,6 +52,9 @@ extern "C" {
 //
 typedef struct {
   chpl_comm_taskPrvData_t comm_data;
+#ifdef HAS_GPU_LOCALE
+  chpl_gpu_taskPrvData_t gpu_data;
+#endif
 } chpl_task_infoRuntime_t;
 
 //
@@ -117,33 +129,6 @@ void      chpl_sync_initAux(chpl_sync_aux_t *);
 void      chpl_sync_destroyAux(chpl_sync_aux_t *);
 
 
-// Single variables (currently a synonym for syncs)
-
-typedef chpl_sync_aux_t chpl_single_aux_t;
-
-static inline
-void chpl_single_lock(chpl_sync_aux_t * s) { chpl_sync_lock(s); }
-static inline
-void chpl_single_unlock(chpl_sync_aux_t * s) { chpl_sync_unlock(s); }
-static inline
-void chpl_single_waitFullAndLock(chpl_sync_aux_t * s,
-                                 int32_t lineno, int32_t filename) {
-  chpl_sync_waitFullAndLock(s,lineno,filename);
-}
-static inline
-void chpl_single_markAndSignalFull(chpl_sync_aux_t * s) {
-  chpl_sync_markAndSignalFull(s);
-}
-static inline
-chpl_bool chpl_single_isFull(void *val_ptr, chpl_sync_aux_t *s) {
-  return chpl_sync_isFull(val_ptr, s);
-}
-static inline
-void chpl_single_initAux(chpl_sync_aux_t * s) { chpl_sync_initAux(s); }
-static inline
-void chpl_single_destroyAux(chpl_sync_aux_t * s) { chpl_sync_destroyAux(s); }
-
-
 // Tasks
 
 //
@@ -159,11 +144,13 @@ void chpl_task_exit(void);        // called by the main task
 // This task should be quite dedicated (e.g., get its own system
 // thread) in order to be responsive and not be held up by other
 // user-level tasks. returns 0 on success, nonzero on failure.
+// If cpu is >= 0 then the task is bound to the specified CPU if
+// the platform supports CPU binding.
 //
 // The caller of this function is responsible for ensuring that
 // *arg remains available to the task as long as it is needed.
 //
-int chpl_task_createCommTask(chpl_fn_p fn, void* arg);
+int chpl_task_createCommTask(chpl_fn_p fn, void* arg, int cpu);
 
 //
 // Have the tasking layer call the 'chpl_main' function pointer
@@ -351,21 +338,6 @@ size_t chpl_task_getCallStackSize(void);
 //
 chpl_bool chpl_task_guardPagesInUse(void);
 
-//
-// returns the number of tasks that are ready to run on the current locale,
-// not including any that have already started running.
-//
-uint32_t chpl_task_getNumQueuedTasks(void);
-
-//
-// returns the number of tasks that are blocked waiting on a sync or single
-// variable.
-// Note that this information may only available if the program is run with
-// the -b switch, which enables block reporting and deadlock detection.
-// If this switch is not specified, -1 may be returned.
-//
-int32_t chpl_task_getNumBlockedTasks(void);
-
 
 // Threads
 
@@ -382,6 +354,21 @@ int32_t chpl_task_getNumBlockedTasks(void);
 static inline
 uint32_t chpl_task_getFixedNumThreads(void) {
   return CHPL_TASK_IMPL_GET_FIXED_NUM_THREADS();
+}
+
+//
+// Similar to the above, but only indicates whether or not the tasking
+// layer uses a fixed number of threads. This may be called prior to
+// the initialization of the tasking layer when the number of threads
+// is not yet known.
+//
+
+#ifndef CHPL_TASK_IMPL_HAS_FIXED_NUM_THREADS
+#define CHPL_TASK_IMPL_HAS_FIXED_NUM_THREADS() false
+#endif
+static inline
+chpl_bool chpl_task_hasFixedNumThreads(void) {
+  return CHPL_TASK_IMPL_HAS_FIXED_NUM_THREADS();
 }
 
 //
@@ -412,17 +399,6 @@ static inline
 uint32_t chpl_task_canMigrateThreads(void) {
   return CHPL_TASK_IMPL_CAN_MIGRATE_THREADS();
 }
-
-//
-// returns the total number of threads that currently exist, whether running,
-// blocked, or idle
-//
-uint32_t chpl_task_getNumThreads(void);
-
-//
-// returns the number of threads that are currently idle
-//
-uint32_t chpl_task_getNumIdleThreads(void);
 
 //
 // Warn about a num threads setting
@@ -480,7 +456,6 @@ extern "C" {
 #endif
 
 typedef void chpl_sync_aux_t;
-typedef chpl_sync_aux_t chpl_single_aux_t;
 #define chpl_task_exit()
 
 #ifdef __cplusplus

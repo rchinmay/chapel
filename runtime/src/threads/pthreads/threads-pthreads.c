@@ -1,16 +1,16 @@
 /*
- * Copyright 2020-2022 Hewlett Packard Enterprise Development LP
+ * Copyright 2020-2025 Hewlett Packard Enterprise Development LP
  * Copyright 2004-2019 Cray Inc.
  * Other additional copyright holders may be indicated within.
- * 
+ *
  * The entirety of this work is licensed under the Apache License,
  * Version 2.0 (the "License"); you may not use this file except
  * in compliance with the License.
- * 
+ *
  * You may obtain a copy of the License at
- * 
+ *
  *     http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -131,8 +131,8 @@ void chpl_init_heap_stack(void){
     chpl_alloc_stack_in_heap = false;
     chpl_use_guard_page      = false;
     return;
-  } 
-  
+  }
+
   // We want a guard page and we can add it
   chpl_alloc_stack_in_heap = true;
   chpl_use_guard_page      = true;
@@ -164,7 +164,7 @@ void* chpl_alloc_pthread_stack(size_t stack_size){
   if(chpl_use_guard_page){
     /* This is architecture-dependent
     *
-    * Since the stack grows downward, I have to insert the guard 
+    * Since the stack grows downward, I have to insert the guard
     * page at the lowest address.
     */
     stack = (unsigned char*)mem_buffer + page_size;
@@ -182,14 +182,16 @@ void* chpl_alloc_pthread_stack(size_t stack_size){
 void chpl_free_pthread_stack(void* stack){
   int free_flag;
   size_t page_size;
-  
+
   free_flag = 0;
   page_size = 0;
 
   if(chpl_use_guard_page){
-    free_flag = PROT_READ | PROT_WRITE | PROT_EXEC;
+    free_flag = PROT_READ | PROT_WRITE;
     page_size = chpl_getSysPageSize();
-    mprotect((unsigned char*)stack - page_size, page_size, free_flag);
+    if (mprotect((unsigned char*)stack - page_size, page_size, free_flag) != 0) {
+      chpl_internal_error("mprotect failed");
+    }
     chpl_free((unsigned char*)stack - page_size);
   }
   else
@@ -225,7 +227,7 @@ static int do_pthread_create(pthread_t* thread,
     memset(thread, 0, sizeof(pthread_t));
     return EAGAIN;
   }
-  
+
   rc = pthread_attr_setstack(&local_attr, stack, stack_size);
   if( rc != 0 ) {
     memset(thread, 0, sizeof(pthread_t));
@@ -247,7 +249,7 @@ static int do_pthread_create(pthread_t* thread,
   tslp->stack = stack;
   tslp->owner_pthread = *thread;
   tslp->prec = NULL;
-  
+
   pthread_mutex_lock(&thread_stack_list_lock);
 
   tslp->next = thread_stack_list_head;
@@ -389,7 +391,7 @@ void chpl_thread_init(void(*threadBeginFn)(void*),
 
     if (rlim.rlim_max != RLIM_INFINITY && css > rlim.rlim_max) {
       char warning[128];
-      sprintf(warning, "call stack size capped at %lu\n", 
+      snprintf(warning, sizeof(warning), "call stack size capped at %lu\n",
               (unsigned long)rlim.rlim_max);
       chpl_warning(warning, 0, 0);
 
@@ -502,10 +504,10 @@ void chpl_thread_exit(void) {
             thread_stack_list_head = tslp->next;
           else
             tslp->prec->next = tslp->next;
-          
+
           if(tslp->next != NULL)
             tslp->next->prec = tslp->prec;
-          
+
           chpl_mem_free(tslp, 0, 0);
           break;
       }
@@ -578,7 +580,7 @@ static void* pthread_func(void* arg) {
 
   // disable cancellation immediately
   // enable only while waiting for new work
-  pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, NULL); 
+  pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, NULL);
 
   // add us to the list of threads
   tlp = (thread_list_p) chpl_mem_alloc(sizeof(struct thread_list),

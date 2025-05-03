@@ -1,16 +1,16 @@
 /*
- * Copyright 2020-2022 Hewlett Packard Enterprise Development LP
+ * Copyright 2020-2025 Hewlett Packard Enterprise Development LP
  * Copyright 2004-2019 Cray Inc.
  * Other additional copyright holders may be indicated within.
- * 
+ *
  * The entirety of this work is licensed under the Apache License,
  * Version 2.0 (the "License"); you may not use this file except
  * in compliance with the License.
- * 
+ *
  * You may obtain a copy of the License at
- * 
+ *
  *     http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -18,19 +18,23 @@
  * limitations under the License.
  */
 
+
 //
 // Block dimension specifier - for use with DimensionalDist2D.
 //
+
+@unstable("BlockDim is intended for use with DimensionalDist2D, which is unstable")
+prototype module BlockDim {
 
 private use DimensionalDist2D;
 
 
 /*
 This Block dimension specifier is for use with the
-:class:`DimensionalDist2D` distribution.
+:mod:`dimensionalDist2D <DimensionalDist2D>` distribution.
 
 It specifies the mapping of indices in its dimension
-that would be produced by a 1D :class:`~BlockDist.Block` distribution.
+that would be produced by a 1D :class:`~BlockDist.blockDist` distribution.
 
 **Initializer Arguments**
 
@@ -57,8 +61,8 @@ a convenient replacement for the ``boundingBox`` argument,
 which specifies the bounding box in this dimension.
 
 The ``idxType``, whether provided or inferred, must match
-the index type of the domains "dmapped" using the corresponding
-``DimensionalDist2D`` distribution.
+the index type of the domains created using the corresponding
+``dimensionalDist2D`` distribution.
 */
 record BlockDim {
   // the type of bbStart, bbLength
@@ -72,23 +76,23 @@ record BlockDim {
   const bbStart: idxType;
   const bbLength: idxType;
 
-  proc boundingBox return bbStart .. (bbStart + bbLength - 1);
+  proc boundingBox do return bbStart .. (bbStart + bbLength - 1);
 }
 
 record Block1dom {
   type idxType;
-  param stridable: bool;
+  param strides: strideKind;
 
   // convenience
-  proc rangeT type  return range(idxType, BoundedRangeType.bounded, stridable);
+  proc rangeT type do  return range(idxType, boundKind.both, strides);
 
   // our range
-  var wholeR: range(idxType, BoundedRangeType.bounded, stridable);
+  var wholeR: range(idxType, boundKind.both, strides);
 
   // privatized distribution descriptor
   const pdist;
 
-  proc dsiSetIndicesUnimplementedCase param return false;
+  proc dsiSetIndicesUnimplementedCase param do return false;
 }
 
 record Block1locdom {
@@ -101,12 +105,12 @@ record Block1locdom {
 proc BlockDim.init(numLocales: int, boundingBox: range(?),
                    type idxType = boundingBox.idxType)
 {
-  if !isBoundedRange(boundingBox) then
+  if boundingBox.bounds != boundKind.both then
     compilerError("The 1-d block descriptor initializer was passed an unbounded range as the boundingBox");
   this.idxType = idxType;
 
   this.numLocales = numLocales;
-  this.bbStart = boundingBox.low;
+  this.bbStart = boundingBox.lowBound;
   this.bbLength = boundingBox.sizeAs(idxType);
 }
 
@@ -128,7 +132,7 @@ proc BlockDim.init(privatizeData, type idxType) {
   bbLength = privatizeData(2);
 }
 
-proc BlockDim.dsiUsesLocalLocID1d() param return false;
+proc BlockDim.dsiUsesLocalLocID1d() param do return false;
 
 proc Block1dom.dsiGetPrivatizeData1d() {
   return (wholeR,);
@@ -137,7 +141,7 @@ proc Block1dom.dsiGetPrivatizeData1d() {
 proc type Block1dom.dsiPrivatize1d(privDist, privatizeData) {
   assert(privDist.locale == here); // sanity check
   return new Block1dom(idxType   = this.idxType,
-                  stridable = this.stridable,
+                  strides   = this.strides,
                   wholeR    = privatizeData(0),
                   pdist     = privDist);
 }
@@ -146,13 +150,13 @@ proc Block1dom.dsiGetReprivatizeData1d() {
   return (wholeR,);
 }
 
-proc Block1dom.dsiReprivatize1d(reprivatizeData) {
+proc ref Block1dom.dsiReprivatize1d(reprivatizeData) {
   this.wholeR = reprivatizeData(0);
 }
 
-proc Block1dom.dsiUsesLocalLocID1d() param return false;
+proc Block1dom.dsiUsesLocalLocID1d() param do return false;
 
-proc Block1dom.dsiLocalDescUsesPrivatizedGlobalDesc1d() param return false;
+proc Block1dom.dsiLocalDescUsesPrivatizedGlobalDesc1d() param do return false;
 
 /////////// privatization - end
 
@@ -169,10 +173,10 @@ proc BlockDim.init(numLocales, boundingBoxLow, boundingBoxHigh, type idxType = b
   assert(this.bbLength > 0);
 }
 
-proc BlockDim.toString()
+proc BlockDim.toString() do
   return "BlockDim(" + numLocales:string + ", " + boundingBox:string + ")";
 
-proc BlockDim.dsiNewRectangularDom1d(type idxType, param stridable: bool,
+proc BlockDim.dsiNewRectangularDom1d(type idxType, param strides: strideKind,
                                      type stoIndexT)
 {
   // ignore stoIndexT - all we need is for other places to work out
@@ -180,13 +184,13 @@ proc BlockDim.dsiNewRectangularDom1d(type idxType, param stridable: bool,
     compilerError("The index type ", idxType:string,
                   " does not match the index type ",this.idxType:string,
                   " of the 'BlockDim' 1-d distribution");
-  return new Block1dom(idxType = idxType, stridable = stridable, pdist = this);
+  return new Block1dom(idxType = idxType, strides = strides, pdist = this);
 }
 
-proc Block1dom.dsiIsReplicated1d() param return false;
+proc Block1dom.dsiIsReplicated1d() param do return false;
 
 proc Block1dom.dsiNewLocalDom1d(type stoIndexT, locId: locIdT) {
-  var defaultVal: range(stoIndexT, stridable=this.stridable);
+  var defaultVal: range(stoIndexT, strides=this.strides);
   return new Block1locdom(myRange = defaultVal);
 }
 
@@ -219,7 +223,7 @@ proc BlockDim.dsiIndexToLocale1d(indexx): locIdT {
   return result:locIdT;
 }
 
-proc Block1dom.dsiSetIndices1d(rangeArg: rangeT): void {
+proc ref Block1dom.dsiSetIndices1d(rangeArg: rangeT): void {
   wholeR = rangeArg;
 }
 
@@ -236,14 +240,14 @@ proc Block1dom._dsiComputeMyRange(locId): rangeT {
   return chunk;
 }
 
-proc Block1locdom.dsiSetLocalIndices1d(globDD, locId: locIdT) {
+proc ref Block1locdom.dsiSetLocalIndices1d(globDD, locId: locIdT) {
   myRange = globDD._dsiComputeMyRange(locId);
   return myRange;
 }
 
 /////////////////////////////////
 
-proc Block1dom.dsiStorageUsesUserIndices() param return true;
+proc Block1dom.dsiStorageUsesUserIndices() param do return true;
 
 proc Block1dom.dsiAccess1d(indexx: idxType): (locIdT, idxType) {
   return (pdist.dsiIndexToLocale1d(indexx), indexx);
@@ -254,20 +258,20 @@ iter Block1locdom.dsiMyDensifiedRangeForSingleTask1d(globDD) {
   yield locRange: range(globDD.idxType);
 }
 
-proc Block1dom.dsiSingleTaskPerLocaleOnly1d() param return false;
+proc Block1dom.dsiSingleTaskPerLocaleOnly1d() param do return false;
 
 proc Block1locdom.dsiMyDensifiedRangeForTaskID1d(globDD, taskid:int, numTasks:int) {
   const locRange = densify(myRange, globDD.wholeR, userErrors=false);
   // Copied straight from BlockDom leader - replace locBlock(parDim)->locRange.
   const (lo, hi) = _computeBlock(locRange.sizeAs(locRange.idxType), numTasks, taskid,
-                                 locRange.high, locRange.low, locRange.low);
+                                 locRange.highBound, locRange.lowBound, locRange.lowBound);
 
   // If this can occasionally be an empty range, add a check to Dimensional
   // to not yield anything in such a case.
   return lo..hi;
 }
 
-proc Block1locdom.dsiMyDensifiedRangeType1d(globDD) type
+proc Block1locdom.dsiMyDensifiedRangeType1d(globDD) type do
   return range(globDD.idxType);
 
 iter Block1dom.dsiSerialArrayIterator1d() {
@@ -304,8 +308,8 @@ iter Block1dom.dsiFollowerArrayIterator1d(undensRange): (locIdT, idxType) {
 
   } else {
     // (b) per-locale computation is amortized over enough undensRange indices
-    const lowLocId = pdist.dsiIndexToLocale1d(undensRange.alignedLow);
-    const highLocId = pdist.dsiIndexToLocale1d(undensRange.alignedHigh);
+    const lowLocId = pdist.dsiIndexToLocale1d(undensRange.low);
+    const highLocId = pdist.dsiIndexToLocale1d(undensRange.high);
 
     // check for a supposedly more common case of following our own leader
     if lowLocId == highLocId {
@@ -325,4 +329,6 @@ iter Block1dom.dsiFollowerArrayIterator1d(undensRange): (locIdT, idxType) {
       }
     }
   }
+}
+
 }

@@ -6,7 +6,7 @@ module CheckHttpSetOpt {
   use RunServer;
   use URL;
   use Curl;
-  use DateTime;
+  use Time;
 
   extern const CURLOPT_VERBOSE: CURLoption;
   extern const CURLOPT_FILETIME: CURLoption;
@@ -23,7 +23,7 @@ module CheckHttpSetOpt {
     setopt(urlreader, CURLOPT_VERBOSE, true);
 
     var str: string;
-    while urlreader.readline(str) {
+    while urlreader.readLine(str) {
       writeln(str);
     }
 
@@ -42,7 +42,7 @@ module CheckHttpSetOpt {
 	              (CURLOPT_FILETIME, true));
 
     var str: string;
-    while urlreader.readline(str) {
+    while urlreader.readLine(str) {
       writeln(str);
     }
 
@@ -51,7 +51,7 @@ module CheckHttpSetOpt {
     curl_easy_getinfo(getCurlHandle(urlreader), CURLINFO_FILETIME,
 		      c_ptrTo(time));
 
-    writeln("Remote Time ", datetime.utcfromtimestamp(time));
+    writeln("Remote Time ", dateTime.createUtcFromTimestamp(time));
 
     stderr.flush();
     stdout.flush();
@@ -68,7 +68,7 @@ module CheckHttpSetOpt {
     setopt(urlreader, CURLOPT_URL, url);
 
     var str: string;
-    while urlreader.readline(str) {
+    while urlreader.readLine(str) {
       writeln(str);
     }
 
@@ -87,7 +87,7 @@ module CheckHttpSetOpt {
     setopt(urlreader, CURLOPT_URL, url:bytes);
 
     var str: string;
-    while urlreader.readline(str) {
+    while urlreader.readLine(str) {
       writeln(str);
     }
 
@@ -96,11 +96,10 @@ module CheckHttpSetOpt {
   }
 
   // Test a string-type option, CURLOPT_URL, via the libcurl-based API
-  proc write_callback(ptr: c_ptr(c_char), size: size_t,
-		      nmemb: size_t, userdata: c_void_ptr) {
+  proc write_callback(ptr: c_ptr(c_char), size: c_size_t,
+		      nmemb: c_size_t, userdata: c_ptr(void)) {
     writeln("callback called");
-    var str = try! createStringWithBorrowedBuffer(ptr:c_string,
-                                                  (size * nmemb):int);
+    var str = try! string.createBorrowingBuffer(ptr, (size * nmemb):int);
     write(str);
     return size * nmemb;
   }
@@ -114,7 +113,7 @@ module CheckHttpSetOpt {
     curl_easy_setopt(curl, CURLOPT_VERBOSE, true);
     curl_easy_setopt(curl, CURLOPT_URL, url);
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION,
-		     c_ptrTo(write_callback):c_void_ptr);
+		     c_ptrTo(write_callback):c_ptr(void));
 
     curl_easy_perform(curl);
     curl_easy_cleanup(curl);

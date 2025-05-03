@@ -1,6 +1,6 @@
 /*
  * Copyright © 2009 CNRS
- * Copyright © 2009-2016 Inria.  All rights reserved.
+ * Copyright © 2009-2024 Inria.  All rights reserved.
  * Copyright © 2009-2012 Université Bordeaux
  * Copyright © 2009-2011 Cisco Systems, Inc.  All rights reserved.
  * See COPYING in top-level directory.
@@ -11,6 +11,12 @@
 #ifndef HWLOC_CONFIG_H
 #define HWLOC_CONFIG_H
 
+#define HWLOC_VERSION "2.11.2"
+#define HWLOC_VERSION_MAJOR 2
+#define HWLOC_VERSION_MINOR 11
+#define HWLOC_VERSION_RELEASE 2
+#define HWLOC_VERSION_GREEK ""
+
 #define __hwloc_restrict
 #define __hwloc_inline __inline
 
@@ -20,6 +26,7 @@
 #define __hwloc_attribute_pure
 #define __hwloc_attribute_deprecated
 #define __hwloc_attribute_may_alias
+#define __hwloc_attribute_warn_unused_result
 
 /* Defined to 1 if you have the `windows.h' header. */
 #define HWLOC_HAVE_WINDOWS_H 1

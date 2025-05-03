@@ -1,3 +1,4 @@
+use FileSystem;
 use Subprocess;
 
 {
@@ -6,7 +7,7 @@ use Subprocess;
   assert(comp.exitCode == 0);
 }
 
-var sub = spawn(["./stdout-stderr", "-nl", "1"], stdin=BUFFERED_PIPE, stdout=PIPE, stderr=PIPE);
+var sub = spawn(["./stdout-stderr", "-nl", "1"], stdin=pipeStyle.bufferAll, stdout=pipeStyle.pipe, stderr=pipeStyle.pipe);
 
 sub.stdin.writeln("Hello");
 sub.stdin.writeln("Everybody");
@@ -16,10 +17,10 @@ sub.stdin.writeln("Along");
 sub.communicate();
 
 var line:string;
-while sub.stdout.readline(line) {
+while sub.stdout.readLine(line) {
   write("stdout line: ", line);
 }
-while sub.stderr.readline(line) {
+while sub.stderr.readLine(line) {
   write("stderr line: ", line);
 }
 
@@ -28,4 +29,4 @@ assert(sub.exitCode == 0);
 
 sub.close();
 
-unlink("stdout-stderr");
+FileSystem.remove("stdout-stderr");

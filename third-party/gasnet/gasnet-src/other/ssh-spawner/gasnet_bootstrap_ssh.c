@@ -60,33 +60,34 @@
    In the interest of scalability the ssh processes are started up in a
    balanced N-ary tree, where N can be controlled at run time (via env
    var GASNET_SSH_OUT_DEGREE).  Typically we want this value to be
-   resonably large, since deep trees would result in multiple steps of
+   reasonably large, since deep trees would result in multiple steps of
    forwarding for standard I/O (which is performed entirely by the ssh
    processes at this point).  IF GASNETI_SSH_OUT_DEGREE is set to zero
-   then the tree effectively has inifinite out-degree and the tree of
+   then the tree effectively has infinite out-degree and the tree of
    control processes (defined below) is only one level deep.
 
    The leaf processes are assigned gasnet ranks ("rank processes"), while
-   internal nodes in the tree are known as "control proceses".  The root
+   internal nodes in the tree are known as "control processes".  The root
    of the tree is always a control process (even when running a single
    rank) and is also known as the "master process".  Each control process
    may have both rank processes and additional control processes as
-   children.  In normal use, there is a single control process per node.
+   children.  In normal use, there is a single control process per host.
 
-   NOTE: currently "normal use" is defined to include
-   listing each node at most once in GASNET_SSH_SERVERS (or equivalent),
-   because currently we start one control per entry in the node list.
-   It is planned to eliminate such duplication in the future.
+   NOTE: "normal use" is the default case in which the environment variable
+   GASNET_SSH_KEEPDUP is unset or "false" AND there are no uses of "multi-homed"
+   hosts.  With GASNET_SSH_KEEPDUP set to a "true" value OR multiple names for
+   the same host which cannot be de-duplicated, there will be one control
+   process for each time a given host is used from the list.
 
    In addition to the tree of ssh connections, there is a control socket
    created between each process and its parent (this is true for both
    the rank and control processes).  This socket is used for control
-   information, during startup.  For instance, the the environment and
+   information, during startup.  For instance, the environment and
    arguments are transferred over this socket.
 
    The control sockets are used to send each control process only a
    portion of the list of host names.  Rather than send the entire list,
-   each processs receives the hostnames of any children it may have.
+   each process receives the hostnames of any children it may have.
 
    The spawner is able to (in most cases) avoid orphaned processes
    by using TCP out-of-band data to generate a SIGURG.  The handler for
@@ -103,7 +104,8 @@
       void Barrier(void);
       void Exchange(void *src, size_t len, void *dest);
       void Broadcast(void *src, size_t len, void *dest, int rootnode);
-      void SNodeBroadcast(void *src, size_t len, void *dest, int rootnode);
+      void NbrhdBroadcast(void *src, size_t len, void *dest, int rootnode);
+      void HostBroadcast(void *src, size_t len, void *dest, int rootnode);
    
    Additionally, the following is useful (at least in ibv-conduit)
    for exchanging endpoint identifiers in a scalable manner:
@@ -118,7 +120,7 @@
       void Fini(void);
       void Abort(int exitcode);
 
-   In the case of normal termination, all nodes should call
+   In the case of normal termination, all processes should call
    Fini() before they call exit().  In the event
    that gasnet is unable to arrange for an orderly shutdown, a call to
    Abort() will try to force all processes to exit
@@ -126,11 +128,10 @@
 
    To control the spawner, there are a few environment variables, all of
    which are processed only by the master process (which send the
-   relavent information on to the others via the control sockets).  See
+   relevant information on to the others via the control sockets).  See
    README for documentation on these variables.
 
    XXX: still to do
-   + Group same-node when appears multiple times in list
    + Give master its own rank children too?
    + Implement "custom" spawner in the spirit of udp-conduit.
    + Look at udp-conduit for things missing from this list. :-)
@@ -166,8 +167,8 @@ enum {
   BOOTSTRAP_CMD_EXCHG1,
   BOOTSTRAP_CMD_TRANS0,
   BOOTSTRAP_CMD_TRANS1,
-  BOOTSTRAP_CMD_SNBCAST0,
-  BOOTSTRAP_CMD_SNBCAST1,
+  BOOTSTRAP_CMD_SBCAST0,
+  BOOTSTRAP_CMD_SBCAST1,
 };
 
 static const int c_one  = 1;
@@ -221,15 +222,16 @@ static gex_Rank_t nnodes = 0;	/* nodes, as distinct from ranks */
 static int nnodes_set = 0;		/* non-zero if nnodes set explicitly */
 static int keepdup = -1; // Value of [PREFIX]_SSH_KEEPDUP
 
-GASNETI_FORMAT_PRINTF(do_verbose,1,2,
-static void do_verbose(const char *fmt, ...)) {
+GASNETI_FORMAT_PRINTF(do_message,1,2,
+static void do_message(const char *fmt, ...)) {
   va_list args;
   va_start(args, fmt);
-  vfprintf(stderr, fmt, args);
-  fflush(stderr);
+  gasneti_console_messageVA(0,0,0,-1, "SSH-SPAWNER", fmt, args);
   va_end(args);
 }
-#define BOOTSTRAP_VERBOSE(ARGS)		if_pf (is_verbose) do_verbose ARGS
+#define BOOTSTRAP_VERBOSE(ARGS) do { \
+  if_pf (is_verbose) do_message ARGS; \
+} while (0)
 
 /* Add single quotes around a string, taking care of any existing quotes */
 static char *quote_arg(const char *arg) {
@@ -255,14 +257,8 @@ GASNETI_FORMAT_PRINTF(die,2,3,
 GASNETI_NORETURN
 static void die(int exitcode, const char *msg, ...)) {
   va_list argptr;
-  char expandedmsg[1024];
-
-  strcpy(expandedmsg, "*** ERROR: ");
-  strcat(expandedmsg, msg);
-  strcat(expandedmsg, "\n");
   va_start(argptr, msg);
-    vfprintf(stderr, expandedmsg, argptr);
-    fflush(stderr);
+    gasneti_console_messageVA(0,0,0,-1, "ERROR",msg,argptr);
   va_end(argptr);
   gasneti_killmyprocess(exitcode);
 }
@@ -293,6 +289,10 @@ static void do_propagate_env(const char * keyname, int flags) {
   }
 }
 
+static const char* do_check_env_prefix_hook(const char *prefix) {
+  return master_env ? gasneti_check_env_prefix_helper(master_env, prefix) : NULL;
+}
+
 #if HAVE_SETPGID || HAVE_SETPGRP
   /* signals sent to entire process groups */
   #define pid_to_kill(pid) (-(pid))
@@ -313,6 +313,29 @@ static void do_propagate_env(const char * keyname, int flags) {
   #define my_setpgid(pid) (0)
 #endif
 
+// POSIX.1-2008 designated siginterrupt() as obsolete.
+// This favors the recommended replacement via the SA_RESTART flag with
+// sigaction(), while providing a fallback if sigaction or SA_RESTART
+// are not available.
+static int do_siginterrupt(int signum, int flag)
+{
+#if GASNETI_HAVE_SA_RESTART
+  struct sigaction act;
+
+  int rc = sigaction(signum, NULL, &act);
+  if (rc) return rc;
+
+  if (flag) {
+    act.sa_flags &= ~SA_RESTART;
+  } else {
+    act.sa_flags |= SA_RESTART;
+  }
+
+  return sigaction(signum, &act, NULL);
+#else
+  return siginterrupt(signum, flag);
+#endif
+}
 
 /* returns count of signals sent */
 static int signal_rank_procs(int signo)
@@ -497,9 +520,9 @@ static void reap_one(pid_t pid, int status)
 				  myname, kind, child[j].rank, tmp, fini));
           if (!sock && (j < ctrl_children)) { // Ctrl proc which did not yet connect
             const char *host = child[j].nodelist ? child[j].nodelist[0] : nodelist[0];
-            fprintf(stderr, "*** Failed to start processes on %s, possibly due to an "
+            do_message("Failed to start processes on %s, possibly due to an "
                             "inability to establish an ssh connection from %s without "
-                            "interactive authentication.\n",
+                            "interactive authentication.",
                             host, my_host);
           }
 	} else if (WIFSIGNALED(status)) {
@@ -620,7 +643,7 @@ static void do_write(int fd, const void *buf, size_t len)
   while (len) {
     ssize_t rc = write(fd, p, len);
     if_pf (!rc || ((rc < 0) && (errno != EINTR))) {
-      fprintf(stderr, "Spawner: write() returned %d, errno = %d(%s)\n",
+      do_message("write() returned %d, errno = %d(%s)",
               (int)rc, errno, strerror(errno));
       do_abort(-1);
     }
@@ -656,7 +679,7 @@ static void do_writev(int fd, struct iovec *iov, int iovcnt)
       continue;
     }
     if_pf (!rc || ((rc < 0) && (errno != EINTR))) {
-      fprintf(stderr, "Spawner: writev() returned %d, errno = %d(%s)\n",
+      do_message("writev() returned %d, errno = %d(%s)",
               (int)rc, errno, strerror(errno));
       do_abort(-1);
     }
@@ -697,10 +720,10 @@ static void do_read(int fd, void *buf, size_t len)
   while (len) {
     ssize_t rc = read(fd, p, len);
     if_pf (!rc) {
-      fprintf(stderr, "Spawner: read() returned 0 (EOF)\n");
+      do_message("read() returned 0 (EOF)");
       do_abort(-1);
     } else if_pf ((rc < 0) && (errno != EINTR)) {
-      fprintf(stderr, "Spawner: read() returned %d, errno = %d(%s)\n",
+      do_message("read() returned %d, errno = %d(%s)",
               (int)rc, errno, strerror(errno));
       do_abort(-1);
     }
@@ -740,10 +763,10 @@ static void do_readv(int fd, struct iovec *iov, int iovcnt)
       continue;
     }
     if_pf (!rc) {
-      fprintf(stderr, "Spawner: readv() returned 0 (EOF)\n");
+      do_message("readv() returned 0 (EOF)");
       do_abort(-1);
     } else if_pf ((rc < 0) && (errno != EINTR)) {
-      fprintf(stderr, "Spawner: readv() returned %d, errno = %d(%s)\n",
+      do_message("readv() returned %d, errno = %d(%s)",
               (int)rc, errno, strerror(errno));
       do_abort(-1);
     }
@@ -948,16 +971,16 @@ static void configure_ssh(void) {
   for (i=0; i<ssh_argc; ++i) {
     BOOTSTRAP_VERBOSE(("\t%s\n", ssh_argv[i]));
   }
-  BOOTSTRAP_VERBOSE(("\tHOST\n\tCMD\n"));
+  BOOTSTRAP_VERBOSE(("\tHOST"));
+  BOOTSTRAP_VERBOSE(("\tCMD"));
 }
 
 /* Reduce nnodes when presented with a short nodelist */
 static char ** short_nodelist(char **nodelist, gex_Rank_t count) {
   if (nnodes_set) {
-    fprintf(stderr, "WARNING: "
-                    "Request for %d nodes ignored because only %d nodes are available%s.\n",
+    do_message("WARNING: "
+                    "Request for %d nodes ignored because only %d nodes are available%s.",
                     nnodes, count, keepdup?"":" after de-duplication");
-    fflush(stderr);
   }
 
   nnodes = count;
@@ -1105,6 +1128,8 @@ static void build_nodelist(void)
     nodelist = parse_servers(env_string);
   } else if ((env_string = my_getenv("LSB_HOSTS")) != NULL) {
     nodelist = parse_servers(env_string);
+  } else if ((env_string = my_getenv("OAR_NODEFILE")) != NULL) {
+    nodelist = parse_nodefile(env_string);
   } else if (my_getenv("SLURM_JOB_ID") != NULL) {
     nodelist = parse_nodepipe("scontrol show hostname");
   } else {
@@ -1489,6 +1514,7 @@ static void do_connect(const char *spawn_args, int *argc_p, char ***argv_p)
 
   gasneti_getenv_hook = &do_getenv;
   gasneti_propagate_env_hook = &do_propagate_env;
+  gasneti_check_env_prefix_hook = &do_check_env_prefix_hook;
   envcmd = my_getenv_withdefault(ENV_PREFIX "ENVCMD", "env");
 
   myname = myrank;
@@ -1507,7 +1533,7 @@ static void spawn_one_control(gex_Rank_t child_id, const char *cmdline, const ch
   } else if (pid == 0) {
     char *cmd =
         gasneti_sappendf(NULL,
-                         "cd %s; exec %s %s " ENV_PREFIX "SPAWN_CONTROL=ssh "
+                         "cd %s; exec %s %s " ENV_PREFIX GASNET_CORE_NAME_STR "_SPAWNER=ssh "
                                               ENV_PREFIX "SPAWN_ARGS='%c%s%c%d%c%d%c%s' "
                                               "%s",
                                       quote_arg(cwd),
@@ -1533,9 +1559,9 @@ static void spawn_one_control(gex_Rank_t child_id, const char *cmdline, const ch
 	(void)prctl(PR_SET_PDEATHSIG, SIGHUP);
       }
       #endif
-      BOOTSTRAP_VERBOSE(("[%d] spawning process %d on %s via %s\n",
+      BOOTSTRAP_VERBOSE(("[%d] spawning process %d on %s via %s\n\tCMD: %s",
 			 myname,
-			 (int)child[child_id].rank, host, ssh_argv[0]));
+			 (int)child[child_id].rank, host, ssh_argv[0], cmd));
       ssh_argv[ssh_argc] = (/* noconst */ char *)host;
       ssh_argv[ssh_argc+1] = cmd;
       execvp(ssh_argv[0], ssh_argv);
@@ -1780,6 +1806,9 @@ static void cmd_FINI(char cmd, int i) {
     }
   }
 
+  // Children can exit as quickly as they read the writes issued below.
+  // So, temporarily disarm SIGCHLD to ensure the loop runs to completion.
+  gasneti_blocksig(SIGCHLD);
   {
     fd_set fds;
     int j, k;
@@ -1789,6 +1818,7 @@ static void cmd_FINI(char cmd, int i) {
     }
     finalized = 1;
   }
+  gasneti_unblocksig(SIGCHLD);
 }
 
 static void cmd_BARR(char cmd, int i) {
@@ -2006,11 +2036,11 @@ static void cmd_TRANS(char cmd, int i) {
   }
 }
 
-/* TODO: this gets *much* easier if/when we truly have a single control proc per node */
-static void cmd_SNBCAST(char cmd, int i) {
+// TODO: this gets *much* easier if/when we truly have a single control proc per host
+static void cmd_SBCAST(char cmd, int i) {
   /* Comands: */
-  const char cmd0 = BOOTSTRAP_CMD_SNBCAST0;
-  const char cmd1 = BOOTSTRAP_CMD_SNBCAST1;
+  const char cmd0 = BOOTSTRAP_CMD_SBCAST0;
+  const char cmd1 = BOOTSTRAP_CMD_SBCAST1;
 
   /* State: */
   static uint8_t *data = NULL;
@@ -2140,13 +2170,13 @@ static void dispatch(char cmd, int k) {
       cmd_TRANS(cmd, k);
       break;
 
-    case BOOTSTRAP_CMD_SNBCAST0:
-    case BOOTSTRAP_CMD_SNBCAST1:
-      cmd_SNBCAST(cmd, k);
+    case BOOTSTRAP_CMD_SBCAST0:
+    case BOOTSTRAP_CMD_SBCAST1:
+      cmd_SBCAST(cmd, k);
       break;
 
     default:
-      fprintf(stderr, "Spawner protocol error\n");
+      do_message("Spawner protocol error");
       do_abort(-1);
   }
 }
@@ -2156,7 +2186,7 @@ static void event_loop(void)
 {
     int done = 0;
 
-    siginterrupt(SIGCHLD, 1);
+    do_siginterrupt(SIGCHLD, 1);
     reaper(SIGCHLD);
 
     while (!finalized && !in_abort) {
@@ -2323,10 +2353,11 @@ static void do_master(const char *spawn_args, int *argc_p, char ***argv_p) {
 
   is_root = 1;
   is_control = 1;
+  is_verbose = gasneti_getenv_yesno_withdefault(ENV_PREFIX "SPAWN_VERBOSE",0); // can be provided via env or cmdline
 
   fd_sets_init();
   gasneti_reghandler(SIGURG, &sigurg_handler);
-  siginterrupt(SIGURG, 1);
+  do_siginterrupt(SIGURG, 1);
 
   if (NULL == spawn_args) { /* Explicit-master support */
     int argi;
@@ -2454,9 +2485,8 @@ static void do_master(const char *spawn_args, int *argc_p, char ***argv_p) {
       die(1, "Node count %ld is out-of-range of gex_Rank_t", lnnodes);
     }
     if (nnodes > nranks) {
-      fprintf(stderr, "WARNING: requested node count reduced from %d to process count of %d\n",
+      do_message("WARNING: requested node count reduced from %d to process count of %d",
                       (int)nnodes, (int)nranks);
-      fflush(stderr);
       nnodes = nranks;
     }
     BOOTSTRAP_VERBOSE(("Spawning '%s': %d processes on %d nodes\n", argv0, (int)nranks, (int)nnodes));
@@ -2496,7 +2526,7 @@ static void do_control(const char *spawn_args, int *argc_p, char ***argv_p)
 
   fd_sets_init();
   gasneti_reghandler(SIGURG, &sigurg_handler);
-  siginterrupt(SIGURG, 1);
+  do_siginterrupt(SIGURG, 1);
 
   #if HAVE_PR_SET_PDEATHSIG
   if (use_pdeathsig) {
@@ -2540,9 +2570,8 @@ extern gasneti_spawnerfn_t const * gasneti_bootstrapInit_ssh(int *argc_p, char *
     explicit_master = 1;
     spawn_args = "XX"; // unused, but avoids "may be used uninitialized" warnings
   } else {
-    spawner    = my_getenv(ENV_PREFIX "SPAWN_CONTROL");
     spawn_args = my_getenv(ENV_PREFIX "SPAWN_ARGS");
-    if (!spawner || !spawn_args || strcmp(spawner, "ssh") || (strlen(spawn_args) < 2)) {
+    if (!spawn_args || (strlen(spawn_args) < 2)) {
       return NULL;
     }
     gasnett_unsetenv(ENV_PREFIX "SPAWN_ARGS");
@@ -2613,6 +2642,7 @@ extern gasneti_spawnerfn_t const * gasneti_bootstrapInit_ssh(int *argc_p, char *
 
   gasneti_getenv_hook = &do_getenv;
   gasneti_propagate_env_hook = &do_propagate_env;
+  gasneti_check_env_prefix_hook = &do_check_env_prefix_hook;
   *nodes_p  = nranks;
   *mynode_p = myrank;
 
@@ -2721,9 +2751,11 @@ static void bootstrapBroadcast(void *src, size_t len, void *dest, int rootnode) 
   }
 }
 
-static void bootstrapSNodeBroadcast(void *src, size_t len, void *dest, int rootnode_arg) {
-  char cmd0 = BOOTSTRAP_CMD_SNBCAST0;
-  char cmd1 = BOOTSTRAP_CMD_SNBCAST1;
+// Since every caller receives the desired rootnode's contribution from
+// the control procs, the NbrhdBroadcast and HostBroadcast are identical.
+static void bootstrapSubsetBroadcast(void *src, size_t len, void *dest, int rootnode_arg) {
+  char cmd0 = BOOTSTRAP_CMD_SBCAST0;
+  char cmd1 = BOOTSTRAP_CMD_SBCAST1;
   const gex_Rank_t rootnode = rootnode_arg;
   struct iovec iov[4];
 
@@ -2751,7 +2783,8 @@ static gasneti_spawnerfn_t const spawnerfn = {
   bootstrapBarrier,
   bootstrapExchange,
   bootstrapBroadcast,
-  bootstrapSNodeBroadcast,
+  bootstrapSubsetBroadcast, // Nbrhd
+  bootstrapSubsetBroadcast, // Host
   bootstrapAlltoall,
   bootstrapAbort,
   bootstrapCleanup,

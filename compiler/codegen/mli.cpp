@@ -1,5 +1,5 @@
 /*
- * Copyright 2020-2022 Hewlett Packard Enterprise Development LP
+ * Copyright 2020-2025 Hewlett Packard Enterprise Development LP
  * Copyright 2004-2019 Cray Inc.
  * Other additional copyright holders may be indicated within.
  *
@@ -35,10 +35,9 @@
 #include <map>
 #include <sstream>
 
-// These are populated after 'codegenMultiLocaleInteropWrappers' is done.
-const char* gMultiLocaleLibMarshallingFile = NULL;
-const char* gMultiLocaleLibClientFile = NULL;
-const char* gMultiLocaleLibServerFile = NULL;
+const char* gMultiLocaleLibMarshallingFile = "chpl_mli_marshalling.c";
+const char* gMultiLocaleLibClientFile = "chpl_mli_client.c";
+const char* gMultiLocaleLibServerFile = "chpl_mli_server.c";
 
 const char* mliClientRuntimeSource = "chpl-mli-client-runtime.c";
 const char* mliServerRuntimeSource = "chpl-mli-server-runtime.c";
@@ -170,9 +169,9 @@ MLIContext::MLIContext(bool debugPrint) {
 
   this->debugPrint = debugPrint;
 
-  openCFile(&this->fiMarshalling, "chpl_mli_marshalling", "c");
-  openCFile(&this->fiClientBundle, "chpl_mli_client", "c");
-  openCFile(&this->fiServerBundle, "chpl_mli_server", "c");
+  openCFile(&this->fiMarshalling, gMultiLocaleLibMarshallingFile);
+  openCFile(&this->fiClientBundle, gMultiLocaleLibClientFile);
+  openCFile(&this->fiServerBundle, gMultiLocaleLibServerFile);
 
   INT_ASSERT(gGenInfo != NULL);
   this->info = gGenInfo;
@@ -181,12 +180,6 @@ MLIContext::MLIContext(bool debugPrint) {
 }
 
 MLIContext::~MLIContext() {
-
-  if (NULL == gMultiLocaleLibMarshallingFile) {
-    gMultiLocaleLibMarshallingFile = this->fiMarshalling.filename;
-    gMultiLocaleLibClientFile = this->fiClientBundle.filename;
-    gMultiLocaleLibServerFile = this->fiServerBundle.filename;
-  }
 
   closeCFile(&this->fiMarshalling, true);
   closeCFile(&this->fiClientBundle, true);
@@ -215,7 +208,7 @@ void MLIContext::emit(ModuleSymbol* md) {
 void MLIContext::emit(FnSymbol* fn) {
   if (!this->shouldEmit(fn)) { return; }
 
-  this->verifyPrototype(fn); 
+  this->verifyPrototype(fn);
   this->emitClientWrapper(fn);
   this->emitServerWrapper(fn);
 
@@ -292,7 +285,7 @@ void MLIContext::emitServerPrelude(void) {
   }
 
   gen += "\n";
-  
+
   this->setOutputAndWrite(&this->fiServerBundle, gen);
 
   return;
@@ -508,7 +501,7 @@ std::string MLIContext::genMarshalRoutine(Type* t, bool push) {
 
   // If we are unpacking, return our temporary.
   if (!push) { gen += "return result;\n"; }
-  
+
   gen += scope_end;
   gen += "\n";
 
@@ -528,7 +521,7 @@ void MLIContext::emitServerDispatchRoutine(void) {
 
   gen += this->genServerDispatchSwitch(this->exps);
   gen += "\n";
-  
+
   this->setOutputAndWrite(&this->fiServerBundle, gen);
 
   return;
@@ -579,7 +572,7 @@ void MLIContext::emitClientWrapper(FnSymbol* fn) {
   gen += "\n";
 
   this->write(gen);
-  
+
   return;
 }
 
@@ -607,12 +600,12 @@ void MLIContext::emitServerWrapper(FnSymbol* fn) {
 
   gen += this->genServersideRPC(fn);
   gen += "return 0;\n";
- 
+
   gen += scope_end;
   gen += "\n";
 
   this->write(gen);
- 
+
   return;
 }
 
@@ -660,7 +653,7 @@ std::string MLIContext::genServerWrapperCall(FnSymbol* fn) {
 
   return gen;
 }
-  
+
 std::string
 MLIContext::genServerDispatchSwitch(const std::vector<FnSymbol*>& fns) {
   std::string gen;
@@ -680,11 +673,11 @@ MLIContext::genServerDispatchSwitch(const std::vector<FnSymbol*>& fns) {
     gen += ": ";
 
     gen += scope_begin;
-    
+
     if (this->debugPrint) {
       gen += this->genDebugPrintCall(fn);
     }
-    
+
     gen += "err = ";
     gen += this->genServerWrapperCall(fn);
     gen += scope_end;
@@ -881,7 +874,7 @@ std::string MLIContext::genMemCleanup(Type* t, const char* var) {
   } else {
     INT_FATAL("Unsupported type %s expects deallocation", t->symbol->name);
   }
-       
+
   return gen;
 }
 
@@ -894,7 +887,7 @@ std::string MLIContext::genMarshalCall(const char* skt, const char* var,
   gen += str(id);
   gen += "(";
   gen += skt;
-  
+
   if (push) {
     gen += ",";
     gen += var;

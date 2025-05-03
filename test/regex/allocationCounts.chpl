@@ -1,9 +1,9 @@
 use Regex;
-use Memory.Diagnostics;
+use MemDiagnostics;
 
 config type t = string;
 
-var r = compile("(a+)(b+)(c+)":t);
+var r = new regex("(a+)(b+)(c+)":t);
 
 {
   writeln("Search no capture");
@@ -40,7 +40,7 @@ var r = compile("(a+)(b+)(c+)":t);
 {
   writeln("Iter Matches with capture");
   startVerboseMem();
-  for (m, a, b, c) in r.matches("abcaabbcc":t, captures=3) {
+  for (m, a, b, c) in r.matches("abcaabbcc":t, numCaptures=3) {
     assert(m.matched);
   }
   stopVerboseMem();

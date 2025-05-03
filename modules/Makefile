@@ -1,4 +1,4 @@
-# Copyright 2020-2022 Hewlett Packard Enterprise Development LP
+# Copyright 2020-2025 Hewlett Packard Enterprise Development LP
 # Copyright 2004-2019 Cray Inc.
 # Other additional copyright holders may be indicated within.
 #
@@ -21,7 +21,9 @@ export CHPL_MAKE_HOME=$(shell pwd)/..
 endif
 
 # Generate tags only if $TAGS turned on explicitly, or if $CHPL_DEVELOPER is on
-ifdef CHPL_DEVELOPER
+CHPL_DEVELOPER ?= 0
+include $(CHPL_MAKE_HOME)/make/Makefile.isTrue
+ifneq (, $(call isTrue, $(CHPL_DEVELOPER)))
 TAGS=1
 endif
 
@@ -34,8 +36,10 @@ CHPL_MAKE_HOST_TARGET = --target
 include $(CHPL_MAKE_HOME)/make/Makefile.base
 
 SYS_MODULES_DIR=standard/gen/$(CHPL_MAKE_SYS_MODULES_SUBDIR)
-SYS_CTYPES_MODULE_DOC=standard/SysCTypes.chpl
-SYS_CTYPES_MODULE=$(SYS_MODULES_DIR)/SysCTypes.chpl
+SYS_MODULES_DIR_MINIMAL=minimal/standard/gen/$(CHPL_MAKE_SYS_MODULES_SUBDIR)
+SYS_CTYPES_MODULE_DOC=standard/ChapelSysCTypes.chpl
+SYS_CTYPES_MODULE=$(SYS_MODULES_DIR)/ChapelSysCTypes.chpl
+SYS_CTYPES_MODULE_MINIMAL=$(SYS_MODULES_DIR_MINIMAL)/ChapelSysCTypes.chpl
 
 MODULE_SPHINX=${CHPL_MAKE_HOME}/modules/sphinx
 DOC_BUILD=${CHPL_MAKE_HOME}/build/doc
@@ -44,7 +48,7 @@ COPY_IF_DIFFERENT = $(CHPL_MAKE_PYTHON) $(CHPL_MAKE_HOME)/util/config/update-if-
 
 default: all
 
-all: $(SYS_CTYPES_MODULE)
+all: $(SYS_CTYPES_MODULE) $(SYS_CTYPES_MODULE_MINIMAL)
 	$(TAGS_COMMAND)
 
 clean: FORCE
@@ -63,19 +67,29 @@ $(SYS_CTYPES_MODULE): $(MAKE_SYS_BASIC_TYPES)
 	mkdir -p $(@D)
 	cd $(@D) && $(CHPL_MAKE_PYTHON) $(MAKE_SYS_BASIC_TYPES) $(@F)
 
+$(SYS_CTYPES_MODULE_MINIMAL): $(MAKE_SYS_BASIC_TYPES)
+	mkdir -p $(@D)
+	cd $(@D) && $(CHPL_MAKE_PYTHON) $(MAKE_SYS_BASIC_TYPES) --minimal $(@F)
+
 $(SYS_CTYPES_MODULE_DOC): $(MAKE_SYS_BASIC_TYPES)
 	mkdir -p $(@D)
 	cd $(@D) && $(CHPL_MAKE_PYTHON) $(MAKE_SYS_BASIC_TYPES) --doc $(@F)
 
 MODULES_TO_DOCUMENT = \
-	standard/Barriers.chpl \
+	standard/Allocators.chpl \
+	standard/AutoGpu.chpl \
+	standard/AutoMath.chpl \
 	standard/BigInteger.chpl \
 	standard/BitOps.chpl \
-	standard/ChapelEnv.chpl \
 	standard/ChapelIO.chpl \
+	standard/ChplConfig.chpl \
+	standard/Collectives.chpl \
 	standard/CommDiagnostics.chpl \
-	standard/CPtr.chpl \
-	standard/DateTime.chpl \
+	standard/Communication.chpl \
+	standard/Debugger.chpl \
+	standard/GpuDiagnostics.chpl \
+	standard/GPU.chpl \
+	standard/CTypes.chpl \
 	standard/DynamicIters.chpl \
 	standard/Errors.chpl \
 	standard/FileSystem.chpl \
@@ -83,43 +97,49 @@ MODULES_TO_DOCUMENT = \
 	standard/Heap.chpl \
 	standard/Help.chpl \
 	standard/IO.chpl \
+	standard/JSON.chpl \
 	standard/List.chpl \
 	standard/Map.chpl \
 	standard/Math.chpl \
-	standard/Memory.chpl \
-	standard/Memory/Diagnostics.chpl \
-	standard/Memory/Initialization.chpl \
+	standard/MemMove.chpl \
+	standard/MemDiagnostics.chpl \
+	standard/OS.chpl \
 	standard/Path.chpl \
 	standard/Random.chpl \
 	standard/Reflection.chpl \
 	standard/Regex.chpl \
 	standard/Set.chpl \
-	standard/Spawn.chpl \
+	standard/Sort.chpl \
 	standard/Subprocess.chpl \
-	standard/Sys.chpl \
-	standard/SysBasic.chpl \
-	standard/SysError.chpl \
 	standard/Time.chpl \
 	standard/Types.chpl \
-	standard/VectorizingIterator.chpl \
 	standard/Version.chpl \
-	$(SYS_CTYPES_MODULE_DOC)
+	standard/WeakPointer.chpl \
 
 PACKAGES_TO_DOCUMENT = \
-	packages/ArgumentParser.chpl \
 	packages/AllLocalesBarriers.chpl \
+	packages/ArgumentParser.chpl \
 	packages/AtomicObjects.chpl \
 	packages/BLAS.chpl \
 	packages/Buffers.chpl \
+	packages/Channel.chpl \
+	packages/ChplFormat.chpl \
+	packages/Collection.chpl \
 	packages/ConcurrentMap.chpl \
+	packages/CopyAggregation.chpl \
 	packages/Crypto.chpl \
 	packages/Curl.chpl \
+	packages/DistributedBag.chpl \
+	packages/DistributedBagDeprecated.chpl \
+	packages/DistributedDeque.chpl \
+	packages/DistributedIters.chpl \
 	packages/EpochManager.chpl \
 	packages/FFTW.chpl \
 	packages/FunctionalOperations.chpl \
 	packages/Futures.chpl \
 	packages/HDF5.chpl \
 	packages/HDFS.chpl \
+	packages/Image.chpl \
 	packages/LAPACK.chpl \
 	packages/LinearAlgebra.chpl \
 	packages/LinkedLists.chpl \
@@ -127,27 +147,30 @@ PACKAGES_TO_DOCUMENT = \
 	packages/LockFreeStack.chpl \
 	packages/MPI.chpl \
 	packages/NetCDF.chpl \
-	packages/SortedMap.chpl \
-	packages/SortedSet.chpl \
+	packages/NPBRandom.chpl \
+	packages/ObjectSerialization.chpl \
+	packages/ProtobufProtocolSupport.chpl \
+	packages/ParallelIO.chpl \
 	packages/PeekPoke.chpl \
+	packages/PrecisionSerializer.chpl \
+	packages/Python.chpl \
 	packages/RangeChunk.chpl \
 	packages/RecordParser.chpl \
 	packages/ReplicatedVar.chpl \
 	packages/Search.chpl \
 	packages/Socket.chpl \
-	packages/Sort.chpl \
-	packages/UnrolledLinkedList.chpl \
-	packages/VisualDebug.chpl \
-	packages/ZMQ.chpl \
-	packages/Collection.chpl \
-	packages/DistributedBag.chpl \
-	packages/DistributedDeque.chpl \
-	packages/DistributedIters.chpl \
+	packages/SortedMap.chpl \
+	packages/SortedSet.chpl \
 	packages/TOML.chpl \
+	packages/URL.chpl \
 	packages/UnitTest.chpl \
 	packages/UnorderedAtomics.chpl \
 	packages/UnorderedCopy.chpl \
-	packages/URL.chpl \
+	packages/UnrolledLinkedList.chpl \
+	packages/VisualDebug.chpl \
+	packages/YAML.chpl \
+	packages/Zarr.chpl \
+	packages/ZMQ.chpl \
 
 
 DISTS_TO_DOCUMENT = \
@@ -163,26 +186,33 @@ DISTS_TO_DOCUMENT = \
 	dists/dims/BlockDim.chpl \
 	dists/dims/ReplicatedDim.chpl \
 	layouts/LayoutCS.chpl \
+	layouts/CompressedSparseLayout.chpl \
 
 
-INTERNAL_MODULES_TO_DOCUMENT =                \
-	internal/Atomics.chpl                 \
-	internal/Bytes.chpl                   \
-	internal/ChapelArray.chpl             \
-	internal/ChapelDomain.chpl            \
-	internal/ChapelLocale.chpl            \
-	internal/ChapelRange.chpl             \
-	internal/ChapelSyncvar.chpl           \
-	internal/ChapelTuple.chpl             \
-	internal/OwnedObject.chpl             \
-	internal/SharedObject.chpl            \
-	internal/String.chpl                  \
+#
+# use absolute paths for internal modules so that the compiler can
+# determine that they're internal (and not just modules that happen to
+# live in a path named 'modules/internal/' so that they don't get
+# indexed like the user-facing modules.
+#
+INTERNAL_MODULES_TO_DOCUMENT =                        \
+	$(CHPL_MAKE_HOME)/modules/internal/Atomics.chpl       \
+	$(CHPL_MAKE_HOME)/modules/internal/Bytes.chpl         \
+	$(CHPL_MAKE_HOME)/modules/internal/ChapelArray.chpl   \
+	$(CHPL_MAKE_HOME)/modules/internal/ChapelDomain.chpl  \
+	$(CHPL_MAKE_HOME)/modules/internal/ChapelLocale.chpl  \
+	$(CHPL_MAKE_HOME)/modules/internal/ChapelRange.chpl   \
+	$(CHPL_MAKE_HOME)/modules/internal/ChapelSyncvar.chpl \
+	$(CHPL_MAKE_HOME)/modules/internal/ChapelTuple.chpl   \
+	$(CHPL_MAKE_HOME)/modules/internal/OwnedObject.chpl   \
+	$(CHPL_MAKE_HOME)/modules/internal/SharedObject.chpl  \
+	$(CHPL_MAKE_HOME)/modules/internal/String.chpl        \
 
 
 documentation: $(SYS_CTYPES_MODULE_DOC)
 	@echo "Generating module documentation with chpldoc"
 	@export CHPLDOC_AUTHOR='Hewlett Packard Enterprise Development LP' && \
-	  $(CHPLDOC) --save-sphinx ${MODULE_SPHINX} --no-html $(MODULES_TO_DOCUMENT) $(DISTS_TO_DOCUMENT) $(PACKAGES_TO_DOCUMENT) $(INTERNAL_MODULES_TO_DOCUMENT)
+	  $(CHPLDOC) --home $(CHPL_MAKE_HOME) --save-sphinx ${MODULE_SPHINX} --no-html $(MODULES_TO_DOCUMENT) $(DISTS_TO_DOCUMENT) $(PACKAGES_TO_DOCUMENT) $(INTERNAL_MODULES_TO_DOCUMENT) $(SYS_CTYPES_MODULE_DOC)
 	@echo "Running post-processing scripts"
 	@./internal/fixInternalDocs.sh ${MODULE_SPHINX}
 	@./dists/fixDistDocs.perl      ${MODULE_SPHINX}
@@ -197,7 +227,6 @@ documentation: $(SYS_CTYPES_MODULE_DOC)
 	@cp -rf ${MODULE_SPHINX}/source/modules/layouts    ${DOC_BUILD}/modules
 	@cp -rf ${DOC_RST}/meta/modules/* ${DOC_BUILD}/modules
 	@cp -rf ${MODULE_SPHINX}/source/modules/internal/* ${DOC_BUILD}/builtins
-	@cp -rf ${DOC_RST}/meta/builtins/* ${DOC_BUILD}/builtins
 	@echo "Updating generated module documentation in ${DOC_RST}"
 	@mkdir -p ${DOC_RST}/modules
 	@mkdir -p ${DOC_RST}/builtins

@@ -14,16 +14,22 @@ from utils import memoize, run_command, warning
 # It is intended to map from PrgEnv target cpus (e.g. craype-sandybridge)
 # when these names differ from the LLVM ones.
 cpu_llvm_synonyms = {
-  'knc':           'none',
-  'mic-knl':       'knl',
-  'x86-skylake':   'skylake-avx512',
-  'x86-rome':      'znver2',
-  'x86-milan':     'znver3',
-  'arm-thunderx':  'thunderx',
-  'arm-thunderx2': 'thunderx2t99',
+  'arm-thunderx':    'thunderx',
+  'arm-thunderx2':   'thunderx2t99',
+  'knc':             'none',
+  'mic-knl':         'knl',
+  'x86-cascadelake': 'cascadelake',
+  'x86-icelake':     'icelake-server',
+  'x86-milan':       'znver3',
+  'x86-milan-x':     'znver3',
+  'x86-rome':        'znver2',
+  'x86-skylake':     'skylake-avx512',
+  'x86-spr':         'sapphirerapids',
+  'x86-spr-hbm':     'sapphirerapids',
+  'x86-trento':      'znver3',
 }
 
-# This gets the generic machine type, e.g. x86_64, i686, aarch64.
+# This gets the generic machine type, e.g. x86_64, i686, aarch64, arm64.
 # Since uname returns the host machine type, we currently assume that
 # cross-compilation is limited to different subarchitectures of the
 # generic machine type.  For example, we can cross compile from
@@ -34,7 +40,7 @@ def get_native_machine():
 
 @memoize
 def is_known_arm(cpu):
-    if cpu.startswith("arm-") or ('aarch64' in cpu) or ('thunderx' in cpu):
+    if cpu.startswith("arm") or ('aarch64' in cpu) or ('thunderx' in cpu):
         return True
     else:
         return False
@@ -65,12 +71,13 @@ def get_module_lcd_cpu(platform_val, cpu):
             return "arm-thunderx2"
         else:
             return "sandybridge"
-    elif platform_val == "hpe-cray-ex":
+    elif chpl_platform.is_hpe_cray('target'):
         if is_known_arm(cpu):
             return "none"    # we don't know what we need here yet
         else:
             cray_network = os.environ.get('CRAYPE_NETWORK_TARGET', 'none')
             if cray_network.startswith("slingshot") or cray_network == "ofi":
+                # TODO: this is not always true, it just means this has a PrgEnv module
                 return "x86-rome"       # We're building on an HPE Cray EX system!
             else:
                 return "sandybridge"    # We're still building on an XC.
@@ -99,8 +106,7 @@ def adjust_cpu_for_compiler(cpu, flag, get_lcd):
         else:
             # for C compilation, CPU needs to be set by cray-prgenv-*
             # and not by e.g. CHPL_TARGET_CPU.
-            cpu = cray_cpu
-            if has_cpu:
+            if has_cpu and cpu != cray_cpu:
                 warning("Setting the processor type through environment "
                         "variables is not supported for cray-prgenv-*. "
                         "Please use the appropriate craype-* module for your "
@@ -109,6 +115,7 @@ def adjust_cpu_for_compiler(cpu, flag, get_lcd):
                 warning("No craype-* processor type module was detected, "
                         "please load the appropriate one if you want any "
                         "specialization to occur.")
+            cpu = cray_cpu
 
         if get_lcd:
             cpu = get_module_lcd_cpu(platform_val, cpu)
@@ -187,6 +194,17 @@ def get(flag, map_to_compiler=False, get_lcd=False):
 
     return cpu_tuple(argname or 'none', cpu or 'unknown')
 
+@memoize
+def get_llvm_target_cpu():
+    cpu_tuple = collections.namedtuple('cpu_tuple', ['flag', 'cpu'])
+
+    x = get('target')
+    cpu = x.cpu
+    argname = x.flag
+    # support additional cpu synonyms for llvm
+    if cpu in cpu_llvm_synonyms:
+        cpu = cpu_llvm_synonyms[cpu]
+    return cpu_tuple(argname or 'none', cpu or 'unknown')
 
 # Returns the default machine.  The flag argument is 'host' or 'target'.
 #

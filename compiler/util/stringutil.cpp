@@ -1,5 +1,5 @@
 /*
- * Copyright 2020-2022 Hewlett Packard Enterprise Development LP
+ * Copyright 2020-2025 Hewlett Packard Enterprise Development LP
  * Copyright 2004-2019 Cray Inc.
  * Other additional copyright holders may be indicated within.
  *
@@ -25,7 +25,8 @@
 #include "stringutil.h"
 
 #include "baseAST.h"
-#include "chpl/queries/Context.h"
+#include "chpl/framework/Context.h"
+#include "chpl/util/string-utils.h"
 #include "driver.h"
 #include "map.h"
 #include "misc.h"
@@ -55,6 +56,11 @@ const char* astr(const std::string& s)
 {
   return astr(s.c_str());
 }
+const char* astr(std::string_view s)
+{
+  // Make a std::string copy of the string_view to guarantee null termination.
+  return astr(std::string(s));
+}
 const char* astr(UniqueString s)
 {
   return s.astr(gContext);
@@ -63,7 +69,7 @@ const char* astr(UniqueString s)
 const char*
 istr(int i) {
   char s[64];
-  if (sprintf(s, "%d", i) > 63)
+  if (snprintf(s, sizeof(s), "%d", i) > 63)
     INT_FATAL("istr buffer overflow");
   return astr(s);
 }
@@ -96,8 +102,8 @@ const char* asubstr(const char* s, const char* e) {
     }                                                             \
     type##_t val;                                                 \
     int numitems = sscanf(str, format, &val);                     \
-    char checkStr[len+1];                                         \
-    snprintf(checkStr, len+1, format, val);                       \
+    auto checkStr = std::make_unique<char[]>(len+1);              \
+    snprintf(checkStr.get(), len+1, format, val);                 \
     if (numitems != 1) {                                          \
       INT_FATAL("Illegal string passed to strTo_" #type "()");    \
     }                                                             \
@@ -106,14 +112,14 @@ const char* asubstr(const char* s, const char* e) {
     while (str[startPos] == '0' && startPos < len-1) {            \
       startPos++;                                                 \
     }                                                             \
-    if (strcmp(str+startPos, checkStr) != 0) {                    \
+    if (strcmp(str+startPos, checkStr.get()) != 0) {              \
       if (userSupplied) {                                         \
         astlocT astloc(line, filename);                           \
-        USR_FATAL(astloc, "Integer literal overflow: %s is too"   \
-                  " big for type " #type, str);                   \
+        USR_FATAL(astloc, "Integer literal overflow: '%s' is too" \
+                  " big for type '" #type "'", str);              \
       } else {                                                    \
-        INT_FATAL("Integer literal overflow: %s is too "          \
-                  "big for type " #type, str);                    \
+        INT_FATAL("Integer literal overflow: '%s' is too "        \
+                  "big for type '" #type "'", str);               \
       }                                                           \
     }                                                             \
     return val;                                                   \
@@ -148,10 +154,10 @@ uint64_t binStr2uint64(const char* str, bool userSupplied,
     if (userSupplied) {
       astlocT astloc(line, filename);
       USR_FATAL(astloc, "Integer literal overflow: '%s' is too big "
-                "for type uint64", str);
+                "for a 64-bit unsigned integer", str);
     } else {
       INT_FATAL("Integer literal overflow: '%s' is too big "
-                "for type uint64", str);
+                "for a 64-bit unsigned integer", str);
     }
   }
   uint64_t val = 0;
@@ -190,10 +196,10 @@ uint64_t octStr2uint64(const char* str, bool userSupplied,
     if (userSupplied) {
       astlocT astloc(line, filename);
       USR_FATAL(astloc, "Integer literal overflow: '%s' is too big "
-                "for type uint64", str);
+                "for a 64-bit unsigned integer", str);
     } else {
       INT_FATAL("Integer literal overflow: '%s' is too big "
-                "for type uint64", str);
+                "for a 64-bit unsigned integer", str);
     }
   }
 
@@ -225,10 +231,10 @@ uint64_t hexStr2uint64(const char* str, bool userSupplied,
     if (userSupplied) {
       astlocT astloc(line, filename);
       USR_FATAL(astloc, "Integer literal overflow: '%s' is too big "
-                "for type uint64", str);
+                "for a 64-bit unsigned integer", str);
     } else {
       INT_FATAL("Integer literal overflow: '%s' is too big "
-                "for type uint64", str);
+                "for a 64-bit unsigned integer", str);
     }
   }
 
@@ -403,5 +409,5 @@ void removeTrailingNewlines(std::string& str) {
 }
 
 bool startsWith(const char* str, const char* prefix) {
-  return (0 == strncmp(str, prefix, strlen(prefix)));
+  return chpl::startsWith(str, prefix);
 }

@@ -8,7 +8,7 @@ if pipes then
   buffer = true;
 
 var process = if pipes
-              then spawn(['ls', 'two-waits.chpl'], stdout=PIPE, stderr=PIPE)
+              then spawn(['ls', 'two-waits.chpl'], stdout=pipeStyle.pipe, stderr=pipeStyle.pipe)
               else spawn(['ls', 'two-waits.chpl']);
 
 
@@ -23,6 +23,6 @@ process.wait(buffer=buffer);
 
 if pipes {
   var s:string;
-  process.stdout.readline(s);
+  process.stdout.readLine(s);
   write(s);
 }

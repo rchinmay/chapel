@@ -1,16 +1,16 @@
 /*
- * Copyright 2020-2022 Hewlett Packard Enterprise Development LP
+ * Copyright 2020-2025 Hewlett Packard Enterprise Development LP
  * Copyright 2004-2019 Cray Inc.
  * Other additional copyright holders may be indicated within.
- * 
+ *
  * The entirety of this work is licensed under the Apache License,
  * Version 2.0 (the "License"); you may not use this file except
  * in compliance with the License.
- * 
+ *
  * You may obtain a copy of the License at
- * 
+ *
  *     http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -85,8 +85,6 @@ static volatile task_pool_p
                            task_pool_tail;     // tail of task pool
 
 static int                 queued_task_cnt;    // number of tasks in task pool
-static atomic_uint_least64_t
-                           blocked_task_cnt;   // number of blocked tasks
 static int                 idle_thread_cnt;    // number of threads looking
                                                //   for work
 
@@ -144,7 +142,6 @@ static void sync_wait_and_lock(chpl_sync_aux_t *s,
   suspend_using_cond = (chpl_thread_getNumThreads() >=
                         chpl_topo_getNumCPUsLogical(true));
 
-  chpl_bool waited = false;
   while (s->is_full != want_full) {
     if (!suspend_using_cond) {
       chpl_thread_mutexUnlock(&s->lock);
@@ -157,14 +154,6 @@ static void sync_wait_and_lock(chpl_sync_aux_t *s,
     } while (s->is_full != want_full);
     if (!suspend_using_cond)
       chpl_thread_mutexLock(&s->lock);
-    if (!waited) {
-      waited = true;
-      (void) atomic_fetch_add_uint_least64_t(&blocked_task_cnt, 1);
-    }
-  }
-
-  if (waited) {
-    (void) atomic_fetch_sub_uint_least64_t(&blocked_task_cnt, 1);
   }
 }
 
@@ -275,7 +264,7 @@ static void setup_main_thread_private_data(void)
                              .is_executeOn    = false,
                              .lineno          = 0,
                              .filename        = CHPL_FILE_IDX_MAIN_PROGRAM,
-                             .requestedSubloc = c_sublocid_any_val,
+                             .requestedSubloc = c_sublocid_none_val,
                              .requested_fid   = FID_NONE,
                              .requested_fn    = NULL,
                              .id              = get_next_task_id(),
@@ -291,7 +280,6 @@ void chpl_task_init(void) {
   chpl_thread_mutexInit(&threading_lock);
   chpl_thread_mutexInit(&task_id_lock);
   queued_task_cnt = 0;
-  atomic_init_uint_least64_t(&blocked_task_cnt, 0);
   idle_thread_cnt = 0;
   task_pool_head = task_pool_tail = NULL;
 
@@ -422,7 +410,7 @@ void chpl_task_stdModulesInitialized(void) {
 }
 
 
-int chpl_task_createCommTask(chpl_fn_p fn, void* arg) {
+int chpl_task_createCommTask(chpl_fn_p fn, void* arg, int cpu) {
   comm_task_fn = fn;
   return chpl_thread_createCommThread(comm_task_wrapper, arg);
 }
@@ -447,7 +435,7 @@ static void comm_task_wrapper(void* arg) {
                              .is_executeOn    = false,
                              .lineno          = 0,
                              .filename        = CHPL_FILE_IDX_COMM_TASK,
-                             .requestedSubloc = c_sublocid_any_val,
+                             .requestedSubloc = c_sublocid_none_val,
                              .requested_fid   = FID_NONE,
                              .requested_fn    = NULL,
                              .id              = get_next_task_id(),
@@ -505,7 +493,7 @@ void chpl_task_addTask(chpl_fn_int_t fid,
                        chpl_task_bundle_t* arg, size_t arg_size,
                        c_sublocid_t subloc,
                        int lineno, int32_t filename) {
-  assert(subloc == c_sublocid_any);
+  assert(subloc == c_sublocid_none);
 
   arg->kind = CHPL_ARG_BUNDLE_KIND_TASK;
 
@@ -659,14 +647,6 @@ chpl_bool chpl_task_guardPagesInUse(void) {
   return chpl_use_guard_page;
 }
 
-uint32_t chpl_task_getNumQueuedTasks(void) {
-  return queued_task_cnt;
-}
-
-int32_t chpl_task_getNumBlockedTasks(void) {
-  return atomic_load_uint_least64_t(&blocked_task_cnt);
-}
-
 
 // Internal utility functions for task management
 
@@ -687,7 +667,7 @@ static chpl_taskID_t get_next_task_id(void) {
 
 
 //
-// Get the the thread private data pointer for my thread.
+// Get the thread private data pointer for my thread.
 //
 static inline
 thread_private_data_t* get_thread_private_data(void) {
@@ -897,15 +877,15 @@ static void maybe_add_thread(void) {
       uint32_t num_threads = chpl_thread_getNumThreads();
       char msg[256];
       if (max_threads)
-        sprintf(msg,
-                "max threads per locale is %" PRId32
-                ", but unable to create more than %d threads",
-                max_threads, num_threads);
+        snprintf(msg, sizeof(msg),
+                 "max threads per locale is %" PRId32
+                 ", but unable to create more than %d threads",
+                 max_threads, num_threads);
       else
-        sprintf(msg,
-                "max threads per locale is unbounded"
-                ", but unable to create more than %d threads",
-                num_threads);
+        snprintf(msg, sizeof(msg),
+                 "max threads per locale is unbounded"
+                 ", but unable to create more than %d threads",
+                 num_threads);
       chpl_warning(msg, 0, 0);
       warning_issued = true;
     }
@@ -949,7 +929,7 @@ task_pool_p add_to_task_pool(chpl_fn_int_t fid, chpl_fn_p fp,
     { .is_executeOn    = is_executeOn,
       .lineno          = lineno,
       .filename        = filename,
-      .requestedSubloc = c_sublocid_any_val,
+      .requestedSubloc = c_sublocid_none_val,
       .requested_fid   = fid,
       .requested_fn    = fp,
       .id              = get_next_task_id(),
@@ -981,15 +961,4 @@ task_pool_p add_to_task_pool(chpl_fn_int_t fid, chpl_fn_p fp,
   }
 
   return ptask;
-}
-
-
-// Threads
-
-uint32_t chpl_task_getNumThreads(void) {
-  return chpl_thread_getNumThreads();
-}
-
-uint32_t chpl_task_getNumIdleThreads(void) {
-  return idle_thread_cnt;
 }

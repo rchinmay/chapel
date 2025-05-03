@@ -1,16 +1,16 @@
 /*
- * Copyright 2020-2022 Hewlett Packard Enterprise Development LP
+ * Copyright 2020-2025 Hewlett Packard Enterprise Development LP
  * Copyright 2004-2019 Cray Inc.
  * Other additional copyright holders may be indicated within.
- * 
+ *
  * The entirety of this work is licensed under the Apache License,
  * Version 2.0 (the "License"); you may not use this file except
  * in compliance with the License.
- * 
+ *
  * You may obtain a copy of the License at
- * 
+ *
  *     http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -25,6 +25,7 @@
 
 #include <sys/types.h>
 #include <stdlib.h>
+#include <string.h>
 #include <inttypes.h>
 #include <wchar.h>
 
@@ -225,6 +226,44 @@ int chpl_enc_validate_buf(const char *buf, ssize_t buflen, int64_t *num_cp) {
     *num_cp += 1;
   }
   return 0;  // valid
+}
+
+/*
+ * Returns the codepoint at index, encoded in UTF-8. The returned buffer must be
+ * freed by the caller, and can be used as a string buffer.
+ *
+ * :arg buf: A UTF-8 string buffer
+ * :arg idx: The codepoint's index
+ *
+ * :returns: A new UTF-8 encoded buffer
+ */
+static inline
+char* chpl_enc_codepoint_at_idx(const char* buf,
+                                ssize_t idx) {
+  int32_t cp = 0;
+  int nbytes = 0;
+
+  ssize_t buflen = strlen(buf);
+  int offset = 0;
+  int at_char = -1;
+
+  while (offset<buflen) {
+    // you can create a chapel string with a codepoint that represents an
+    // escaped byte, so the last argument is true
+    if (chpl_enc_decode_char_buf_utf8(&cp, &nbytes, buf+offset,
+                                      buflen-offset, true) != 0) {
+      return NULL;
+    }
+    at_char += 1;
+    if (at_char == idx) {
+      break;
+    }
+    offset += nbytes;
+  }
+
+  char* ret_val = (char*)calloc((nbytes+1), sizeof(unsigned char));
+  memcpy(ret_val, buf+offset, nbytes);
+  return ret_val;
 }
 
 #ifdef __cplusplus

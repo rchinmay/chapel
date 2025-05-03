@@ -1,13 +1,16 @@
 use BlockDist;
+use GpuDiagnostics;
+
 
 config const n = 10;
 
-on here.getChild(1) {
+startGpuDiagnostics();
+on here.gpus[0] {
   var space = {1..n};
-  var dom = space dmapped Block(space, targetLocales=[here,]);
+  var dom = space dmapped new blockDist(space, targetLocales=[here,]);
   var arr: [dom] int;
 
-  forall i in dom do
+  forall i in dom with (ref arr) do
     arr[i] = 1;
 
   /* The following does not work yet:
@@ -17,5 +20,15 @@ on here.getChild(1) {
 
   */
 
-  writeln(arr);
+  writeln(arr[1]);
+
+  /* The following does not work yet:
+
+     writeln(arr);
+
+  */
 }
+
+stopGpuDiagnostics();
+
+assertGpuDiags(kernel_launch_um=4, kernel_launch_aod=6);

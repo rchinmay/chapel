@@ -4,7 +4,7 @@
 Using the Chapel Allocator from C
 =================================
 
-The Chapel runtime will select an allocator according to the ``CHPL_MEM``
+The Chapel runtime will select an allocator according to the ``CHPL_TARGET_MEM``
 environment variable. See :ref:`readme-chplenv` for details on how that
 works.  The default is usually the system allocator (ie malloc/free as
 supported by the C compiler and runtime) but some configurations use a
@@ -109,21 +109,20 @@ allocation functions:
     }
   }
 
-  // SysBasic provides c_calloc and c_free to call the Chapel allocator
+  // CTypes provides allocate and deallocate to call the Chapel allocator
   // directly for C interoperability purposes
-  use SysBasic;
+  use CTypes;
 
   // Allocate using the system allocator (malloc)
   var x = mymalloc();
 
   writeln(x.deref());
 
-  // Free using the Chapel allocator - c_free calls the Chapel free function
-  // directly. It's named c_free because it's meant to be used for C
-  // interoperability purposes.
+  // Free using the Chapel allocator - deallocate calls the Chapel free function
+  // directly.
   // This will generally cause a core dump unless:
   //   * you have configured Chapel to use the system allocator, or
   //   * you link this program with -lchplmalloc
-  c_free(x);
+  deallocate(x);
 
 

@@ -1,4 +1,4 @@
-use CPtr;
+use CTypes;
 
 // This code is dereved from issue github issue #15817.
 // At the time it was written it was failing to compile
@@ -11,7 +11,7 @@ use CPtr;
 record R {
   type T;
   var beta: T;
-  proc kernel(x: c_ptr) {
+  proc kernel(x: c_ptr(?)) {
     var dist: T = 0:T;
     dist += x[0]**this.beta;
     return 0.5:T;

@@ -8,9 +8,9 @@
  * could determine a ranking of the particles within each octant.
  */
 
-public use counts;
+use counts;
 
-class scanCountsInherit : counts {
+class scanCountsInherit : counts(?) {
   // Track the current value, so it can be used in generate() method. Use min()
   // as arbitrary default value here, in lieu of no "default of type" support
   // for user code.

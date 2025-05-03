@@ -33,21 +33,13 @@ function helper() {
   msg=$1
   args=$2
   good=$3
-  good2=$4
 
   outFile=out.c2chapel.tmp
   diffFile=diff.c2chapel.tmp
 
-  if [ -z "$good2" ]; then
-    # it will just diff against the one good file twice, harmlessly
-    good2=$good
-  fi
-
   printf "%s: " "$msg"
   "$C2CHAPEL" $args > $outFile 2>&1
   if diff $outFile $good > $diffFile 2>&1; then
-    printf "${GREEN}OK${NORMAL}\n"
-  elif diff $outFile $good2 > $diffFile 2>&1; then
     printf "${GREEN}OK${NORMAL}\n"
   else
     printf "${RED}ERROR${NORMAL}\n"
@@ -64,7 +56,7 @@ function helper() {
 
 echo "Testing c2chapel..."
 
-helper "No arguments" "" "no-args.good" "no-args.2.good"
+helper "No arguments" "" "no-args.good"
 helper "--help" "--help" "help.good"
 helper "File not found" "notFound.h" "notFound.good"
 

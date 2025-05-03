@@ -1,5 +1,5 @@
 /*
- * Copyright 2020-2022 Hewlett Packard Enterprise Development LP
+ * Copyright 2020-2025 Hewlett Packard Enterprise Development LP
  * Copyright 2004-2019 Cray Inc.
  * Other additional copyright holders may be indicated within.
  *
@@ -23,6 +23,7 @@
 #include "AggregateType.h"
 #include "caches.h"
 #include "callInfo.h"
+#include "CatchStmt.h"
 #include "DecoratedClassType.h"
 #include "driver.h"
 #include "expandVarArgs.h"
@@ -36,12 +37,16 @@
 #include "stmt.h"
 #include "stringutil.h"
 #include "symbol.h"
+#include "TryStmt.h"
 #include "view.h"
 #include "visibleFunctions.h"
 #include "wellknown.h"
 #include "wrappers.h"
+#include <llvm/ADT/SmallVector.h>
 
-static void resolveInitCall(CallExpr* call, AggregateType* newExprAlias = NULL, bool forNewExpr = false);
+static void resolveInitCall(CallExpr* call, bool emitCallResolutionErrors,
+                            AggregateType* newExprAlias = NULL,
+                            bool forNewExpr = false);
 
 static void gatherInitCandidates(CallInfo&                  info,
                                  Vec<FnSymbol*>&            visibleFns,
@@ -52,7 +57,7 @@ static void resolveInitializerMatch(FnSymbol* fn);
 static void makeRecordInitWrappers(CallExpr* call);
 
 static void makeActualsVector(const CallInfo&          info,
-                              std::vector<ArgSymbol*>& actualIdxToFormal);
+                              llvm::SmallVectorImpl<ArgSymbol*>& actualIdxToFormal);
 
 static AggregateType* resolveNewFindType(CallExpr* newExpr);
 
@@ -62,12 +67,13 @@ static AggregateType* resolveNewFindType(CallExpr* newExpr);
 *                                                                             *
 ************************************** | *************************************/
 
-FnSymbol* resolveInitializer(CallExpr* call) {
+FnSymbol*
+resolveInitializer(CallExpr* call, bool emitCallResolutionErrors) {
   FnSymbol* retval = NULL;
 
   callStack.add(call);
 
-  resolveInitCall(call);
+  resolveInitCall(call, emitCallResolutionErrors);
 
   // call->isResolved() is sometimes false on this.init() calls for generic
   // records, as it might be a partial call that needs to get adjusted in order
@@ -110,16 +116,44 @@ FnSymbol* resolveInitializer(CallExpr* call) {
   return retval;
 }
 
-static std::map<FnSymbol*,FnSymbol*> newWrapperMap;
+/* This is a helper to buildNewWrapper() that recursively takes care
+   of de-initializing fields in the event that an 'init()' or
+   'postinit()' throws */
+static void helpDeinitFields(AggregateType* type, VarSymbol* _this,
+                             BlockStmt* body) {
+  if (type == NULL) {
+    INT_FATAL("helpDeinitFields() isn't designed to take 'NULL' types");
+  }
+
+  for_fields(field, type) {
+    if (isRecord(field->type) && !field->hasFlag(FLAG_TYPE_VARIABLE)) {
+      body->insertAtHead(new CallExpr("deinit", gMethodToken,
+                           new CallExpr(PRIM_GET_MEMBER, _this, field)));
+    } else if (field->hasFlag(FLAG_SUPER_CLASS) && field->type != dtObject) {
+      // explicitly recurse over fields rather than calling super->deinit
+      // to avoid re-deinit'ing 'this'
+      helpDeinitFields(toAggregateType(field->type), _this, body);
+    }
+  }
+}
+
+// This is a map from the original initializer to the new wrapper
+// The map is keyed by the FnSymbol of the original initializer and the expr of
+//   the allocator (if any)
+// The value is the '_new' wrapped initializer
+static std::map<std::pair<FnSymbol*,Expr*>,FnSymbol*> newWrapperMap;
 
 // Note: The wrapper for classes always returns unmanaged
 // Note: A wrapper might be generated for records in the case of promotion
-static FnSymbol* buildNewWrapper(FnSymbol* initFn) {
+static FnSymbol* buildNewWrapper(FnSymbol* initFn, Expr* allocator = nullptr) {
   SET_LINENO(initFn);
 
+  // TODO: allocator needs to be threaded through as a formal and an actual
   AggregateType* type = toAggregateType(initFn->_this->getValType());
-  if (newWrapperMap.find(initFn) != newWrapperMap.end()) {
-    return newWrapperMap[initFn];
+  if (newWrapperMap.find({initFn, allocator}) != newWrapperMap.end()) {
+    // TODO: this should use a ptr to a symbol, not a Expr
+    // the Expr will either be NULL or always a new pointer
+    return newWrapperMap[std::make_pair(initFn, allocator)];
   }
 
   FnSymbol* fn = new FnSymbol(astrNew);
@@ -144,6 +178,11 @@ static FnSymbol* buildNewWrapper(FnSymbol* initFn) {
   fn->insertFormalAtTail(chpl_t);
 
   SymbolMap initToNewMap;
+  ArgSymbol* allocatorFormal = nullptr;
+  if (isClass(type) && allocator != nullptr) {
+    allocatorFormal = new ArgSymbol(INTENT_BLANK, "allocator_formal", allocator->typeInfo());
+    fn->insertFormalAtTail(allocatorFormal);
+  }
   for_formals(formal, initFn) {
     if (formal != initFn->_this && formal->type != dtMethodToken) {
       ArgSymbol* newArg = formal->copy();
@@ -166,14 +205,61 @@ static FnSymbol* buildNewWrapper(FnSymbol* initFn) {
 
   body->insertAtTail(new DefExpr(initTemp));
   if (isClass(type)) {
-    body->insertAtTail(new CallExpr(PRIM_MOVE, initTemp, callChplHereAlloc(type)));
-    body->insertAtTail(new CallExpr(PRIM_SETCID, initTemp));
+    if (allocatorFormal != nullptr) {
+      body->insertAtTail(new CallExpr(PRIM_MOVE, initTemp, callChplHereAllocWithAllocator(type, new SymExpr(allocatorFormal))));
+    } else {
+      body->insertAtTail(new CallExpr(PRIM_MOVE, initTemp, callChplHereAlloc(type)));
+    }
   }
-  body->insertAtTail(innerInit);
 
-  if (type->hasPostInitializer() == true) {
-    body->insertAtTail(new CallExpr("postinit", gMethodToken, initTemp));
+  // If either the initializer throws, or the postinit throws, make
+  // this function representing the 'new' throw as well
+  if (initFn->throwsError() ||
+      (type->hasPostInitializer() && type->postinit->throwsError())) {
+    fn->throwsErrorInit();
+    BlockStmt* tryBody = new BlockStmt(innerInit);
+    if (type->hasPostInitializer() == true) {
+      tryBody->insertAtTail(new CallExpr("postinit", gMethodToken, initTemp));
+    }
+
+    const char* errorName = astr("e");
+    BlockStmt* catchBody = new BlockStmt(callChplHereFree(initTemp));
+    VarSymbol* error = new VarSymbol(errorName);
+    DefExpr* errorDef = new DefExpr(error);
+
+    // recreate body of CatchStmt::cleanup() so that it can be well formed (for
+    // now)
+    VarSymbol* casted = newTemp();
+    Expr* castedCurrent = new CallExpr(PRIM_CURRENT_ERROR);
+    DefExpr* castedDef = new DefExpr(casted, castedCurrent);
+    Expr* nonNilC = new CallExpr(PRIM_TO_NON_NILABLE_CLASS, casted);
+    Expr* toOwned = new CallExpr(PRIM_NEW,
+                                 new CallExpr(new SymExpr(dtOwned->symbol),
+                                              nonNilC));
+
+    // deinitialize fields, including the 'super' field / parent class
+    helpDeinitFields(type, initTemp, catchBody);
+
+    errorDef->init = toOwned;
+    catchBody->insertAtHead(errorDef);
+    catchBody->insertAtHead(castedDef);
+
+    CallExpr* rethrow = new CallExpr(PRIM_THROW,
+                                     new SymExpr(error));
+    catchBody->insertAtTail(rethrow);
+
+    TryStmt* tryInit = new TryStmt(false, tryBody,
+                                   new BlockStmt(CatchStmt::build(errorName,
+                                                                  catchBody)));
+    body->insertAtTail(tryInit);
+
+  } else {
+    body->insertAtTail(innerInit);
+    if (type->hasPostInitializer() == true) {
+      body->insertAtTail(new CallExpr("postinit", gMethodToken, initTemp));
+    }
   }
+
 
   VarSymbol* result = newTemp();
   Expr* resultExpr = NULL;
@@ -196,7 +282,7 @@ static FnSymbol* buildNewWrapper(FnSymbol* initFn) {
 
   normalize(fn);
 
-  newWrapperMap[initFn] = fn;
+  newWrapperMap[std::make_pair(initFn, allocator)] = fn;
 
   return fn;
 }
@@ -257,6 +343,7 @@ static CallExpr* buildInitCall(CallExpr* newExpr,
 
   VarSymbol* tmp = newTemp("initTemp", rootType);
   CallExpr* call = new CallExpr("init", gMethodToken, new NamedExpr("this", new SymExpr(tmp)));
+  call->tryTag = newExpr->tryTag;
 
   insertNamedInstantiationInfo(newExpr, call, at);
 
@@ -279,7 +366,8 @@ static CallExpr* buildInitCall(CallExpr* newExpr,
 
   // Find the correct 'init' function without wrapping/promoting
   AggregateType* alias = at == rootType ? NULL : at;
-  resolveInitCall(call, alias, true);
+  const bool emitCallResolutionErrors = true;
+  resolveInitCall(call, emitCallResolutionErrors, alias, true);
   resolveInitializerMatch(call->resolvedFunction());
   tmp->type = call->resolvedFunction()->_this->getValType();
   resolveTypeWithInitializer(toAggregateType(tmp->type), call->resolvedFunction());
@@ -298,6 +386,17 @@ static CallExpr* buildInitCall(CallExpr* newExpr,
     USR_FATAL_CONT(call, "initializer produces a different type");
     USR_PRINT(call, "new was provided type '%s'", toString(at));
     USR_PRINT(call, "init resulted in type '%s'", toString(tmp->type));
+  }
+
+  // Avoid a potential access of uninitialized memory in the case where the
+  // record has a bool field.  C will pad around boolean fields, but that memory
+  // cannot normally be updated - without explicitly zero initializing it,
+  // valgrind will complain when we use it to create the hash to ensure inferred
+  // const ref arguments are not implicitly modified.
+  if (isRecord(tmp->type)) {
+    if (fWarnUnstable && !fNoConstArgChecks) {
+      call->insertBefore(new CallExpr(PRIM_ZERO_VARIABLE, new SymExpr(tmp)));
+    }
   }
 
   return call;
@@ -327,18 +426,33 @@ void resolveNewInitializer(CallExpr* newExpr, Type* manager) {
   bool nilable = isNilableClassType(manager);
   if (isManagedPtrType(manager))
     manager = getManagedPtrManagerType(manager);
-  else if (manager == dtBorrowedNilable)
-    manager = dtBorrowed;
   else if (manager == dtUnmanagedNilable)
     manager = dtUnmanaged;
 
-  INT_ASSERT(newExpr->isPrimitive(PRIM_NEW));
+  // there is also a post-parse check for this, but it can only catch `new borrowed C()`
+  // this also catches `type T = borrowed C; new T()`
+  if (manager == dtBorrowed || manager == dtBorrowedNilable) {
+    USR_FATAL_CONT(newExpr, "cannot create a 'borrowed' object using 'new'");
+  }
+
+  INT_ASSERT(isNewLike(newExpr));
   AggregateType* at = resolveNewFindType(newExpr);
 
   BlockStmt* block = new BlockStmt(BLOCK_SCOPELESS);
   Expr* stmt = newExpr->getStmtExpr();
   stmt->insertBefore(block);
 
+
+  // pull out the allocator before `buildInitCall`
+  Expr* allocator = nullptr;
+  if (newExpr->isPrimitive(PRIM_NEW_WITH_ALLOCATOR)) {
+    if (!isClass(at)) {
+      USR_FATAL_CONT(newExpr, "cannot use an allocator with non-class types");
+    }
+
+    allocator = newExpr->get(1)->copy();
+    newExpr->get(1)->remove();
+  }
   CallExpr* initCall = buildInitCall(newExpr, at, block);
   FnSymbol* initFn = initCall->resolvedFunction();
   Symbol* initTemp = toSymExpr(toNamedExpr(initCall->get(2))->actual)->symbol();
@@ -349,16 +463,19 @@ void resolveNewInitializer(CallExpr* newExpr, Type* manager) {
     info.haltNotWellFormed();
   }
 
-  std::vector<ArgSymbol*> actualIdxToFormal;
+  llvm::SmallVector<ArgSymbol*, 8> actualIdxToFormal;
 
   makeActualsVector(info, actualIdxToFormal);
 
   if (isClass(at) || isPromotionRequired(initFn, info, actualIdxToFormal)) {
-    FnSymbol* newWrapper = buildNewWrapper(initFn);
+    FnSymbol* newWrapper = buildNewWrapper(initFn, allocator);
 
     initCall->setResolvedFunction(newWrapper);
     initCall->get(2)->remove(); // 'this'
     initCall->get(1)->remove(); // '_mt'
+    if (allocator) {
+      initCall->insertAtHead(allocator);
+    }
     initCall->insertAtHead(new SymExpr(initType->symbol));
     CallExpr* newCall = toCallExpr(initCall->remove());
 
@@ -433,10 +550,6 @@ void resolveNewInitializer(CallExpr* newExpr, Type* manager) {
     resolveBlockStmt(block);
     newExpr->convertToNoop();
 
-    // If not flattened, the hidden owned temporary for 'new borrowed' might
-    // be auto-destroyed at the end of the block.
-    block->flattenAndRemove();
-
     if (inArgSymbol) {
       // Need to insert an initCopy for promoted new-expressions in order to
       // turn an iterator record into an array.
@@ -477,7 +590,9 @@ void resolveNewInitializer(CallExpr* newExpr, Type* manager) {
 *                                                                             *
 ************************************** | *************************************/
 
-static void resolveInitCall(CallExpr* call, AggregateType* newExprAlias, bool forNewExpr) {
+static void resolveInitCall(CallExpr* call, bool emitCallResolutionErrors,
+                            AggregateType* newExprAlias,
+                            bool forNewExpr) {
   CallInfo info;
 
   if (call->id == breakOnResolveID) {
@@ -516,12 +631,14 @@ static void resolveInitCall(CallExpr* call, AggregateType* newExprAlias, bool fo
           // In the future, the compiler should not be attempting to resolve
           // an already-resolved call.
           bool existingErrors = fatalErrorsEncountered();
-          if (newExprAlias != NULL) {
+          if (newExprAlias != NULL && emitCallResolutionErrors) {
             USR_FATAL_CONT(call, "Unable to resolve new-expression with type alias '%s'", newExprAlias->symbol->name);
           }
           if (!inGenerousResolutionForErrors()) {
             startGenerousResolutionForErrors();
-            resolveInitCall(call, newExprAlias, /*forNewExpr*/ false);
+            const bool forNewExpr = false;
+            resolveInitCall(call, emitCallResolutionErrors, newExprAlias,
+                            forNewExpr);
             FnSymbol* retry = call->resolvedFunction();
             stopGenerousResolutionForErrors();
 
@@ -529,12 +646,14 @@ static void resolveInitCall(CallExpr* call, AggregateType* newExprAlias, bool fo
               clearFatalErrors();
           }
         } else {
-          if (candidates.n == 0) {
-            printResolutionErrorUnresolved(info, mostApplicable);
+          if (emitCallResolutionErrors) {
+            if (candidates.n == 0) {
+              printResolutionErrorUnresolved(info, mostApplicable);
 
-            USR_STOP();
-          } else {
-            printResolutionErrorAmbiguous (info, candidates);
+              USR_STOP();
+            } else {
+              printResolutionErrorAmbiguous (info, candidates);
+            }
           }
         }
       }
@@ -542,7 +661,8 @@ static void resolveInitCall(CallExpr* call, AggregateType* newExprAlias, bool fo
     } else {
       instantiateBody(best->fn);
 
-      if (explainCallLine != 0 && explainCallMatch(call) == true) {
+      if (explainCallLine != 0 && explainCallMatch(call) == true &&
+          emitCallResolutionErrors) {
         USR_PRINT(best->fn, "best candidate is: %s", toString(best->fn));
       }
 
@@ -551,9 +671,10 @@ static void resolveInitCall(CallExpr* call, AggregateType* newExprAlias, bool fo
 
         call->baseExpr->replace(new SymExpr(best->fn));
 
-        checkForStoringIntoTuple(call, best->fn);
-
-        resolveNormalCallCompilerWarningStuff(call, best->fn);
+        if (emitCallResolutionErrors) {
+          checkForStoringIntoTuple(call, best->fn);
+          resolveNormalCallCompilerWarningStuff(call, best->fn);
+        }
       }
     }
 
@@ -561,7 +682,7 @@ static void resolveInitCall(CallExpr* call, AggregateType* newExprAlias, bool fo
       delete candidate;
     }
 
-  } else {
+  } else if (emitCallResolutionErrors) {
     info.haltNotWellFormed();
   }
 }
@@ -711,7 +832,7 @@ static void makeRecordInitWrappers(CallExpr* call) {
   CallInfo info;
 
   if (info.isWellFormed(call) == true) {
-    std::vector<ArgSymbol*> actualIdxToFormal;
+    llvm::SmallVector<ArgSymbol*, 8> actualIdxToFormal;
     FnSymbol*               wrap = NULL;
 
     makeActualsVector(info, actualIdxToFormal);
@@ -739,7 +860,7 @@ static void makeRecordInitWrappers(CallExpr* call) {
 // so the "failure" modes should never get triggered.  The information we need
 // was cleaned up, though, so we are just going to recreate the parts we need.
 static void makeActualsVector(const CallInfo&          info,
-                              std::vector<ArgSymbol*>& actualIdxToFormal) {
+                              llvm::SmallVectorImpl<ArgSymbol*>& actualIdxToFormal) {
   const CallExpr*   call = info.call;
   FnSymbol*         fn   = call->resolvedFunction();
   std::vector<bool> formalIdxToActual;
@@ -829,19 +950,21 @@ static void makeActualsVector(const CallInfo&          info,
 static AggregateType* resolveNewFindType(CallExpr* newExpr) {
   SymExpr* typeExpr = NULL;
 
+  int type_index = newExpr->isPrimitive(PRIM_NEW) ? 1 : 2;
+
   // Find the SymExpr for the type.
   //   1) Common case  :- primNew(Type, arg1, ...);
   //   2) Module scope :- primNew(module=, moduleName, Type, arg1, ...);
   //   3) Nested call  :- primNew(Inner(_mt, this), arg1, ...);
-  if (SymExpr* se = toSymExpr(newExpr->get(1))) {
+  if (SymExpr* se = toSymExpr(newExpr->get(type_index))) {
     if (se->symbol() != gModuleToken) {
       typeExpr = se;
 
     } else {
-      typeExpr = toSymExpr(newExpr->get(3));
+      typeExpr = toSymExpr(newExpr->get(type_index+2));
     }
 
-  } else if (CallExpr* partial = toCallExpr(newExpr->get(1))) {
+  } else if (CallExpr* partial = toCallExpr(newExpr->get(type_index))) {
     if (SymExpr* se = toSymExpr(partial->baseExpr)) {
       typeExpr = partial->partialTag ? se : NULL;
     }

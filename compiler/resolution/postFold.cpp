@@ -1,5 +1,5 @@
 /*
- * Copyright 2020-2022 Hewlett Packard Enterprise Development LP
+ * Copyright 2020-2025 Hewlett Packard Enterprise Development LP
  * Copyright 2004-2019 Cray Inc.
  * Other additional copyright holders may be indicated within.
  *
@@ -18,18 +18,20 @@
  * limitations under the License.
  */
 
+#include "encoding-support.h"
 #include "postFold.h"
 
 #include "astutil.h"
 #include "build.h"
 #include "DecoratedClassType.h"
 #include "expr.h"
+#include "passes.h"
 #include "preFold.h"
 #include "resolution.h"
 #include "stringutil.h"
 #include "symbol.h"
 
-#include "../next/lib/immediates/prim_data.h"
+#include "../../frontend/lib/immediates/prim_data.h"
 
 static Expr* postFoldNormal(CallExpr* call);
 
@@ -110,10 +112,43 @@ Expr* postFold(Expr* expr) {
 
     } else if (call->isPrimitive() == true) {
       retval = postFoldPrimop(call);
+
+    // If the type construction call contains a runtime type, we need
+    // to hold onto that for later. Otherwise, fold the call away.
     } else if (SymExpr* se = toSymExpr(call->baseExpr)) {
       if (se->symbol()->hasFlag(FLAG_TYPE_VARIABLE)) {
-        retval = se->copy();
-        call->replace(retval);
+        bool doFoldAway = true;
+
+        if (auto fn = toFnSymbol(se->parentSymbol))
+          if (fn->name != astrNew)
+            if (isTypeConstructorWithRuntimeTypeActual(call))
+              doFoldAway = false;
+
+        if (doFoldAway) {
+          retval = se->copy();
+          // if call is RHS of a PRIM_MOVE setting a temporary,
+          // record existence of ? argument by setting FLAG_MARKED_GENERIC.
+          if (CallExpr* parentCall = toCallExpr(call->parentExpr)) {
+            if (parentCall->isPrimitive(PRIM_MOVE)) {
+              if (SymExpr* lhsSe = toSymExpr(parentCall->get(1))) {
+                bool hasQuestionArg = false;
+                for_actuals(actual, call) {
+                  if (SymExpr* act = toSymExpr(actual)) {
+                    if (act->symbol() == gUninstantiated) {
+                      hasQuestionArg = true;
+                    }
+                  }
+                }
+                // TODO: Is this still necessary? The normalizer probably
+                // covers this case now.
+                if (hasQuestionArg && lhsSe->symbol()->hasFlag(FLAG_TEMP)) {
+                  lhsSe->symbol()->addFlag(FLAG_MARKED_GENERIC);
+                }
+              }
+            }
+          }
+          call->replace(retval);
+        }
       }
     }
 
@@ -138,6 +173,17 @@ static Expr* postFoldNormal(CallExpr* call) {
     VarSymbol* ret = toVarSymbol(fn->getReturnSymbol());
 
     if (ret != NULL && ret->immediate != NULL) {
+
+      // warn for certain numeric implicit conversions before we forget
+      // everything about the call
+      for_formals_actuals(formal, actual, call) {
+        if (SymExpr* actualSe = toSymExpr(actual)) {
+          warnForSomeNumericConversions(call,
+                                        formal->typeInfo(), actual->typeInfo(),
+                                        actualSe->symbol());
+        }
+      }
+
       retval = new SymExpr(ret);
 
       call->replace(retval);
@@ -173,7 +219,8 @@ static Expr* postFoldNormal(CallExpr* call) {
       // Put the call back in the AST for better errors unless we're trying
       // to ignore multiple error messages (in which case we hope for a
       // successful compilation).
-      if (fatalErrorsEncountered() && !inGenerousResolutionForErrors() && !fIgnoreNilabilityErrors) {
+      if (fatalErrorsEncountered() && !inGenerousResolutionForErrors() &&
+          !fIgnoreNilabilityErrors) {
         retval->getStmtExpr()->insertBefore(call);
       }
     }
@@ -202,6 +249,11 @@ static Expr* postFoldNormal(CallExpr* call) {
     retval = new SymExpr(new_StringSymbol(call->fname()));
     call->replace(retval);
   } else if (fn->hasFlag(FLAG_GET_FUNCTION_NAME)) {
+    if (fWarnUnstable && call->getFunction()->hasFlag(FLAG_ANONYMOUS_FN)) {
+      USR_WARN(call, "using 'getRoutineName' inside first-class procedures is "
+                     "currently unstable");
+    }
+
     retval = new SymExpr(new_StringSymbol(call->getFunction()->name));
     call->replace(retval);
   } else if (fn->hasFlag(FLAG_GET_MODULE_NAME)) {
@@ -219,6 +271,57 @@ static Expr* postFoldNormal(CallExpr* call) {
 ************************************** | *************************************/
 
 static bool isSameTypeOrInstantiation(Type* sub, Type* super, Expr* ctx);
+
+static std::string getStringAndIndexFromPrim(CallExpr* call, size_t* idx) {
+  SymExpr* se = toSymExpr(call->get(1));
+
+  INT_ASSERT(se);
+  INT_ASSERT(se->symbol()->isParameter() == true);
+
+  const char*       str       = get_string(se);
+  const std::string unescaped = chpl::unescapeStringC(str);
+
+  if (call->numActuals() > 1) {
+    SymExpr* ie = toSymExpr(call->get(2));
+    int64_t val = 0;
+
+    INT_ASSERT(ie && ie->symbol()->isParameter());
+    bool found_int = get_int(ie, &val);
+    INT_ASSERT(found_int);
+
+    *idx = static_cast<size_t>(val);
+  }
+  else {
+    *idx = 0;
+  }
+
+  return unescaped;
+}
+
+static VarSymbol* getFieldAsVarSymbol(Expr* fieldExpr, AggregateType* type) {
+  VarSymbol* retval = NULL;
+
+  if (fieldExpr) {
+    if (SymExpr* se = toSymExpr(fieldExpr)) {
+      if (Symbol* sym = se->symbol()) {
+        if (getSymbolImmediate(sym)) {
+          // this must be the name of the field
+          const char* fieldName = get_string(fieldExpr);
+          retval = toVarSymbol(type->getField(fieldName));
+        } else if (VarSymbol* vs = toVarSymbol(sym)) {
+          // this must be the field itself
+          retval = vs;
+        }
+      }
+    }
+  }
+
+  if (retval == NULL) {
+    INT_FATAL(fieldExpr, "Unexpected expression in getFieldAsVarSymbol()");
+  }
+
+  return retval;
+}
 
 static Expr* postFoldPrimop(CallExpr* call) {
   Expr* retval = call;
@@ -256,11 +359,10 @@ static Expr* postFoldPrimop(CallExpr* call) {
 
   } else if (call->isPrimitive(PRIM_GET_MEMBER) == true) {
     SymExpr*       base      = toSymExpr (call->get(1));
-    const char*    fieldName = get_string(call->get(2));
 
     Type*          t         = canonicalDecoratedClassType(base->getValType());
     AggregateType* at        = toAggregateType(t);
-    VarSymbol*     field     = toVarSymbol(at->getField(fieldName));
+    VarSymbol*     field     = getFieldAsVarSymbol(call->get(2), at);
 
     if (field->isParameter() == true || field->isType() == true) {
       if (Symbol* value = at->getSubstitution(field->name)) {
@@ -279,14 +381,13 @@ static Expr* postFoldPrimop(CallExpr* call) {
 
   } else if (call->isPrimitive(PRIM_GET_MEMBER_VALUE) == true) {
     SymExpr*       base      = toSymExpr (call->get(1));
-    const char*    fieldName = get_string(call->get(2));
 
     Type*          t         = base->getValType();
     AggregateType* at        = toAggregateType(t);
     if (DecoratedClassType* dt = toDecoratedClassType(t))
       at = dt->getCanonicalClass();
 
-    VarSymbol*     field     = toVarSymbol(at->getField(fieldName));
+    VarSymbol*     field     = getFieldAsVarSymbol(call->get(2), at);
 
     if (field->isParameter() == true || field->isType() == true) {
       if (field->type->symbol->hasFlag(FLAG_HAS_RUNTIME_TYPE) == false) {
@@ -407,10 +508,9 @@ static Expr* postFoldPrimop(CallExpr* call) {
     INT_ASSERT(lhs && rhs);
 
     if (lhs->symbol()->isParameter() && rhs->symbol()->isParameter()) {
-      std::string lstr = unescapeString(get_string(lhs), lhs);
-      std::string rstr = unescapeString(get_string(rhs), rhs);
-
-      std::string concat = chpl::quoteStringForC(lstr+rstr);
+      std::string lstr = chpl::unescapeStringC(get_string(lhs));
+      std::string rstr = chpl::unescapeStringC(get_string(rhs));
+      std::string concat = chpl::escapeStringC(lstr+rstr);
 
       if (lhs->symbol()->type == dtString) {
         retval = new SymExpr(new_StringSymbol(astr(concat)));
@@ -429,8 +529,9 @@ static Expr* postFoldPrimop(CallExpr* call) {
     INT_ASSERT(se);
 
     if (se->symbol()->isParameter() == true) {
-      const char* str     = get_string(se);
-      const size_t nbytes = unescapeString(str, se).length();
+      const char* str         = get_string(se);
+      const std::string unesc = chpl::unescapeStringC(str);
+      const size_t nbytes     = unesc.length();
 
       retval = new SymExpr(new_IntSymbol(nbytes, INT_SIZE_DEFAULT));
 
@@ -443,7 +544,7 @@ static Expr* postFoldPrimop(CallExpr* call) {
     INT_ASSERT(se && se->symbol()->isParameter());
 
     const char* str         = get_string(se);
-    const std::string unesc = unescapeString(str, se);
+    const std::string unesc = chpl::unescapeStringC(str);
     const size_t nbytes     = unesc.length();
 
     // Don't bother looking at the first byte.
@@ -478,30 +579,38 @@ static Expr* postFoldPrimop(CallExpr* call) {
     //
     // After the deprecated cases are removed, this code should assert
     // that the first argument is a param instead of just testing.
-    SymExpr* se = toSymExpr(call->get(1));
+    size_t idx = 0;
+    std::string unescaped = getStringAndIndexFromPrim(call, &idx);
 
-    INT_ASSERT(se);
+    retval = new SymExpr(new_UIntSymbol((int)unescaped[idx], INT_SIZE_8));
 
-    if (se->symbol()->isParameter() == true) {
-      const char*       str       = get_string(se);
-      const std::string unescaped = unescapeString(str, se);
-      size_t            idx       = 0;
+    call->replace(retval);
 
-      if (call->numActuals() > 1) {
-        SymExpr* ie = toSymExpr(call->get(2));
-        int64_t val = 0;
+  } else if (call->isPrimitive(PRIM_STRING_ITEM) == true) {
+    INT_ASSERT(call->numActuals() == 2);
 
-        INT_ASSERT(ie && ie->symbol()->isParameter());
-        bool found_int = get_int(ie, &val);
-        INT_ASSERT(found_int);
+    size_t idx = 0;
+    std::string unescaped = getStringAndIndexFromPrim(call, &idx);
 
-        idx = static_cast<size_t>(val);
-      }
+    const char* retStr = chpl_enc_codepoint_at_idx(unescaped.c_str(), idx);
+    INT_ASSERT(retStr);
 
-      retval = new SymExpr(new_UIntSymbol((int)unescaped[idx], INT_SIZE_8));
+    retval = new SymExpr(new_StringSymbol(retStr));
 
-      call->replace(retval);
-    }
+    call->replace(retval);
+
+  } else if (call->isPrimitive(PRIM_BYTES_ITEM) == true) {
+    INT_ASSERT(call->numActuals() == 2);
+
+    size_t idx = 0;
+    std::string unescaped = getStringAndIndexFromPrim(call, &idx);
+
+    char* retStr = (char*)calloc(2, sizeof(unsigned char));
+    retStr[0] = (unsigned char)unescaped[idx];
+
+    retval = new SymExpr(new_BytesSymbol(retStr));
+
+    call->replace(retval);
 
   } else if (call->isPrimitive("string_contains") == true) {
     SymExpr* lhs = toSymExpr(call->get(1));
@@ -530,6 +639,18 @@ static Expr* postFoldPrimop(CallExpr* call) {
 
   } else if (call->isPrimitive(PRIM_UNARY_LNOT) == true) {
     FOLD_CALL1(P_prim_lnot);
+
+  } else if (call->isPrimitive(PRIM_ABS) == true) {
+    FOLD_CALL1(P_prim_abs);
+
+  } else if (call->isPrimitive(PRIM_SQRT) == true) {
+    FOLD_CALL1(P_prim_sqrt);
+
+  } else if (call->isPrimitive(PRIM_GET_REAL) == true) {
+    FOLD_CALL1(P_prim_get_real);
+
+  } else if (call->isPrimitive(PRIM_GET_IMAG) == true) {
+    FOLD_CALL1(P_prim_get_imag);
 
   } else if (call->isPrimitive(PRIM_ADD) == true) {
     FOLD_CALL2(P_prim_add);
@@ -587,7 +708,16 @@ static Expr* postFoldPrimop(CallExpr* call) {
     const char* str = NULL;
 
     if (get_string(arg, &str)) {
-      processStringInRequireStmt(str, false, call->astloc.filename());
+      // call is at the module scope if inside the module init
+      // and directly inside the module (ie no intervening blocks)
+      bool insideModuleInit =
+        call->parentSymbol && call->parentSymbol->hasFlag(FLAG_MODULE_INIT);
+      FnSymbol* moduleInit =
+        insideModuleInit ? toFnSymbol(call->parentSymbol) : nullptr;
+      BlockStmt* parentBlock = toBlockStmt(call->parentExpr);
+      bool atModuleScope = parentBlock && moduleInit && moduleInit->body == parentBlock;
+
+      processStringInRequireStmt(arg, atModuleScope, str, false, call->astloc.filename());
 
     } else {
       USR_FATAL(call, "'require' statements require string arguments");
@@ -597,6 +727,42 @@ static Expr* postFoldPrimop(CallExpr* call) {
 
     call->replace(retval);
 
+  } else if (call->isPrimitive(PRIM_REAL64_AS_UINT64)) {
+    Expr* realArg = call->get(1);
+    Immediate* realVal = getSymbolImmediate(toSymExpr(realArg)->symbol());
+    double f = realVal->v_float64;
+    uint64_t ui;
+    INT_ASSERT(sizeof(f) == sizeof(ui));
+    memcpy(&ui, &f, sizeof(f));
+    retval = new SymExpr(new_UIntSymbol(ui, INT_SIZE_64));
+    call->replace(retval);
+  } else if (call->isPrimitive(PRIM_REAL32_AS_UINT32)) {
+    Expr* realArg = call->get(1);
+    Immediate* realVal = getSymbolImmediate(toSymExpr(realArg)->symbol());
+    float f = realVal->v_float32;
+    uint32_t ui;
+    INT_ASSERT(sizeof(f) == sizeof(ui));
+    memcpy(&ui, &f, sizeof(f));
+    retval = new SymExpr(new_UIntSymbol(ui, INT_SIZE_32));
+    call->replace(retval);
+  } else if (call->isPrimitive(PRIM_UINT64_AS_REAL64)) {
+    Expr* uintArg = call->get(1);
+    Immediate* uintVal = getSymbolImmediate(toSymExpr(uintArg)->symbol());
+    uint64_t ui = uintVal->v_uint64;;
+    double f;
+    INT_ASSERT(sizeof(f) == sizeof(ui));
+    memcpy(&f, &ui, sizeof(f));
+    retval = new SymExpr(new_RealSymbol(f));
+    call->replace(retval);
+  } else if (call->isPrimitive(PRIM_UINT32_AS_REAL32)) {
+    Expr* uintArg = call->get(1);
+    Immediate* uintVal = getSymbolImmediate(toSymExpr(uintArg)->symbol());
+    uint32_t ui = uintVal->v_uint32;
+    float f;
+    INT_ASSERT(sizeof(f) == sizeof(ui));
+    memcpy(&f, &ui, sizeof(f));
+    retval = new SymExpr(new_RealSymbol(f));
+    call->replace(retval);
   }
 
   return retval;
@@ -716,7 +882,8 @@ static bool postFoldMoveUpdateForParam(CallExpr* call, Symbol* lhsSym) {
           rhsSym == gUninstantiated) {
         paramMap.put(lhsSym, rhsSym);
 
-        lhsSym->defPoint->remove();
+        // Do not remove the definition point or the param is pruned.
+        // lhsSym->defPoint->remove();
 
         call->convertToNoop();
 
@@ -795,6 +962,22 @@ static void updateFlagTypeVariable(CallExpr* call, Symbol* lhsSym) {
 
     } else if (rhs->isPrimitive(PRIM_GET_MEMBER_VALUE) == true) {
       isTypeVar = isTypeExpr(rhs);
+
+    // Check for type construction calls that have not been replaced by a
+    // SymExpr pointing to the appropriate TypeSymbol. If found, then it
+    // is because the type construction call contains one or more runtime
+    // types in it. In this case, propagate FLAG_TYPE_VARIABLE to the LHS.
+    // We need to preserve the type construction call so that the actuals
+    // can be used later.
+    } else if (auto se = toSymExpr(rhs->baseExpr)) {
+      if (se->symbol()->hasFlag(FLAG_TYPE_VARIABLE)) {
+        if (isTypeConstructorWithRuntimeTypeActual(rhs)) {
+          isTypeVar = true;
+        } else {
+          INT_FATAL("Unexpected type constructor after prefold in '%s'",
+                    __FUNCTION__);
+        }
+      }
     }
 
   } else {
@@ -862,9 +1045,8 @@ static Expr* postFoldSymExpr(SymExpr* sym) {
   Expr* retval = sym;
 
   if (Symbol* val = paramMap.get(sym->symbol())) {
-    CallExpr* call = toCallExpr(sym->parentExpr);
+    if (CallExpr* call = toCallExpr(sym->parentExpr)) {
 
-    if (call && call->get(1) == sym) {
       // This is a place where param substitution has already determined the
       // value of a move or assignment. If it's a RVV, then we should ignore
       // the update because the RVV may have multiple valid defs in the AST
@@ -887,12 +1069,17 @@ static Expr* postFoldSymExpr(SymExpr* sym) {
       //
       // The substitution usually happens before resolution, so for
       // assignment, we key off of the name :-(
-      if (call->isPrimitive(PRIM_MOVE) || call->isNamedAstr(astrSassign)) {
-        if (sym->symbol()->hasFlag(FLAG_RVV)) {
-          call->convertToNoop();
-        }
+      if (call->isPrimitive(PRIM_MOVE) ||
+          call->isNamedAstr(astrSassign)) {
+        INT_ASSERT(call->numActuals() >= 2);
 
-        return retval;
+        if (call->get(1) == sym) {
+          if (sym->symbol()->hasFlag(FLAG_RVV)) {
+            call->convertToNoop();
+          }
+
+          return retval;
+        }
       }
     }
 

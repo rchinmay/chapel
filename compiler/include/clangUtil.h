@@ -1,16 +1,16 @@
 /*
- * Copyright 2020-2022 Hewlett Packard Enterprise Development LP
+ * Copyright 2020-2025 Hewlett Packard Enterprise Development LP
  * Copyright 2004-2019 Cray Inc.
  * Other additional copyright holders may be indicated within.
- * 
+ *
  * The entirety of this work is licensed under the Apache License,
  * Version 2.0 (the "License"); you may not use this file except
  * in compliance with the License.
- * 
+ *
  * You may obtain a copy of the License at
- * 
+ *
  *     http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -30,9 +30,9 @@
 // a bunch of clang stuff.
 #include "LayeredValueTable.h"
 #include "llvmUtil.h"
-
-#if HAVE_LLVM_VER >= 100
 #include "llvm/Support/Alignment.h"
+#if HAVE_LLVM_VER >= 160
+#include "clang/Basic/AddressSpaces.h"
 #endif
 
 // forward declare some llvm and clang things
@@ -80,28 +80,36 @@ int getCRecordMemberGEP(const char* typeName, const char* fieldName, bool& isCAr
 
 bool isCTypeUnion(const char* name);
 
-#if HAVE_LLVM_VER >= 100
-llvm::MaybeAlign getPointerAlign(int addrSpace);
-llvm::MaybeAlign getCTypeAlignment(const clang::TypeDecl* td);
-llvm::MaybeAlign getCTypeAlignment(const clang::QualType &qt);
-llvm::MaybeAlign getAlignment(Type* type);
+#if HAVE_LLVM_VER >= 160
+llvm::MaybeAlign getPointerAlign(clang::LangAS AS = clang::LangAS::Default);
 #else
-uint64_t getPointerAlign(int addrSpace);
-unsigned getCTypeAlignment(const clang::TypeDecl* td);
-unsigned getCTypeAlignment(const clang::QualType &qt);
-unsigned getAlignment(Type* type);
+llvm::MaybeAlign getPointerAlign(int AS = 0);
 #endif
-
+int getCTypeAlignment(Type* type);
+int getCTypeAlignment(const clang::QualType &qt);
 
 const clang::CodeGen::CGFunctionInfo& getClangABIInfoFD(clang::FunctionDecl* FD);
 const clang::CodeGen::CGFunctionInfo& getClangABIInfo(FnSymbol* fn);
+const clang::CodeGen::CGFunctionInfo& getClangABIInfo(FunctionType* ft);
 
 const clang::CodeGen::ABIArgInfo*
-getCGArgInfo(const clang::CodeGen::CGFunctionInfo* CGI, int curCArg);
+getCGArgInfo(const clang::CodeGen::CGFunctionInfo* CGI, int curCArg,
+             FnSymbol* fn=nullptr);
+
+const clang::CodeGen::ABIArgInfo*
+getSingleCGArgInfo(Type* type);
+
+bool useDarwinArmFix(Type* type);
 
 void makeBinaryLLVM();
 void prepareCodegenLLVM();
+// Store filenames of temporary files used by LLVM codegen, initializing them
+// if they do not exist.
+void setupLLVMCodegenFilenames(void);
 void finishCodegenLLVM();
+void initializeGenInfo(void);
+// appends clang arguments to be used to the provided vector
+void computeClangArgs(std::vector<std::string>& clangCCArgs);
 void runClang(const char* just_parse_filename);
 
 bool lookupInExternBlock(ModuleSymbol* module, const char* name,
@@ -124,6 +132,18 @@ void print_clang(const clang::TypeDecl* td);
 void print_clang(const clang::ValueDecl* vd);
 
 const char* getGeneratedAnonTypeName(const clang::RecordType* structType);
+
+// simplify the function using the function simplification pipeline
+void simplifyFunction(llvm::Function* func);
+
+llvm::FunctionType*
+codegenFunctionTypeLLVM(FnSymbol* fn,
+                        llvm::AttributeList& outAttrs,
+                        std::vector<const char*>& outArgNames);
+llvm::FunctionType*
+codegenFunctionTypeLLVM(FunctionType* ft,
+                        llvm::AttributeList& outAttrs,
+                        std::vector<const char*>& outArgNames);
 
 #endif // HAVE_LLVM
 

@@ -1,5 +1,5 @@
 /*
- * Copyright 2020-2022 Hewlett Packard Enterprise Development LP
+ * Copyright 2020-2025 Hewlett Packard Enterprise Development LP
  * Copyright 2004-2019 Cray Inc.
  * Other additional copyright holders may be indicated within.
  *
@@ -27,6 +27,8 @@
 #include "stlUtil.h"
 #include "stmt.h"
 #include "stringutil.h"
+
+#include "global-ast-vecs.h"
 
 //#define DEBUG_SYNC_ACCESS_FUNCTION_SET
 
@@ -219,7 +221,8 @@ static bool shouldSerialize(ArgSymbol* arg) {
   bool retval = false;
   Type* argType = arg->getValType();
 
-  if (!argType->isSerializeable()) {
+  if (!argType->isSerializable() ||
+      arg->hasFlag(FLAG_TYPE_VARIABLE)) {
     retval = false;
   } else if (isRecordWrappedType(argType)) {
     // OK to serialize if the record-wrapped type's underlying class is not
@@ -462,7 +465,7 @@ static void serializeAtCallSites(FnSymbol* fn,  ArgSymbol* arg,
   }
 }
 
-/*  
+/*
  *  This function handles deserialization of AggregateTypes that have ref
  *  fields. Those fields need to point to data that is local for RVF to be
  *  meaningful. However, if the data is created inside the deserializer of that
@@ -694,7 +697,7 @@ static CallExpr* handleRefDeserializers(Expr* anchor, FnSymbol* fn,
               }
             }
 
-            
+
             // recurse
             FnSymbol* curDeserializer = nestedDeser->resolvedFunction();
             CallExpr* replCall = handleRefDeserializers(moveToArg->next,
@@ -1014,15 +1017,14 @@ static void defaultForwarding(Map<Symbol*, Vec<SymExpr*>*>& useMap,
   }
 }
 
-static bool isSyncSingleMethod(FnSymbol* fn) {
+static bool isSyncMethod(FnSymbol* fn) {
 
   bool retval = false;
 
   if (fn->_this != NULL) {
     Type* valType = fn->_this->getValType();
 
-    if  (isSyncType(valType)   == true ||
-         isSingleType(valType) == true) {
+    if (isSyncType(valType) == true) {
       retval = true;
     }
   }
@@ -1043,7 +1045,7 @@ static void buildSyncAccessFunctionSet(Vec<FnSymbol*>& syncAccessFunctionSet) {
   // Find all methods on sync/single vars
   //
   forv_Vec(FnSymbol, fn, gFnSymbols) {
-    if (isSyncSingleMethod(fn)) {
+    if (isSyncMethod(fn)) {
       if (!fn->hasFlag(FLAG_DONT_DISABLE_REMOTE_VALUE_FORWARDING) &&
           !syncAccessFunctionSet.set_in(fn)) {
         syncAccessFunctionSet.set_add(fn);

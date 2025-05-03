@@ -7,12 +7,12 @@
 // Translated to Chapel by Tom Hildebrandt (hilde@cray.com)
 
 
-extern proc printf(s:c_string, args ...);
+extern proc printf(s:c_ptrConst(c_char), args ...);
 extern proc putchar(c:int);
 
 use GMP;
 use Time;
-use SysCTypes;
+use CTypes;
 
 config const n: uint = 50;	// Compute 50 digits of Pi, usually.
 config param perfTest = false;
@@ -21,7 +21,7 @@ var numer, accum, denom, tmp1, tmp2: mpz_t;
 
 proc main
 {
-  var t: Timer;
+  var t: stopwatch;
 
   if perfTest then t.start();
   // Produce the number of digits of Pi specified in n.
@@ -29,7 +29,7 @@ proc main
   if perfTest then t.stop();
 
   if perfTest then
-    writeln("Elapsed time = ", t.elapsed(TimeUnits.seconds));
+    writeln("Elapsed time = ", t.elapsed());
 }
 
 proc pidigits

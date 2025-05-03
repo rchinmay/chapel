@@ -3,9 +3,9 @@ config const verbose=false;
 
 proc doit(a:locale, b:locale, c:locale)
 {
-  use SysCTypes;
-  extern proc printf(fmt: c_string, vals...?numvals): int;
- 
+  use CTypes;
+  extern proc printf(fmt: c_ptrConst(c_char), vals...?numvals): int;
+
   on a {
     if verbose {
       printf("on %d\n", here.id:c_int);

@@ -1,5 +1,5 @@
 /*
- * Copyright 2020-2022 Hewlett Packard Enterprise Development LP
+ * Copyright 2020-2025 Hewlett Packard Enterprise Development LP
  * Copyright 2004-2019 Cray Inc.
  * Other additional copyright holders may be indicated within.
  *
@@ -22,10 +22,12 @@
 
 #include "astutil.h"
 #include "AstVisitor.h"
+#include "DecoratedClassType.h"
 #include "passes.h"
 #include "stringutil.h"
 #include "wellknown.h"
 
+#include "global-ast-vecs.h"
 
 static void callExprHelper(CallExpr* call, BaseAST* arg);
 
@@ -144,22 +146,6 @@ static void callExprHelper(CallExpr* call, BaseAST* arg) {
   }
 }
 
-bool CallExpr::isEmpty() const {
-  return primitive == NULL && baseExpr == NULL;
-}
-
-bool CallExpr::isPrimitive() const {
-  return primitive != NULL;
-}
-
-bool CallExpr::isPrimitive(PrimitiveTag primitiveTag) const {
-  return primitive && primitive->tag == primitiveTag;
-}
-
-bool CallExpr::isPrimitive(const char* primitiveName) const {
-  return primitive && !strcmp(primitive->name, primitiveName);
-}
-
 Expr* CallExpr::getFirstExpr() {
   Expr* retval = NULL;
 
@@ -263,7 +249,9 @@ void CallExpr::verify() {
     // Confirm that this is a partial call, but only if the call is not
     // within a DefExpr (indicated by not having a stmt-expr)
     if (normalized && subCall->getStmtExpr() != NULL)
-      INT_ASSERT(subCall->partialTag == true);
+      INT_ASSERT(subCall->partialTag == true
+                 // non-normalizable expressions are also exempt
+                 || partOfNonNormalizableExpr(this));
   }
 
   verifyNotOnList(baseExpr);
@@ -427,15 +415,6 @@ bool CallExpr::isNamedAstr(const char* name) const {
   return retval;
 }
 
-int CallExpr::numActuals() const {
-  return argList.length;
-}
-
-
-Expr* CallExpr::get(int index) const {
-  return argList.get(index);
-}
-
 
 FnSymbol* CallExpr::findFnSymbol() {
   FnSymbol* retval = NULL;
@@ -473,35 +452,43 @@ CallExpr* createCast(BaseAST* src, BaseAST* toType) {
 
 QualifiedType CallExpr::qualType(void) {
   QualifiedType retval(NULL);
+  auto se = toSymExpr(baseExpr);
 
   if (primitive) {
     retval = primitive->returnInfo(this);
 
-  } else if (isResolved()) {
-    FnSymbol* fn = resolvedFunction();
-    Qualifier q  = QUAL_UNKNOWN;
+  } else if (isResolved() || (se && isFunctionType(se->symbol()->type))) {
+    auto ft = toFunctionType(se->symbol()->type);
+    auto fn = resolvedFunction();
+    INT_ASSERT(fn || ft);
 
-    if (fn->retType->isRef()) {
+    auto q  = QUAL_UNKNOWN;
+    auto retType = fn ? fn->retType : ft->returnType();
+    auto retTag = fn ? fn->retTag : ft->returnIntent();
+
+    if (retType->isRef()) {
       q = QUAL_REF;
 
-    } else if (fn->retType->isWideRef()) {
+    } else if (retType->isWideRef()) {
       q = QUAL_WIDE_REF;
 
-    } else if (fn->retTag == RET_VALUE) {
+    } else if (retTag == RET_VALUE) {
       q = QUAL_VAL;
 
     } else {
       q = QUAL_UNKNOWN;
     }
 
-    retval = QualifiedType(q, fn->retType);
-  } else if (SymExpr* se = toSymExpr(baseExpr)) {
+    retval = QualifiedType(q, retType);
+  } else if (se) {
     // Handle type constructor calls
     Type* retType = dtUnknown;
     if (se->symbol()->hasFlag(FLAG_TYPE_VARIABLE)) {
-      AggregateType* at = toAggregateType(se->typeInfo());
-      if (at && at->isGeneric() == false) {
-        retType = at;
+      Type* t = se->typeInfo();
+      if (auto at = toAggregateType(t)) {
+        if (!at->isGeneric()) retType = at;
+      } else if (auto dct = toDecoratedClassType(t)) {
+        if (!dct->getCanonicalClass()->isGeneric()) retType = dct;
       } else if (isPrimitiveType(se->typeInfo()) && numActuals() == 0) {
         // (call uint(64) 8) represents 'uint(8)', so we don't want to return
         // a ``uint(64)`` unless there are zero arguments
@@ -683,6 +670,20 @@ CallExpr* callChplHereAlloc(Type* type, VarSymbol* md) {
                                       new SymExpr(type->symbol));
   VarSymbol* mdExpr    = (md != NULL) ? md : newMemDesc(type);
   CallExpr*  allocExpr = new CallExpr("chpl_here_alloc", sizeExpr, mdExpr);
+
+  // Again, as we don't know the type yet, we leave it to resolution
+  // to put in the cast to the proper type
+  return allocExpr;
+}
+CallExpr* callChplHereAllocWithAllocator(Type* type, Expr* allocator, VarSymbol* md) {
+  INT_ASSERT(resolved == false);
+
+  // Since the type is not necessarily known, resolution will fix up
+  // this sizeof() call to take the resolved type of s as an argument
+  CallExpr*  sizeExpr  = new CallExpr(PRIM_SIZEOF_BUNDLE,
+                                      new SymExpr(type->symbol));
+  VarSymbol* mdExpr    = (md != NULL) ? md : newMemDesc(type);
+  CallExpr*  allocExpr = new CallExpr("chpl_here_alloc_with_allocator", sizeExpr, mdExpr, allocator);
 
   // Again, as we don't know the type yet, we leave it to resolution
   // to put in the cast to the proper type

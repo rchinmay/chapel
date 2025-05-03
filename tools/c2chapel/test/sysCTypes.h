@@ -1,5 +1,6 @@
 #include <stdint.h>
 #include <stddef.h>
+#include <wchar.h>
 #include <unistd.h>
 
 // TODO: Have c2chapel handle standard headers cleanly
@@ -14,7 +15,11 @@ long test_longs(long a, unsigned long b, long long c, unsigned long long d,
 
 char test_chars(char a, char* b, signed char c, unsigned char d);
 
+const char* test_const_chars(const char* a, const unsigned char* b);
+
 short test_shorts(short a, unsigned short b);
+
+wchar_t test_wchar(wchar_t a);
 
 void test_ptrs(intptr_t a, uintptr_t b, ptrdiff_t c, ssize_t d, size_t e);
 

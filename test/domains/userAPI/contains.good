@@ -1,0 +1,18 @@
+contains.chpl:29: warning: this promoted addition of indices to an associative domain may be unsafe due to race conditions; consider replacing promotion with an explicit for loop or declaring the domain type with 'parSafe=true'
+110
+120
+130
+140
+310
+320
+330
+350
+360
+370
+380
+510
+520
+530
+540
+550
+560

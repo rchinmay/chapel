@@ -1,5 +1,5 @@
 /*
- * Copyright 2020-2022 Hewlett Packard Enterprise Development LP
+ * Copyright 2020-2025 Hewlett Packard Enterprise Development LP
  * Copyright 2004-2019 Cray Inc.
  * Other additional copyright holders may be indicated within.
  *
@@ -27,6 +27,8 @@
 
 #include "expr.h"
 #include "driver.h" // For prototypes.
+
+#include "global-ast-vecs.h"
 
 //#include <unordered_set> // C++11 (not fully supported yet)
 #include <set>
@@ -74,21 +76,6 @@ void checkArgsAndLocals()
   }
 }
 
-// Check that no unresolved symbols remain in the tree.
-// This one is pretty cheap, so can be run after every pass (following
-// resolution).
-void checkNoUnresolveds()
-{
-  // BHARSH INIT TODO: Can this be '0' now that the tuple constructor is gone?
-  //
-  // TODO: This value should really be cranked down to 0.
-  // But in some cases _construct__tuple remains unresolved after
-  // resolution ... .
-  if (gUnresolvedSymExprs.n > 1)
-    INT_FATAL("Structural error: "
-      "At this point, the AST should not contain any unresolved symbols.");
-}
-
 // Ensures that primitives are used only where they are expected.
 void checkPrimitives()
 {
@@ -124,16 +111,20 @@ void checkPrimitives()
      case PRIM_FIELD_NAME_TO_NUM:
      case PRIM_FIELD_BY_NUM:
      case PRIM_IS_RECORD_TYPE:
+     case PRIM_IS_PROC_TYPE:
+     case PRIM_TO_PROC_TYPE:
      case PRIM_IS_UNION_TYPE:
      case PRIM_IS_EXTERN_UNION_TYPE:
      case PRIM_IS_ATOMIC_TYPE:
      case PRIM_IS_EXTERN_TYPE:
+     case PRIM_IS_BORROWED_CLASS_TYPE:
      case PRIM_IS_TUPLE_TYPE:
      case PRIM_IS_STAR_TUPLE_TYPE:
      case PRIM_IS_SUBTYPE:
      case PRIM_IS_INSTANTIATION_ALLOW_VALUES:
      case PRIM_IS_PROPER_SUBTYPE:
      case PRIM_NEW:                 // new keyword
+     case PRIM_NEW_WITH_ALLOCATOR:
      case PRIM_ERROR:
      case PRIM_WARNING:
       if (resolved)
@@ -227,6 +218,8 @@ void checkPrimitives()
      case PRIM_AND_ASSIGN:
      case PRIM_OR_ASSIGN:
      case PRIM_XOR_ASSIGN:
+     case PRIM_LOGICALAND_ASSIGN:
+     case PRIM_LOGICALOR_ASSIGN:
      case PRIM_MIN:
      case PRIM_MAX:
      case PRIM_SETCID:
@@ -291,11 +284,12 @@ void checkPrimitives()
      case PRIM_BROADCAST_GLOBAL_VARS:
      case PRIM_PRIVATE_BROADCAST:
      case PRIM_INT_ERROR:
-     case PRIM_CAPTURE_FN_FOR_CHPL:
-     case PRIM_CAPTURE_FN_FOR_C:
+     case PRIM_CAPTURE_FN:
+     case PRIM_CAPTURE_FN_TO_CLASS:
      case PRIM_CREATE_FN_TYPE:
      case PRIM_STRING_COPY:
      case PRIM_CAST_TO_VOID_STAR:       // Cast the object argument to void*.
+     case PRIM_CAST_TO_TYPE:
      case PRIM_RT_ERROR:
      case PRIM_RT_WARNING:
      case PRIM_NEW_PRIV_CLASS:

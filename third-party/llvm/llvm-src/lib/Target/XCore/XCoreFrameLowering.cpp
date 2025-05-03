@@ -27,7 +27,7 @@
 #include "llvm/IR/Function.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Target/TargetOptions.h"
-#include <algorithm> // std::sort
+#include <algorithm>
 
 using namespace llvm;
 
@@ -225,8 +225,7 @@ void XCoreFrameLowering::emitPrologue(MachineFunction &MF,
   assert(&MF.front() == &MBB && "Shrink-wrapping not yet supported");
   MachineBasicBlock::iterator MBBI = MBB.begin();
   MachineFrameInfo &MFI = MF.getFrameInfo();
-  MachineModuleInfo *MMI = &MF.getMMI();
-  const MCRegisterInfo *MRI = MMI->getContext().getRegisterInfo();
+  const MCRegisterInfo *MRI = MF.getContext().getRegisterInfo();
   const XCoreInstrInfo &TII = *MF.getSubtarget<XCoreSubtarget>().getInstrInfo();
   XCoreFunctionInfo *XFI = MF.getInfo<XCoreFunctionInfo>();
   // Debug location must be unknown since the first debug location is used
@@ -427,19 +426,20 @@ bool XCoreFrameLowering::spillCalleeSavedRegisters(
   if (MI != MBB.end() && !MI->isDebugInstr())
     DL = MI->getDebugLoc();
 
-  for (auto it = CSI.begin(); it != CSI.end(); ++it) {
-    unsigned Reg = it->getReg();
+  for (const CalleeSavedInfo &I : CSI) {
+    Register Reg = I.getReg();
     assert(Reg != XCore::LR && !(Reg == XCore::R10 && hasFP(*MF)) &&
            "LR & FP are always handled in emitPrologue");
 
     // Add the callee-saved register as live-in. It's killed at the spill.
     MBB.addLiveIn(Reg);
     const TargetRegisterClass *RC = TRI->getMinimalPhysRegClass(Reg);
-    TII.storeRegToStackSlot(MBB, MI, Reg, true, it->getFrameIdx(), RC, TRI);
+    TII.storeRegToStackSlot(MBB, MI, Reg, true, I.getFrameIdx(), RC, TRI,
+                            Register());
     if (emitFrameMoves) {
       auto Store = MI;
       --Store;
-      XFI->getSpillLabels().push_back(std::make_pair(Store, *it));
+      XFI->getSpillLabels().push_back(std::make_pair(Store, I));
     }
   }
   return true;
@@ -455,12 +455,13 @@ bool XCoreFrameLowering::restoreCalleeSavedRegisters(
   if (!AtStart)
     --BeforeI;
   for (const CalleeSavedInfo &CSR : CSI) {
-    unsigned Reg = CSR.getReg();
+    Register Reg = CSR.getReg();
     assert(Reg != XCore::LR && !(Reg == XCore::R10 && hasFP(*MF)) &&
            "LR & FP are always handled in emitEpilogue");
 
     const TargetRegisterClass *RC = TRI->getMinimalPhysRegClass(Reg);
-    TII.loadRegFromStackSlot(MBB, MI, Reg, CSR.getFrameIdx(), RC, TRI);
+    TII.loadRegFromStackSlot(MBB, MI, Reg, CSR.getFrameIdx(), RC, TRI,
+                             Register());
     assert(MI != MBB.begin() &&
            "loadRegFromStackSlot didn't insert any code!");
     // Insert in reverse order.  loadRegFromStackSlot can insert multiple

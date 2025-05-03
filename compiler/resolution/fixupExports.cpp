@@ -1,5 +1,5 @@
 /*
- * Copyright 2020-2022 Hewlett Packard Enterprise Development LP
+ * Copyright 2020-2025 Hewlett Packard Enterprise Development LP
  * Copyright 2004-2019 Cray Inc.
  * Other additional copyright holders may be indicated within.
  *
@@ -192,7 +192,7 @@ static void attemptFixups(FnSymbol* fn) {
     // pull the formal/return type validation out into a separate set of
     // routines that could occur in a pass before this, for the sake of
     // clarity.
-    // 
+    //
     if (validateFormalIntent(fn, as) && needsFixup(as->type)) {
       if (wrapper == NULL) { wrapper = createWrapper(fn); }
       VarSymbol* tmp = fixupFormal(wrapper, i);
@@ -225,6 +225,14 @@ static void attemptFixups(FnSymbol* fn) {
   // If a wrapper hasn't been made yet, there's nothing to do.
   if (wrapper == NULL) { return; }
 
+  // Ensure we didn't break our exported formal default value tracking
+  for (int i = 1; i <= fn->numFormals(); i++) {
+    std::string storedDefault = exportedDefaultValues[fn->getFormal(i)];
+    if (storedDefault != "") {
+      exportedDefaultValues[wrapper->getFormal(i)] = storedDefault;
+    }
+  }
+
   insertUnwrappedCall(wrapper, fn, tmps);
 
   wrapperMap[wrapper] = fn;
@@ -248,7 +256,7 @@ static bool validateFormalIntent(FnSymbol* fn, ArgSymbol* as) {
   // to put these conditions in tables.
   //
   if (t == dtBytes || t == dtString || t == dtStringC
-                   || t == dtExternalArray) {
+                   || t == dtExternalArray || isCPtrConstChar(t)) {
     IntentTag tag = as->originalIntent;
 
     bool multiloc = fMultiLocaleInterop || strcmp(CHPL_COMM, "none");
@@ -378,7 +386,7 @@ static VarSymbol* fixupFormal(FnSymbol* wrapper, int idx) {
     }
 
     as->intent=newIntent;
-  } 
+  }
 
   // Adjust the wrapper type.
   as->type = wrapt;

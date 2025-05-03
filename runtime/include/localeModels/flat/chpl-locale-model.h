@@ -1,16 +1,16 @@
 /*
- * Copyright 2020-2022 Hewlett Packard Enterprise Development LP
+ * Copyright 2020-2025 Hewlett Packard Enterprise Development LP
  * Copyright 2004-2019 Cray Inc.
  * Other additional copyright holders may be indicated within.
- * 
+ *
  * The entirety of this work is licensed under the Apache License,
  * Version 2.0 (the "License"); you may not use this file except
  * in compliance with the License.
- * 
+ *
  * You may obtain a copy of the License at
- * 
+ *
  *     http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -57,7 +57,7 @@ chpl_localeID_t chpl__initCopy_chpl_rt_localeID_t(chpl_localeID_t initial) {
 static inline
 chpl_localeID_t chpl_rt_buildLocaleID(c_nodeid_t node, c_sublocid_t subloc) {
   chpl_localeID_t loc = { node };
-  //assert(subloc == c_sublocid_any);
+  //assert(subloc == c_sublocid_none);
   return loc;
 }
 
@@ -68,7 +68,12 @@ c_nodeid_t chpl_rt_nodeFromLocaleID(chpl_localeID_t loc) {
 
 static inline
 c_sublocid_t chpl_rt_sublocFromLocaleID(chpl_localeID_t loc) {
-  return c_sublocid_any;
+  return c_sublocid_none;
+}
+
+static inline
+int chpl_equals_localeID(chpl_localeID_t* loc1, chpl_localeID_t* loc2) {
+  return loc1->node == loc2->node;
 }
 
 //

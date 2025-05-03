@@ -1,7 +1,7 @@
 require "ccode.h";
 
-use SysCTypes;
+use CTypes;
 
-extern "type" var ctype: c_int;
+extern "type" var ctype: int(64);
 
 writeln(ctype);

@@ -1,16 +1,16 @@
 /*
- * Copyright 2020-2022 Hewlett Packard Enterprise Development LP
+ * Copyright 2020-2025 Hewlett Packard Enterprise Development LP
  * Copyright 2004-2019 Cray Inc.
  * Other additional copyright holders may be indicated within.
- * 
+ *
  * The entirety of this work is licensed under the Apache License,
  * Version 2.0 (the "License"); you may not use this file except
  * in compliance with the License.
- * 
+ *
  * You may obtain a copy of the License at
- * 
+ *
  *     http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -50,12 +50,12 @@ static char* walltime = NULL;
 static char* queue = NULL;
 static int generate_qsub_script = 0;
 
-static char expectFilename[FILENAME_MAX];
+static char* expectFilename = NULL;
 
 extern int fileno(FILE *stream);
 
 /* copies of binary to run per node */
-#define procsPerNode 1  
+#define procsPerNode 1
 #define versionBuffLen 80
 
 #define launcherAccountEnvvar "CHPL_LAUNCHER_ACCOUNT"
@@ -63,7 +63,7 @@ extern int fileno(FILE *stream);
 typedef enum {
   pbspro,
   nccs,
-  moab, 
+  moab,
   unknown
 } qsubVersion;
 
@@ -71,14 +71,11 @@ typedef enum {
 static qsubVersion determineQsubVersion(void) {
   const int buflen = 256;
   char version[buflen];
-  char whichMoab[buflen];
-  FILE *whichOutput;
-  int fileError = 1;
   char *argv[3];
   argv[0] = (char *) "qsub";
   argv[1] = (char *) "--version";
   argv[2] = NULL;
-  
+
   memset(version, 0, buflen);
   if (chpl_run_utility1K("qsub", argv, version, buflen) <= 0) {
     chpl_error("Error trying to determine qsub version", 0, 0);
@@ -88,19 +85,10 @@ static qsubVersion determineQsubVersion(void) {
     return nccs;
   } else if (strstr(version, "pbs_version") || strstr(version, "PBSPro")) {
     return pbspro;
-  } else {
-    memset(whichMoab, 0, buflen);
-    whichOutput = popen("which moab 2>&1 >/dev/null", "r");  
-    if (whichOutput != NULL ) {
-      fgets(whichMoab, buflen, whichOutput);
-      fileError = ferror(whichOutput); 
-      pclose(whichOutput);
-      if (strlen(whichMoab) == 0 && !fileError) {
-        return moab;
-      }
-    }
-    return unknown;
+  } else if (chpl_find_executable("moab") != NULL) {
+    return moab;
   }
+  return unknown;
 }
 
 //
@@ -108,13 +96,15 @@ static qsubVersion determineQsubVersion(void) {
 //   was written with the qsub options
 // else return the qsub options for the command line as a string
 //
-static char* genQsubOptions(char* genFilename, char* projectString, qsubVersion qsub, 
+static char* genQsubOptions(char* genFilename, char* projectString, qsubVersion qsub,
                             int32_t numLocales, int32_t numCoresPerLocale) {
   const size_t maxOptLength = 256;
   char* optionString = NULL;
   int length = 0;
   FILE *qsubScript = NULL;
   char *qsubFilename = expectFilename;
+  size_t qsubFilenameSize = sizeof(expectFilename);
+  char jobName[128];
 
   if (!queue) {
     queue = getenv("CHPL_LAUNCHER_QUEUE");
@@ -123,18 +113,21 @@ static char* genQsubOptions(char* genFilename, char* projectString, qsubVersion 
     walltime = getenv("CHPL_LAUNCHER_WALLTIME");
   }
 
+  chpl_launcher_get_job_name(genFilename, jobName, sizeof(jobName));
+
   if (generate_qsub_script) {
     pid_t mypid = debug ? 0 : getpid();
-    sprintf(qsubFilename, "qsub.%s-%d", genFilename, (int) mypid);
+    snprintf(qsubFilename, qsubFilenameSize, "qsub.%s-%d", genFilename,
+             (int) mypid);
     qsubScript = fopen(qsubFilename, "w");
     fprintf(qsubScript, "#PBS -j oe\n");
     fprintf(qsubScript, "#PBS -zV\n");
-    fprintf(qsubScript, "#PBS -N Chpl-%.10s\n", genFilename);
+    fprintf(qsubScript, "#PBS -N %s\n", jobName);
   } else {
     optionString = chpl_mem_allocMany(maxOptLength, sizeof(char),
                                       CHPL_RT_MD_COMMAND_BUFFER, -1, 0);
     length += snprintf(optionString + length, maxOptLength - length,
-                       "-z -V -I -N Chpl-%.10s", genFilename);
+                       "-z -V -I -N %s", jobName);
   }
 
   if (projectString && strlen(projectString) != 0) {
@@ -216,7 +209,7 @@ static char* genQsubOptions(char* genFilename, char* projectString, qsubVersion 
   return optionString;
 }
 
-static char** chpl_launch_create_argv(int argc, char* argv[], 
+static char** chpl_launch_create_argv(int argc, char* argv[],
                                       int32_t numLocales) {
   const int largc = 2;
   char *largv[largc];
@@ -243,8 +236,12 @@ static char** chpl_launch_create_argv(int argc, char* argv[],
   } else {
     mypid = 0;
   }
-  snprintf(expectFilename, FILENAME_MAX, "%s%d",
-           baseExpectFilename, (int)mypid);
+  int expectFilenameLen =
+      strlen(baseExpectFilename) + snprintf(NULL, 0, "%d", (int)mypid) + 1;
+  expectFilename = (char*)chpl_mem_allocMany(expectFilenameLen, sizeof(char),
+                                             CHPL_RT_MD_FILENAME, -1, 0);
+  snprintf(expectFilename, expectFilenameLen, "%s%d", baseExpectFilename,
+           (int)mypid);
 
   initAprunAttributes();
   numCoresPerLocale = getCoresPerLocale();
@@ -303,7 +300,7 @@ static char** chpl_launch_create_argv(int argc, char* argv[],
     fprintf(expectFile, "spawn qsub %s\n", qsubOptions);
     fprintf(expectFile, "expect {\n");
     fprintf(expectFile, "  \"A project was not specified\" {send_user "
-            "\"error: A project account must be specified via \\$" 
+            "\"error: A project account must be specified via \\$"
             launcherAccountEnvvar "\\n\" ; exit 1}\n");
     fprintf(expectFile, "  -ex \"qsub: waiting\" {}\n");
     fprintf(expectFile, "}\n");
@@ -321,7 +318,7 @@ static char** chpl_launch_create_argv(int argc, char* argv[],
       fprintf(expectFile, "expect {\n");
       fprintf(expectFile, "  \"failed: chdir\" {send_user "
               "\"error: %s must be launched from and/or stored on a "
-              "cross-mounted file system\\n\" ; exit 1}\n", 
+              "cross-mounted file system\\n\" ; exit 1}\n",
               basenamePtr);
       fprintf(expectFile, "  -ex \"$chpl_prompt\" {}\n");
       fprintf(expectFile, "}\n");
@@ -391,19 +388,29 @@ static void genQsubScript(int argc, char *argv[], int numLocales) {
 }
 
 static void chpl_launch_cleanup(void) {
-  if (!debug) {
+  if (!chpl_doDryRun() && !debug) {
     if (unlink(expectFilename)) {
-      char msg[FILENAME_MAX + 35];
-      snprintf(msg, FILENAME_MAX + 35, "Error removing temporary file '%s': %s",
+      char* format = "Error removing temporary file '%s': %s";
+      int msgLen =
+          strlen(format) + strlen(expectFilename) + strlen(strerror(errno));
+      char* msg = (char*)chpl_mem_allocMany(msgLen, sizeof(char),
+                                            CHPL_RT_MD_COMMAND_BUFFER, -1, 0);
+      snprintf(msg, msgLen, "Error removing temporary file '%s': %s",
                expectFilename, strerror(errno));
       chpl_warning(msg, 0, 0);
+      chpl_mem_free(msg, 0, 0);
     }
   }
 }
 
-int chpl_launch(int argc, char* argv[], int32_t numLocales) {
+int chpl_launch(int argc, char* argv[], int32_t numLocales,
+                int32_t numLocalesPerNode) {
   int retcode;
   debug = getenv("CHPL_LAUNCHER_DEBUG");
+
+  if (numLocalesPerNode > 1) {
+    chpl_launcher_no_colocales_error(NULL);
+  }
 
   if (generate_qsub_script) {
     genQsubScript(argc, argv, numLocales);
@@ -416,7 +423,7 @@ int chpl_launch(int argc, char* argv[], int32_t numLocales) {
                                   argv[0]);
     chpl_launch_cleanup();
   }
-
+  chpl_mem_free(expectFilename, 0, 0);
   return retcode;
 }
 
@@ -462,15 +469,24 @@ int chpl_launch_handle_arg(int argc, char* argv[], int argNum,
   return 0;
 }
 
-void chpl_launch_print_help(void) {
-  fprintf(stdout, "LAUNCHER FLAGS:\n");
-  fprintf(stdout, "===============\n");
-  fprintf(stdout, "  %s <cpu assignment>   : specify cpu assignment within a node:\n", CHPL_CC_ARG);
-  fprintf(stdout, "                           none (default), numa_node, cpu\n");
-  fprintf(stdout, "  %s : generate a qsub script and exit\n", CHPL_GENERATE_QSUB_SCRIPT);
-  fprintf(stdout, "  %s <queue>        : specify a queue\n", CHPL_QUEUE_FLAG);
-  fprintf(stdout, "                           (or use $CHPL_LAUNCHER_QUEUE)\n");
-  fprintf(stdout, "  %s <HH:MM:SS>  : specify a wallclock time limit\n", CHPL_WALLTIME_FLAG);
-  fprintf(stdout, "                           (or use $CHPL_LAUNCHER_WALLTIME)\n");
+const argDescTuple_t* chpl_launch_get_help(void) {
+  static const
+    argDescTuple_t args[] =
+    { { CHPL_CC_ARG " <cpu assignment>",
+        "specify cpu assignment within a node:" },
+      { "",
+        "none (default), numa_node, cpu" },
+      { CHPL_GENERATE_QSUB_SCRIPT,
+        "generate a qsub script and exit" },
+      { CHPL_QUEUE_FLAG " <queue>",
+        "specify a queue" },
+      { "",
+        "(or use $CHPL_LAUNCHER_QUEUE)" },
+      { CHPL_WALLTIME_FLAG " <HH:MM:SS>",
+        "specify a wallclock time limit" },
+      { "",
+        "(or use $CHPL_LAUNCHER_WALLTIME)" },
+      { NULL, NULL },
+    };
+  return args;
 }
-

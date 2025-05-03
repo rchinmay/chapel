@@ -1,5 +1,5 @@
 /*
- * Copyright 2020-2022 Hewlett Packard Enterprise Development LP
+ * Copyright 2020-2025 Hewlett Packard Enterprise Development LP
  * Copyright 2004-2019 Cray Inc.
  * Other additional copyright holders may be indicated within.
  *
@@ -47,10 +47,8 @@ unsigned CHPL_JE_LG_ARENA;
 // Decide whether or not to try to use jemalloc's chunk hooks interface
 //   jemalloc < 4.0 didn't support chunk_hooks_t
 //   jemalloc 4.1 changed opt.nareas from size_t to unsigned
-// .. so we use chunk hooks interface for jemalloc >= 4.1
-#if JEMALLOC_VERSION_MAJOR > 4
-#define USE_JE_CHUNK_HOOKS
-#endif
+//   jemalloc 5.x migrated to an extent API
+// .. so we use chunk hooks interface for jemalloc >= 4.1 and < 5.0
 #if (JEMALLOC_VERSION_MAJOR == 4) && (JEMALLOC_VERSION_MINOR >= 1)
 #define USE_JE_CHUNK_HOOKS
 #endif
@@ -66,6 +64,7 @@ static struct shared_heap {
 } heap;
 
 
+#ifdef USE_JE_CHUNK_HOOKS
 // compute aligned index into our shared heap, alignment must be a power of 2
 static inline void* alignHelper(void* base_ptr, size_t offset, size_t alignment) {
   uintptr_t p;
@@ -75,6 +74,7 @@ static inline void* alignHelper(void* base_ptr, size_t offset, size_t alignment)
   p = (p + alignment - 1) & ~(alignment - 1);
   return(void*) p;
 }
+#endif
 
 
 // *** Chunk hook replacements *** //
@@ -302,7 +302,7 @@ static void replaceChunkHooks(void) {
     }
   }
 #else
-    chpl_internal_error("cannot init multi-locale heap: please rebuild with jemalloc >= 4.1");
+    chpl_internal_error("cannot init multi-locale heap: please rebuild with jemalloc >= 4.1 and < 5.0");
 #endif
 
 }
@@ -418,6 +418,8 @@ void chpl_mem_layerInit(void) {
   //   memory allocation routines, the allocator initializes its internals"
   if (heap_base != NULL) {
     heap.type = FIXED;
+    // With a fixed heap all memory should be registered together so
+    // merging/splitting is allowed
     merge_split_chunks = chpl_env_rt_get_bool("MERGE_SPLIT_CHUNKS", true);
     heap.base = heap_base;
     heap.size = heap_size;
@@ -428,6 +430,9 @@ void chpl_mem_layerInit(void) {
     initializeSharedHeap();
   } else if (chpl_comm_regMemAllocThreshold() < SIZE_MAX) {
     heap.type = DYNAMIC;
+    // With a dynamic heap, extensions can be split, but merging may not work
+    // since we'd have a single blob of memory covered by multiple registration
+    // regions, which our comm layers may not support.
     merge_split_chunks = chpl_env_rt_get_bool("MERGE_SPLIT_CHUNKS", false);
     initializeSharedHeap();
   } else {

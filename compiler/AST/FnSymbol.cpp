@@ -1,5 +1,5 @@
 /*
- * Copyright 2020-2022 Hewlett Packard Enterprise Development LP
+ * Copyright 2020-2025 Hewlett Packard Enterprise Development LP
  * Copyright 2004-2019 Cray Inc.
  * Other additional copyright holders may be indicated within.
  *
@@ -24,7 +24,6 @@
 #include "astutil.h"
 #include "bb.h"
 #include "CollapseBlocks.h"
-#include "docsDriver.h"
 #include "driver.h"
 #include "expandVarArgs.h"
 #include "iterator.h"
@@ -34,6 +33,8 @@
 #include "stringutil.h"
 #include "visibleFunctions.h"
 
+#include "global-ast-vecs.h"
+
 FnSymbol*                 chpl_gen_main         = NULL;
 FnSymbol*                 initStringLiterals    = NULL;
 
@@ -41,6 +42,8 @@ FnSymbol*                 gAddModuleFn          = NULL;
 FnSymbol*                 gGenericTupleTypeCtor = NULL;
 FnSymbol*                 gGenericTupleDestroy  = NULL;
 
+const char*               ftableName = "chpl_ftable";
+const char*               ftableSizeName = "chpl_ftableSize";
 std::map<FnSymbol*, int>  ftableMap;
 std::vector<FnSymbol*>    ftableVec;
 
@@ -99,7 +102,7 @@ void FnSymbol::verify() {
   if (_this && _this->defPoint->parentSymbol != this)
     INT_FATAL(this, "Each method must contain a 'this' declaration.");
 
-  if (normalized) {
+  if (!this->hasFlag(FLAG_NO_FN_BODY) && normalized) {
     CallExpr* last = toCallExpr(body->body.last());
 
     if (last == NULL || last->isPrimitive(PRIM_RETURN) == false) {
@@ -239,6 +242,8 @@ FnSymbol* FnSymbol::copyInnerCore(SymbolMap* map) {
    */
   newFn->copyFlags(this);
   newFn->deprecationMsg = this->deprecationMsg;
+  newFn->unstableMsg = this->unstableMsg;
+  newFn->parenfulDeprecationMsg = this->parenfulDeprecationMsg;
 
   if (this->throwsError() == true) {
     newFn->throwsErrorInit();
@@ -342,23 +347,29 @@ FnSymbol* FnSymbol::partialCopy(SymbolMap* map) {
    * finalizeCopy method will replace their corresponding nodes from the body
    * appropriately.
    */
-  if (this->getReturnSymbol() == gVoid) {
+  auto sym = this->getReturnSymbol();
+
+  if (sym == nullptr) {
+    // Case 0: Function has no body, and thus no RVV.
+    newFn->retSymbol = nullptr;
+
+  } else if (sym == gVoid) {
     // Case 1: Function returns void.
     newFn->retSymbol = gVoid;
 
-  } else if (this->getReturnSymbol() == this->_this) {
+  } else if (sym == this->_this) {
     // Case 2: Function returns _this.
     newFn->retSymbol = newFn->_this;
 
-  } else if (Symbol* replacementRet = map->get(this->getReturnSymbol())) {
+  } else if (Symbol* replacementRet = map->get(sym)) {
     // Case 3: Function returns a formal argument.
     newFn->retSymbol = replacementRet;
 
   } else {
     // Case 4: Function returns a symbol defined in the body.
-    DefExpr* defPoint = this->getReturnSymbol()->defPoint;
+    DefExpr* defPoint = sym->defPoint;
 
-    newFn->retSymbol = COPY_INT(this->getReturnSymbol());
+    newFn->retSymbol = COPY_INT(sym);
 
     newFn->retSymbol->defPoint = new DefExpr(newFn->retSymbol,
                                              COPY_INT(defPoint->init),
@@ -557,13 +568,17 @@ void FnSymbol::insertAtTail(const char* format, ...) {
 Symbol* FnSymbol::getReturnSymbol() {
   Symbol* retval = this->retSymbol;
 
+  if (this->hasFlag(FLAG_NO_FN_BODY)) {
+    INT_ASSERT(retval == nullptr);
+    return nullptr;
+  }
+
   if (retval == NULL) {
     CallExpr* ret = toCallExpr(body->body.last());
 
     if (ret != NULL && ret->isPrimitive(PRIM_RETURN) == true) {
       if (SymExpr* sym = toSymExpr(ret->get(1))) {
         retval = sym->symbol();
-
       } else {
         INT_FATAL(this, "function is not normal");
       }
@@ -575,6 +590,18 @@ Symbol* FnSymbol::getReturnSymbol() {
   }
 
   return retval;
+}
+
+FunctionType* FnSymbol::computeAndSetType() {
+  if (auto ft = toFunctionType(this->type)) {
+    // The type we have now matches, so don't (potentially) generate AST.
+    if (ft->equals(this)) return ft;
+  }
+
+  // Otherwise, we have to recompute the function type.
+  auto ret = FunctionType::get(this);
+  this->type = ret;
+  return ret;
 }
 
 // Removes all statements from body and adds all statements from block.
@@ -758,10 +785,25 @@ CallExpr* FnSymbol::singleInvocation() const {
     if (se == parent->baseExpr) {
       retval = parent;
     }
+    else if (parent->isPrimitive(PRIM_GPU_KERNEL_LAUNCH)) {
+      if (se == parent->get(1)) {
+        retval = parent;
+      }
+    }
   }
 
   // The use is not as the callee, ex. as a FCF.
   return retval;
+}
+
+const char* FnSymbol::getParenfulDeprecationMsg() const {
+  if (parenfulDeprecationMsg[0] == '\0') {
+    const char* msg = astr("the parenful form of function ", name, " is deprecated");
+    return msg;
+  }
+  else {
+    return parenfulDeprecationMsg.c_str();
+  }
 }
 
 
@@ -817,6 +859,39 @@ TagGenericResult FnSymbol::tagIfGeneric(SymbolMap* map, bool abortOK) {
   }
 }
 
+static void checkFormalType(const FnSymbol* enclosingFn, ArgSymbol* formal) {
+  if (! formal->typeExprFromDefaultExpr) {
+    BaseAST* typeExp = formal->typeExpr->body.tail;
+    if (SymExpr* se = toSymExpr(typeExp)) {
+      Symbol* sym = se->symbol();
+      if (!isTypeSymbol(sym) && !sym->hasFlag(FLAG_TYPE_VARIABLE)) {
+        if (formal == enclosingFn->_this) {
+          USR_FATAL_CONT(formal, "Method defined on non-type '%s'",
+                         sym->name);
+        } else {
+          Immediate* imm = nullptr;
+          if (VarSymbol* var = toVarSymbol(sym)) imm = var->immediate;
+          USR_FATAL_CONT(typeExp, "The declared type of the formal "
+            "%s is non-type '%s'", formal->name,
+            imm == nullptr ? sym->name : imm->to_string().c_str());
+        }
+      }
+    } else if (CallExpr* call = toCallExpr(typeExp)) {
+      if (FnSymbol* target = call->resolvedFunction())
+        if (target->retTag != RET_TYPE)
+          USR_FATAL_CONT(typeExp, "The declared type of the formal "
+          "%s is given by non-type function '%s'", formal->name, target->name);
+    }
+
+    if (formal->type->symbol->hasFlag(FLAG_GENERIC)) {
+      if (enclosingFn->hasFlag(FLAG_COMPILER_GENERATED)) {
+        // We shouldn't complain to the user about routines we generate
+      } else {
+        warnIfGenericFormalMissingQ(formal, formal->type, nullptr);
+      }
+    }
+  }
+}
 
 //
 // Scan the formals and return true if there are any
@@ -865,6 +940,7 @@ bool FnSymbol::hasGenericFormals(SymbolMap* map) const {
 
       resolveBlockStmt(formal->typeExpr);
       formal->type = formal->typeExpr->body.tail->getValType();
+      checkFormalType(this, formal);
     }
 
     if (formal->originalIntent == INTENT_OUT) {
@@ -949,6 +1025,21 @@ bool FnSymbol::isResolved() const {
   return hasFlag(FLAG_RESOLVED);
 }
 
+bool FnSymbol::isErrorHandlingLowered() const {
+  for_formals_backward(formal, this) {
+    if (formal->hasFlag(FLAG_ERROR_VARIABLE)) return true;
+  }
+  return false;
+}
+
+bool FnSymbol::isSignature() const {
+  return hasFlag(FLAG_ANONYMOUS_FN) && hasFlag(FLAG_NO_FN_BODY);
+}
+
+bool FnSymbol::isAnonymous() const {
+  return hasFlag(FLAG_ANONYMOUS_FN) || hasFlag(FLAG_LEGACY_LAMBDA);
+}
+
 void FnSymbol::accept(AstVisitor* visitor) {
   if (visitor->enterFnSym(this) == true) {
 
@@ -981,16 +1072,16 @@ void FnSymbol::accept(AstVisitor* visitor) {
   }
 }
 
-AggregateType* FnSymbol::getReceiverType() const {
+Type* FnSymbol::getReceiverType() const {
   if (isMethod()) {
     if (isResolved() && _this != NULL) {
-      return toAggregateType(_this->getValType());
+      return _this->getValType();
     } else if (numFormals() >= 2) {
       ArgSymbol* _mt   = getFormal(1);
       ArgSymbol* _this = getFormal(2);
 
       if (_mt->type == dtMethodToken) {
-        return toAggregateType(_this->getValType());
+        return _this->getValType();
       }
     }
   }
@@ -1005,7 +1096,7 @@ bool FnSymbol::isMethod() const {
 bool FnSymbol::isMethodOnClass() const {
   bool retval = false;
 
-  if (AggregateType* at = getReceiverType()) {
+  if (AggregateType* at = toAggregateType(getReceiverType())) {
     retval = at->isClass();
   }
 
@@ -1015,7 +1106,7 @@ bool FnSymbol::isMethodOnClass() const {
 bool FnSymbol::isMethodOnRecord() const {
   bool retval = false;
 
-  if (AggregateType* at = getReceiverType()) {
+  if (AggregateType* at = toAggregateType(getReceiverType())) {
     retval = at->isRecord();
   }
 
@@ -1064,9 +1155,18 @@ bool FnSymbol::isPostInitializer() const {
 
 bool FnSymbol::isDefaultInit() const {
   return hasFlag(FLAG_COMPILER_GENERATED) &&
+         hasFlag(FLAG_DEFAULT_INIT) &&
          hasFlag(FLAG_COPY_INIT) == false &&
          isInitializer();
 }
+
+bool FnSymbol::isDefaultCopyInit() const {
+  return hasFlag(FLAG_COMPILER_GENERATED) &&
+         hasFlag(FLAG_DEFAULT_INIT) &&
+         hasFlag(FLAG_COPY_INIT) &&
+         isCopyInit();
+}
+
 
 bool FnSymbol::isCopyInit() const {
   return isMethod() && name == astrInitEquals;
@@ -1090,112 +1190,6 @@ QualifiedType FnSymbol::getReturnQualType() const {
   else if(retTag == RET_CONST_REF)
     q = isWideRef ? QUAL_CONST_WIDE_REF : QUAL_CONST_REF;
   return QualifiedType(retType, q);
-}
-
-
-std::string FnSymbol::docsDirective() {
-  if (fDocsTextOnly) {
-    return "";
-  }
-
-  if (this->isMethod() && this->isIterator()) {
-    return ".. itermethod:: ";
-  } else if (this->isIterator()) {
-    return ".. iterfunction:: ";
-  } else if (this->isMethod()) {
-    return ".. method:: ";
-  } else {
-    return ".. function:: ";
-  }
-}
-
-
-void FnSymbol::printDocs(std::ostream* file, unsigned int tabs) {
-  if (this->noDocGen() == false) {
-    // Print the rst directive, if one is needed.
-    this->printTabs(file, tabs);
-
-    *file << this->docsDirective();
-
-    // Print export. Externs do not get a prefix, since the user doesn't
-    // care whether it's an extern or not (they just want to use the function).
-    // Inlines don't get a prefix for symmetry in modules like Math.chpl and
-    // due to the argument that it's of negligible value in most cases.
-    if (this->hasFlag(FLAG_EXPORT)) {
-      *file << "export ";
-    }
-
-    if (this->hasFlag(FLAG_OVERRIDE)) {
-      *file << "override ";
-    }
-
-    // Print iter/proc.
-    if (this->isIterator()) {
-      *file << "iter ";
-
-    } else {
-      *file << "proc ";
-    }
-
-    // Print name and arguments.
-    AstToText info;
-
-    info.appendNameAndFormals(this);
-
-    *file << info.text();
-
-    // Print return intent, if one exists.
-    switch (this->retTag) {
-    case RET_REF:
-      *file << " ref";
-      break;
-
-    case RET_CONST_REF:
-      *file << " const ref";
-      break;
-
-    case RET_PARAM:
-      *file << " param";
-      break;
-
-    case RET_TYPE:
-      *file << " type";
-      break;
-
-    default:
-      break;
-    }
-
-    // Print return type.
-    if (this->retExprType != NULL) {
-      AstToText info;
-
-      info.appendExpr(this->retExprType->body.tail, true);
-      *file << ": ";
-      *file << info.text();
-    }
-
-    // Print throws
-    if (this->throwsError()) {
-      *file << " throws";
-    }
-
-    *file << std::endl;
-
-    if (!fDocsTextOnly) {
-      *file << std::endl;
-    }
-
-    if (this->doc != NULL) {
-      this->printDocsDescription(this->doc, file, tabs + 1);
-      *file << std::endl;
-    }
-
-    if (this->hasFlag(FLAG_DEPRECATED)) {
-      this->printDocsDeprecation(this->doc, file, tabs + 1,
-                                 this->getDeprecationMsg(), true);
-    }
-  }
 }
 
 void FnSymbol::throwsErrorInit() {
@@ -1398,6 +1392,8 @@ static std::string argToString(FnSymbol* fn,
         char buf[bufSize];
         snprint_imm(buf, bufSize, *imm);
         value = buf;
+        if (is_imag_type(t))
+          value += 'i';
       }
     }
 
@@ -1586,7 +1582,8 @@ std::string FnSymbol::nameAndArgsToString(const char* sep,
       }
     }
 
-    if (foundThis) {
+    // Don't print "this" for operator methods, but do print it otherwise
+    if (foundThis && !fn->hasFlag(FLAG_OPERATOR)) {
       std::string argString = argToString(fn,
                                           name, thisFormal, thisSubstitution,
                                           /*isThis*/ true,

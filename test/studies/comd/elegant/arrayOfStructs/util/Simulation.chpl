@@ -28,7 +28,7 @@ record Box {
   var count : int;
   var atoms : [1..MAXATOMS] Atom;
 
-  iter liveAtoms() ref {
+  iter ref liveAtoms() ref {
     for i in 1..count do yield atoms[i];
   }
 
@@ -42,7 +42,7 @@ proc Box.init=(const ref other: Box) {
   this.atoms = other.atoms;
 }
 
-proc =(ref A : Box, B : Box) {
+operator Box.=(ref A : Box, B : Box) {
   A.count = B.count;
   if A.count > 0 then
     A.atoms[1..A.count] = B.atoms[1..A.count];
@@ -160,7 +160,7 @@ proc createFccLattice(lat : real) {
                                 (T, Q, T),
                                 (T, T, Q)];
   var end : vec3int;
-  for i in 0..2 do end(i) = Math.ceil(globalExtent(i) / lat):int;
+  for i in 0..2 do end(i) = AutoMath.ceil(globalExtent(i) / lat):int;
 
   const latticeDom = {0..#end(0), 0..#end(1), 0..#end(2)};
 
@@ -214,7 +214,7 @@ proc setTemperature(temperature) {
   kineticEnergy();
 
   const t     = eKinetic / numAtoms / kB_eV / 1.5;
-  const scale = Math.sqrt(temperature/t);
+  const scale = AutoMath.sqrt(temperature/t);
 
   forall a in allAtoms() {
     a.p *= scale;
@@ -295,7 +295,7 @@ iter allAtoms() ref {
   }
 }
 
-iter allAtoms(param tag : iterKind) ref where tag == iterKind.leader {
+iter allAtoms(param tag : iterKind) where tag == iterKind.leader {
   for follow in Boxes.these(iterKind.leader) {
     yield follow;
   }
@@ -397,6 +397,7 @@ proc sortAtomsInCell() {
       return a.gid - b.gid;
     }
   }
+  cmp implements relativeComparator;
 
   const c = new cmp();
 

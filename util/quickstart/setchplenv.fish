@@ -48,8 +48,11 @@ set -x CHPL_COMM none
 echo "Setting CHPL_TASKS to fifo"
 set -x CHPL_TASKS fifo
 
-echo "Setting CHPL_MEM to cstdlib"
-set -x CHPL_MEM cstdlib
+echo "Setting CHPL_TARGET_MEM to cstdlib"
+set -x CHPL_TARGET_MEM cstdlib
+
+echo "Setting CHPL_HOST_MEM to cstdlib"
+set -x CHPL_HOST_MEM cstdlib
 
 echo "Setting CHPL_GMP to none"
 set -x CHPL_GMP none
@@ -57,5 +60,6 @@ set -x CHPL_GMP none
 echo "Setting CHPL_RE2 to none"
 set -x CHPL_RE2 none
 
-echo "Setting CHPL_LLVM to none"
-set -x CHPL_LLVM none
+set -x USE_LLVM (eval "$CHPL_PYTHON" "$CHPL_HOME/util/chplenv/chpl_llvm.py" "--quickstart")
+echo "Setting CHPL_LLVM to $USE_LLVM"
+set -x CHPL_LLVM $USE_LLVM

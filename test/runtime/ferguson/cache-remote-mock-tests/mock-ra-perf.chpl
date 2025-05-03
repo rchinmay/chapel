@@ -1,12 +1,12 @@
 // Run an RA-like pattern to stress --cache-remote
 // on all cores and report the overhead per operation.
 
-use SysCTypes;
+use CTypes;
 use Time;
 use Random;
 
 extern proc chpl_cache_print_stats();
-extern proc chpl_cache_mock_get(node:c_int, raddr:uint(64), size:size_t):c_int;
+extern proc chpl_cache_mock_get(node:c_int, raddr:uint(64), size:c_size_t):c_int;
 
 config const printStats = true;
 config const seed = 101;
@@ -30,12 +30,12 @@ proc run(name:string,
   }
 
   coforall task in 0..#threads {
-    var rng = new RandomStream(uint, seed, parSafe=false);
-    var t:Timer;
+    var rng = new randomStream(uint, seed);
+    var t:stopwatch;
     t.start();
     for update in 0..<numUpdates {
-      const node = rng.getNext(min=0, max=nLocales-1);
-      const addr = rng.getNext(min=0, max=spacePerLocale-1);
+      const node = rng.next(min=0, max=nLocales-1);
+      const addr = rng.next(min=0, max=spacePerLocale-1);
       chpl_cache_mock_get(node:c_int, basePtr+addr, 8);
     }
     t.stop();

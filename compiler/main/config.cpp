@@ -1,5 +1,5 @@
 /*
- * Copyright 2020-2022 Hewlett Packard Enterprise Development LP
+ * Copyright 2020-2025 Hewlett Packard Enterprise Development LP
  * Copyright 2004-2019 Cray Inc.
  * Other additional copyright holders may be indicated within.
  *
@@ -24,8 +24,14 @@
 #include "driver.h"
 #include "expr.h"
 #include "parser.h"
+#include "resolution.h"
 #include "stmt.h"
 #include "stringutil.h"
+#include "chpl/uast/Builder.h"
+#include <utility>
+
+
+using namespace chpl;
 
 static Map<const char*, Expr*> configMap; // map from configs to vals
 static Map<const char*, VarSymbol*> usedConfigParams; // map from configs to uses
@@ -35,20 +41,7 @@ bool                           mainPreserveDelimiter;
 
 void checkConfigs() {
   if (fMinimalModules == false) {
-    bool             anyBadConfigParams = false;
-    Vec<const char*> configParamSetNames;
-
-    configMap.get_keys(configParamSetNames);
-
-    forv_Vec(const char, name, configParamSetNames) {
-      if (usedConfigParams.get(name) == NULL) {
-        USR_FATAL_CONT("Trying to set unrecognized config '%s' via -s flag",
-                       name);
-        anyBadConfigParams = true;
-      }
-    }
-
-    if (anyBadConfigParams) {
+    if (uast::Builder::checkAllConfigVarsAssigned(gContext)) {
       USR_STOP();
     }
   }
@@ -68,40 +61,12 @@ void checkConfigs() {
 // the internal scope-less BlockStmt.
 
 void parseCmdLineConfig(const char* name, const char* value) {
-  // Generate a C-string for a nominal Chapel assignment statement
-  const char* stmtText = (value[0] != '\0') ? astr("dummyConfig=", value, ";") : astr("dummyConfig=true;");
-  const char* parseFn  = astr("Command-line arg (", name, ")");
-  const char* parseMsg = astr("parsing '", value, "'");
 
-  // Invoke the parser to generate AST
-  BlockStmt*  stmt     = parseString(stmtText, parseFn, parseMsg);
-
-  // Determine if the body is also a BlockStmt
-  BlockStmt*  b        = toBlockStmt(stmt->body.head);
-  Expr*       newExpr  = NULL;
-
-  // If NO then extract the RHS from the stmt
-  if (b == 0) {
-    if (CallExpr* c = toCallExpr(stmt->body.head)) {
-      newExpr = c->get(2)->copy();
-
-    } else {
-      INT_ASSERT(false);
-    }
-
-  } else {
-    if (CallExpr* c = toCallExpr(b->body.head)) {
-      newExpr = c->get(2)->copy();
-
-    } else {
-      INT_ASSERT(false);
-    }
-
-  }
-
-  configMap.put(astr(name), newExpr);
-
-  INT_ASSERT(newExpr == configMap.get(astr(name)));
+  // unfortunately this is parsed in the order from the command line, so for
+  // it to work, --dyno must come before -sConfigVar=Val or it will not try
+  // to use the dyno parser for command line input
+  auto pair = std::make_pair(std::string(name), std::string(value));
+  gDynoParams.push_back(std::move(pair));
 }
 
 Expr* getCmdLineConfig(const char* name) {
@@ -116,4 +81,56 @@ VarSymbol* isUsedCmdLineConfig(const char* name) {
   return usedConfigParams.get(name);
 }
 
+bool isSetCmdLineConfig(const char* moduleName, const char* paramName) {
+  std::string fullName = std::string(moduleName) + "." + std::string(paramName);
+  // TODO: This is O(n) in the number of params, a better way would be nicer.
+  // However, there would never be >20-ish params if we're being
+  // reasonable. So it's not that bad.
+  for (const auto& pair : gDynoParams) {
+    if (pair.first == fullName ||
+        strcmp(pair.first.c_str(), paramName) == 0){
+      return true;
+    }
+  }
+  return false;
+}
 
+// Any call to this function MUST cache the result in a local variable
+// Ex:
+// bool usePointerImplementation(void) {
+//   static bool flag = false;
+//   static bool flagLegal = false;
+//   if(!flagLegal) {
+//     flag = getConfigParamBool(baseModule,"flag") == gTrue;
+//     flagLegal = true;
+//   }
+//   return flag;
+// }
+VarSymbol*
+getConfigParamBool(ModuleSymbol* modSym, const char* configParamName) {
+  VarSymbol* ret = nullptr;
+
+  if (!modSym->initFn || !modSym->initFn->isResolved()) {
+    INT_FATAL(modSym, "Called before '%s' is resolved",
+                      modSym->name);
+  }
+
+  for (auto varSym : modSym->getTopLevelConfigVars()) {
+    if (varSym->name == astr(configParamName)) {
+      // Ok, the symbol is in the tree so it was resolved.
+
+      if (auto rhsSym = paramMap.get(varSym)) {
+        // Ok, there was a value in the param map for us to use.
+
+        if (rhsSym != gTrue && rhsSym != gFalse) {
+          INT_FATAL("Unexpected config param!");
+        } else {
+          ret = toVarSymbol(rhsSym);
+          break;
+        }
+      }
+    }
+  }
+
+  return ret;
+}

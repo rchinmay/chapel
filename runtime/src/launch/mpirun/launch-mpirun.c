@@ -1,5 +1,5 @@
 /*
- * Copyright 2020-2022 Hewlett Packard Enterprise Development LP
+ * Copyright 2020-2025 Hewlett Packard Enterprise Development LP
  * Copyright 2004-2019 Cray Inc.
  * Other additional copyright holders may be indicated within.
  *
@@ -55,14 +55,19 @@ static char** chpl_launch_create_argv(const char *launch_cmd,
 
   largv[0] = (char *) launch_cmd;
   largv[1] = (char *) "-np";
-  sprintf(_nlbuf, "%d", numranks);
+  snprintf(_nlbuf, sizeof(_nlbuf), "%d", numranks);
   largv[2] = _nlbuf;
 
   return chpl_bundle_exec_args(argc, argv, largc, largv);
 }
 
-int chpl_launch(int argc, char* argv[], int32_t numLocales) {
+int chpl_launch(int argc, char* argv[], int32_t numLocales,
+                int32_t numLocalesPerNode) {
   const char *cmd = "mpirun";
+
+  if (numLocalesPerNode > 1) {
+    chpl_launcher_no_colocales_error(NULL);
+  }
 
   return chpl_launch_using_exec(cmd,
                                 chpl_launch_create_argv(cmd, argc, argv,
@@ -87,8 +92,12 @@ int chpl_launch_handle_arg(int argc, char* argv[], int argNum,
 }
 
 
-void chpl_launch_print_help(void) {
-  fprintf(stdout, "LAUNCHER FLAGS:\n");
-  fprintf(stdout, "===============\n");
-  fprintf(stdout, "  %s : specify number of SPMD images \n", CHPL_SPMD);
+const argDescTuple_t* chpl_launch_get_help(void) {
+  static const
+    argDescTuple_t args[] =
+    { { CHPL_SPMD,
+        "specify number of SPMD images" },
+      { NULL, NULL },
+    };
+  return args;
 }

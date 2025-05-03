@@ -1,16 +1,16 @@
 /*
- * Copyright 2020-2022 Hewlett Packard Enterprise Development LP
+ * Copyright 2020-2025 Hewlett Packard Enterprise Development LP
  * Copyright 2004-2019 Cray Inc.
  * Other additional copyright holders may be indicated within.
- * 
+ *
  * The entirety of this work is licensed under the Apache License,
  * Version 2.0 (the "License"); you may not use this file except
  * in compliance with the License.
- * 
+ *
  * You may obtain a copy of the License at
- * 
+ *
  *     http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -28,6 +28,7 @@
 #include "chpl-comm.h"
 #include "chplexit.h"
 #include "chplio.h"
+#include "chpl-gpu.h"
 #include "chpl-init.h"
 #include "chpl-mem.h"
 #include "chplmemtrack.h"
@@ -65,7 +66,7 @@ void deallocate_string_literals_buf(void) {
   chpl_string_literals_buffer = NULL;
 }
 
-int handleNonstandardArg(int* argc, char* argv[], int argNum, 
+int handleNonstandardArg(int* argc, char* argv[], int argNum,
                          int32_t lineno, int32_t filename) {
 
   if (mainHasArgs) {
@@ -92,7 +93,7 @@ static void recordExecutionCommand(int argc, char *argv[]) {
   chpl_executionCommand =
     (char*)chpl_mem_allocMany(length+1, sizeof(char),
                               CHPL_RT_MD_EXECUTION_COMMAND, 0, 0);
-  sprintf(chpl_executionCommand, "%s", argv[0]);
+  snprintf(chpl_executionCommand, (length+1) * sizeof(char), "%s", argv[0]);
   for (i = 1; i < argc; i++) {
     strcat(chpl_executionCommand, " ");
     strcat(chpl_executionCommand, argv[i]);
@@ -110,7 +111,7 @@ static void recordExecutionCommand(int argc, char *argv[]) {
 void chpl_rt_preUserCodeHook(void) {
   //
   // The module initialization functions have all completed on each
-  // node, locally, before we are called. 
+  // node, locally, before we are called.
   //
   // The module init code can leave the running task counts incorrect.
   // Once module init is complete, we can set those counts to the right
@@ -157,6 +158,44 @@ void chpl_rt_postUserCodeHook(void) {
 }
 
 
+static void chpl_setlocale_utf8(void) {
+  const char* got = NULL;
+
+  // Note: the C locale only currently matters for calls to
+  // wcwidth in formatted I/O.
+  // TODO: Would it be better to bundle some third-party library
+  // that can compute the number of columns of each UTF-8 character?
+
+  // First, try setting the character type to UTF-8 this way.
+  // It seems to work on Mac OS X and linux
+  // and matches the documentation.
+  //
+  // This should only affect the character set and so the
+  // language is irrelevant.
+  got = setlocale(LC_CTYPE, "en_US.UTF-8");
+
+  if (got == NULL) {
+    // This seems to work on linux but not on Mac OS X
+    got = setlocale(LC_CTYPE, "C.UTF-8");
+  }
+
+  if (got == NULL) {
+    // This seems to work on Mac OS X but not linux
+    got = setlocale(LC_CTYPE, "UTF-8");
+  }
+
+  if (got == NULL) {
+    fprintf(stderr, "Warning: setlocale(LC_CTYPE, \"en_US.UTF-8\") failed. "
+                    "Formatted I/O may not work correctly.");
+
+    // This should always succeed and we should have already been
+    // in the C locale when we started (but it is possible to be otherwise
+    // when we are being launched as a library).
+    // This way at least the ASCII subset of UTF-8 will work correctly.
+    setlocale(LC_CTYPE, "C");
+  }
+}
+
 //
 // Chapel runtime initialization
 //
@@ -174,10 +213,9 @@ void chpl_rt_init(int argc, char* argv[]) {
   assert( sys_page_size() > 0 );
 
   // Declare that we are 'locale aware' so that
-  // UTF-8 functions (e.g. wcrtomb) work as
-  // indicated by the locale environment variables.
-  setlocale(LC_CTYPE,"");
-  qio_set_glocale();
+  // wctype.h functions such as wcwidth work with UTF-8.
+  chpl_setlocale_utf8();
+
   // So that use of localtime_r is portable.
   tzset();
 
@@ -187,9 +225,44 @@ void chpl_rt_init(int argc, char* argv[]) {
   //
   parseArgs(false, parse_dash_E, &argc, argv);
 
+
+  //
+  // Initialization of the topo, comm, mem, and task layers is tricky because
+  // they have inter-twined dependencies and there isn't a linear ordering
+  // in which they can be completely initialized.
+  // Here is a general summary of what these functions do, in order:
+  //   chpl_topo_pre_comm_init
+  //     Initializes the topology information required to initialize the comm
+  //     layer. For example, some comm configurations need to know the
+  //     upper limit on the number of cores the locale will use.
+  //   chpl_comm_init
+  //     Initializes enough of the comm layer so that the topo layer can
+  //     finish initialization, including determining how many co-locales
+  //     there are on the node.
+  //   chpl_topo_post_comm_init
+  //     Finishes topo initialization, including partitioning the resources
+  //     such as CPUs, NUMA domains and NICs among the co-locales on the
+  //     node.
+  //   chpl_comm_pre_mem_init
+  //     Performs any comm initialization that requires the topology layer to
+  //     be fully initialized, such as calling gasnet_attach.
+  //   chpl_mem_init
+  //     Initializes the mem layer
+  //   chpl_comm_post_mem_init
+  //     Performs any comm initialization that requires the mem layer to be
+  //     initialized, such as initializing the fabric when comm=ofi.
+  //   chpl_task_init
+  //     Initializes the task layer
+  //   chpl_comm_post_task_init
+  //     Performs any comm initialization that requires the task layer to be
+  //     initialized, such as pinning the fixed heap when comm=ofi.
+  //
+
   chpl_error_init();  // This does local-only initialization
-  chpl_topo_init();
+  chpl_topo_pre_comm_init(NULL);
   chpl_comm_init(&argc, &argv);
+  chpl_topo_post_comm_init();
+  chpl_comm_pre_mem_init();
   chpl_mem_init();
   chpl_comm_post_mem_init();
 
@@ -202,6 +275,8 @@ void chpl_rt_init(int argc, char* argv[]) {
   chpl_gen_main_arg.return_value = 0;
   parseArgs(false, parse_normally, &argc, argv);
   recordExecutionCommand(argc, argv);
+
+  chpl_topo_post_args_init();
 
   //
   // If the user specified a number of locales, have the comm layer
@@ -244,6 +319,10 @@ void chpl_rt_init(int argc, char* argv[]) {
 #ifdef HAS_CHPL_CACHE_FNS
   chpl_cache_init();
 #endif
+
+#ifdef HAS_GPU_LOCALE
+  chpl_gpu_init();
+#endif
   chpl_comm_rollcall();
 
   //
@@ -251,14 +330,6 @@ void chpl_rt_init(int argc, char* argv[]) {
   // running Chapel code.
   //
   chpl_comm_barrier("barrier before main");
-}
-
-//
-// Called by "main.c:main(...)" and "cphl-init.c:chpl_library_finalize()".
-//
-void chpl_rt_finalize(int return_value) {
-  //chpl_rt_postUserCodeHook();
-  chpl_exit_all(return_value);
 }
 
 //
@@ -284,10 +355,11 @@ void chpl_std_module_init(void) {
     // Initialize the internal modules.
     chpl__init_PrintModuleInitOrder(0, myFilename);
     chpl__init_ChapelStandard(0, myFilename);
+
     // Note that in general, module code can contain "on" clauses
     // and should therefore not be called before the call to
     // chpl_comm_startPollingTask().
-
+    //
     //
     // Permit the tasking layer to do anything it would like to now that
     // the standard modules are initialized.
@@ -301,14 +373,13 @@ void chpl_std_module_init(void) {
     chpl_rt_preUserCodeHook();
     chpl_rt_postUserCodeHook();
   }
-
 }
 
 //
 // The function previously known as "chpl_main".
 //
 // Chapel standard module initialization has been factored out
-// into chpl-init.c:chapel_std_module_init() for reuse by 
+// into chpl-init.c:chapel_std_module_init() for reuse by
 // chpl-init.c:chpl_library_init().
 //
 void chpl_executable_init(void) {
@@ -333,6 +404,7 @@ void chpl_execute_module_deinit(c_fn_ptr deinitFun) {
 void chpl_libraryModuleLevelSetup(void);
 void chpl_libraryModuleLevelCleanup(void);
 
+bool lib_inited = false;
 //
 // A program using Chapel as a library might look like:
 //
@@ -352,11 +424,16 @@ void chpl_libraryModuleLevelCleanup(void);
 // }
 //
 void chpl_library_init(int argc, char* argv[]) {
+  if (lib_inited) {
+    chpl_error("Can't call chpl_library_init() twice", 0, 0);
+  } else {
+    lib_inited = true;
+  }
   chpl_rt_init(argc, argv);                     // Initialize the runtime
   chpl_task_callMain(chpl_std_module_init);     // Initialize std modules
   chpl_libraryModuleLevelSetup();
 
-  // @dlongnecke-cray, 11/16/2020 
+  // @dlongnecke-cray, 11/16/2020
   // TODO: Call chpl_rt_preUserCodeHook() here for Locale[0]?
 }
 
@@ -364,11 +441,24 @@ void chpl_library_init(int argc, char* argv[]) {
 // we may have initialized
 extern void chpl_deinitModules(void);
 
+bool lib_deinited = false;
+
 //
-// A wrapper around chpl-init.c:chpl_rt_finalize(...), sole purpose is 
+// A wrapper around chplexit.c:chpl_finalize(...), sole purpose is
 // to provide a "chpl_library_*" interface for the Chapel "library-user".
 void chpl_library_finalize(void) {
+  if (!lib_inited) {
+    return;
+  }
+
+  if (lib_deinited) {
+    // Nothing to do, we've already been cleaned up
+    return;
+  } else {
+    lib_deinited = true;
+  }
+
   chpl_libraryModuleLevelCleanup();
   chpl_deinitModules();
-  chpl_rt_finalize(0);
+  chpl_finalize(0, 1);
 }

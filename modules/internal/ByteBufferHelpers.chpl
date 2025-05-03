@@ -1,5 +1,5 @@
 /*
- * Copyright 2020-2022 Hewlett Packard Enterprise Development LP
+ * Copyright 2020-2025 Hewlett Packard Enterprise Development LP
  * Copyright 2004-2019 Cray Inc.
  * Other additional copyright holders may be indicated within.
  *
@@ -20,14 +20,15 @@
 
 module ByteBufferHelpers {
   private use ChapelStandard;
-  private use SysCTypes;
-  private use CPtr;
+  private use CTypes;
+  private use OS.POSIX;
+  private use ChplConfig only compiledForSingleLocale;
 
-  pragma "no doc"
+  @chpldoc.nodoc
   type byteType = uint(8);
-  pragma "no doc"
+  @chpldoc.nodoc
   type bufferType = c_ptr(byteType);
-  pragma "no doc"
+  @chpldoc.nodoc
   type locIdType = chpl_nodeID.type;
 
   // Growth factor to use when extending the buffer for appends
@@ -56,7 +57,8 @@ module ByteBufferHelpers {
 
   inline proc chpl_string_comm_get(dest: bufferType, src_loc_id: int(64),
                                    src_addr: bufferType, len: integral) {
-    __primitive("chpl_comm_get", dest, src_loc_id, src_addr, len.safeCast(size_t));
+    import Communication;
+    Communication.get(dest, src_addr, src_loc_id, len.safeCast(c_size_t));
   }
 
   private inline proc getGoodAllocSize(requestedSize: int): int {
@@ -93,7 +95,7 @@ module ByteBufferHelpers {
       return dst;
   }
 
-  inline proc bufferCopyLocal(src_addr: bufferType, len: int) {
+  inline proc bufferCopyLocal(src_addr: bufferType, len: int): (bufferType, int) {
       const (dst, allocSize) = bufferAlloc(len+1);
       bufferMemcpyLocal(dst=dst, src=src_addr, len=len);
       dst[len] = 0;
@@ -105,7 +107,7 @@ module ByteBufferHelpers {
   }
 
   inline proc bufferCopy(buf: bufferType, off: int, len: int, loc: locIdType) {
-    if !_local && loc != chpl_nodeID {
+    if !compiledForSingleLocale() && loc != chpl_nodeID {
       var newBuf = bufferCopyRemote(loc, buf+off, len);
       return (newBuf, len);
     }
@@ -117,26 +119,26 @@ module ByteBufferHelpers {
   //dst must be local
   inline proc bufferMemcpy(dst: bufferType, src_loc: int(64), src: bufferType,
                            len: int, dst_off: int=0, src_off: int=0) {
-    if !_local && src_loc != chpl_nodeID {
+    if !compiledForSingleLocale() && src_loc != chpl_nodeID {
       chpl_string_comm_get(dst+dst_off, src_loc, src+src_off, len);
     }
     else {
-      c_memcpy(dst+dst_off, src+src_off, len);
+      memcpy(dst+dst_off, src+src_off, len.safeCast(c_size_t));
     }
   }
 
   inline proc bufferMemcpyLocal(dst: bufferType, src: bufferType, len: int,
                                 dst_off: int=0, src_off: int=0) {
-    c_memcpy(dst:bufferType+dst_off, src:bufferType+src_off, len:uint(64));
+    memcpy(dst:bufferType+dst_off, src:bufferType+src_off, len.safeCast(c_size_t));
   }
 
   inline proc bufferMemmoveLocal(dst: bufferType, src, len: int,
                                  dst_off: int=0, src_off: int=0) {
-    c_memmove(dst+dst_off, src+src_off, len);
+    memmove(dst+dst_off, src+src_off, len.safeCast(c_size_t));
   }
 
   inline proc bufferGetByte(buf: bufferType, off: int, loc: locIdType) {
-    if !_local && loc != chpl_nodeID {
+    if !compiledForSingleLocale() && loc != chpl_nodeID {
       const newBuf = bufferCopyRemote(src_loc_id=loc, src_addr=buf+off, len=1);
       const ret = newBuf[0];
       bufferFree(newBuf);
@@ -164,7 +166,7 @@ module ByteBufferHelpers {
                                     buf2: bufferType, len2: int) : int {
     // Assumes a and b are on same locale and not empty.
     const size = min(len1, len2);
-    const result =  c_memcmp(buf1, buf2, size);
+    const result =  memcmp(buf1, buf2, size.safeCast(c_size_t));
 
     if (result == 0) {
       // Handle cases where one string is the beginning of the other
@@ -179,7 +181,7 @@ module ByteBufferHelpers {
     if loc1 == chpl_nodeID && loc2 == chpl_nodeID {
       // it's local
       return _strcmp_local(buf1, len1, buf2, len2);
-    } 
+    }
     else if loc1 != chpl_nodeID && loc2 == chpl_nodeID {
       var locBuf1 = bufferCopyRemote(loc1, buf1, len1);
       const ret = _strcmp_local(locBuf1, len1, buf2, len2);

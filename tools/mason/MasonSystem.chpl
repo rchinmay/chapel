@@ -1,5 +1,5 @@
 /*
- * Copyright 2020-2022 Hewlett Packard Enterprise Development LP
+ * Copyright 2020-2025 Hewlett Packard Enterprise Development LP
  * Copyright 2004-2019 Cray Inc.
  * Other additional copyright holders may be indicated within.
  *
@@ -92,10 +92,10 @@ proc pkgSearch(args) throws {
     exit(0);
   }
 
-  const pattern = compile(pkgName, ignoreCase=true);
+  const pattern = new regex(pkgName, ignoreCase=true);
   const command = "pkg-config --list-all";
   const cmd = command.split();
-  var sub = spawn(cmd, stdout=PIPE);
+  var sub = spawn(cmd, stdout=pipeStyle.pipe);
   sub.wait();
 
   // TODO: Test if this ever worked
@@ -149,7 +149,7 @@ proc printPkgPc(args) throws {
       //
       var pcDir = "".join(getPkgVariable(pkgName, "--variable=pcfiledir").these()).strip();
       var pcFile = joinPath(pcDir, pkgName + ".pc");
-      var pc = open(pcFile, iomode.r);
+      var pc = openReader(pcFile, locking=false);
       writeln("\n------- " + pkgName + ".pc -------\n");
       for line in pc.lines() {
         write(line);
@@ -179,13 +179,13 @@ proc getPkgVariable(pkgName: string, option: string) {
 
   var lines: list(string);
   var cmd = command.split();
-  var sub = spawn(cmd, stdout=PIPE);
+  var sub = spawn(cmd, stdout=pipeStyle.pipe);
   sub.wait();
 
   var line:string;
   for line in sub.stdout.lines() {
     if line.size > 1 then
-      lines.append(line);
+      lines.pushBack(line);
   }
 
   return lines;
@@ -206,9 +206,9 @@ proc pkgExists(pkgName: string) : bool {
 /* Retrieves build information for MasonUpdate */
 proc getPkgInfo(pkgName: string, version: string) throws {
 
-  var pkgDom: domain(string);
-  var pkgToml: [pkgDom] unmanaged Toml?;
-  var pkgInfo = new unmanaged Toml(pkgToml);
+  var pkgDom: domain(string, parSafe=false);
+  var pkgToml: [pkgDom] shared Toml?;
+  var pkgInfo = new shared Toml(pkgToml);
 
   if pkgExists(pkgName) {
     // Pass "these" to join instead of converting the list to an array.
@@ -233,12 +233,12 @@ proc getPkgInfo(pkgName: string, version: string) throws {
 
 /* Given a toml of external dependencies returns
    the dependencies in a toml */
-proc getPCDeps(exDeps: unmanaged Toml) {
+proc getPCDeps(exDeps: Toml) {
 
-  var exDom: domain(string);
-  var exDepTree: [exDom] unmanaged Toml?;
+  var exDom: domain(string, parSafe=false);
+  var exDepTree: [exDom] shared Toml?;
 
-  for (name, vers) in exDeps.A.items() {
+  for (name, vers) in zip(exDeps.A.keys(), exDeps.A.values()) {
     try! {
       if pkgConfigExists() {
         const pkgInfo = getPkgInfo(name, vers!.s);

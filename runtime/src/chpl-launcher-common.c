@@ -1,5 +1,5 @@
 /*
- * Copyright 2020-2022 Hewlett Packard Enterprise Development LP
+ * Copyright 2020-2025 Hewlett Packard Enterprise Development LP
  * Copyright 2004-2019 Cray Inc.
  * Other additional copyright holders may be indicated within.
  *
@@ -19,6 +19,7 @@
  */
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <sys/stat.h>
 #include <unistd.h>
 #include <sys/types.h>
@@ -26,9 +27,11 @@
 #include <sys/select.h>
 #include <errno.h>
 #include <string.h>
+#include <assert.h>
 #include "chplcgfns.h"
 #include "chpl-comm-launch.h"
 #include "chpl-comm-locales.h"
+#include "chplexit.h"
 #include "chpllaunch.h"
 #include "chpl-mem.h"
 #include "chpltypes.h"
@@ -47,6 +50,20 @@ extern const int mainHasArgs;
 extern const int mainPreserveDelimiter;
 extern const int launcher_is_mli;
 extern const char* launcher_mli_real_name;
+
+
+//
+// Are we doing a dry run, printing the system launcher command but
+// not running it?
+//
+#define CHPL_DRY_RUN_ARG "--dry-run"
+
+static int dryRunFlag = 0;
+
+int chpl_doDryRun(void) {
+  return dryRunFlag;
+}
+
 
 static void chpl_launch_sanity_checks(const char* argv0) {
   // Do sanity checks just before launching.
@@ -86,6 +103,45 @@ void chpl_append_to_largv(int* largc, const char*** largv, int* largv_len,
   (*largv)[(*largc)++] = (arg);
 }
 
+// Helper for appending arguments to a variable-size command buffer.
+// - Requires cmdBufPtr points to an uninitialized pointer on first call, and
+//   charsWritten is 0.
+// - After exceeding an initial allocated size estimate, each call will allocate
+//   additional memory as needed.
+void chpl_append_to_cmd(char** cmdBufPtr, int* charsWritten,
+                        const char* format, ...) {
+  // Estimate of a buffer size that probably won't require extending, to avoid
+  // reallocations and copying.
+  static const int initialSize = 2048;
+
+  va_list argsForLen, argsForPrint;
+  va_start(argsForLen, format);
+  va_copy(argsForPrint, argsForLen);
+
+  // Allocate buffer to initial size on first call
+  if (*cmdBufPtr == NULL) {
+    assert(*charsWritten == 0);
+    *cmdBufPtr = (char*)chpl_mem_allocMany(initialSize, sizeof(char),
+                                    CHPL_RT_MD_COMMAND_BUFFER, -1, 0);
+  }
+
+  // Determine additional characters to be written
+  const int addedLen = vsnprintf(NULL, 0, format, argsForLen);
+  va_end(argsForLen);
+  int newLen = *charsWritten + addedLen;
+
+  // Allocate more memory if needed
+  if (newLen >= initialSize) {
+    *cmdBufPtr = (char*)chpl_mem_realloc(*cmdBufPtr, newLen * sizeof(char),
+                                        CHPL_RT_MD_COMMAND_BUFFER, -1, 0);
+  }
+
+  // Write the new characters
+  vsnprintf(*cmdBufPtr + *charsWritten, addedLen + 1, format, argsForPrint);
+  va_end(argsForPrint);
+  *charsWritten = newLen;
+}
+
 //
 // Use this function to run short utility programs that will return less
 //  than 1024 characters of output.  The program must not expect any input.
@@ -105,11 +161,13 @@ chpl_run_utility1K(const char *command, char *const argv[], char *outbuf, int ou
   int rv, numRead;
 
   if (pipe(fdo) < 0) {
-    sprintf(buf, "Unable to run '%s' (pipe failed): %s\n", command, strerror(errno));
+    snprintf(buf, sizeof(buf), "Unable to run '%s' (pipe failed): %s\n",
+             command, strerror(errno));
     chpl_internal_error(buf);
   }
   if (pipe(fde) < 0) {
-    sprintf(buf, "Unable to run '%s' (pipe failed): %s\n", command, strerror(errno));
+    snprintf(buf, sizeof(buf), "Unable to run '%s' (pipe failed): %s\n",
+             command, strerror(errno));
     chpl_internal_error(buf);
   }
 
@@ -119,7 +177,7 @@ chpl_run_utility1K(const char *command, char *const argv[], char *outbuf, int ou
     close(fdo[0]);
     if (fdo[1] != STDOUT_FILENO) {
       if (dup2(fdo[1], STDOUT_FILENO) != STDOUT_FILENO) {
-        sprintf(buf, "Unable to run '%s' (dup2 failed): %s",
+        snprintf(buf, sizeof(buf), "Unable to run '%s' (dup2 failed): %s",
                 command, strerror(errno));
         chpl_internal_error(buf);
       }
@@ -127,18 +185,18 @@ chpl_run_utility1K(const char *command, char *const argv[], char *outbuf, int ou
     close(fde[0]);
     if (fde[1] != STDERR_FILENO) {
       if (dup2(fde[1], STDERR_FILENO) != STDERR_FILENO) {
-        sprintf(buf, "Unable to run '%s' (dup2 failed): %s",
+        snprintf(buf, sizeof(buf), "Unable to run '%s' (dup2 failed): %s",
                 command, strerror(errno));
         chpl_internal_error(buf);
       }
     }
     execvp(command, argv);
     // should only return on error
-    sprintf(buf, "Unable to run '%s': %s",
+    snprintf(buf, sizeof(buf), "Unable to run '%s': %s",
                 command, strerror(errno));
     chpl_internal_error(buf);
   case -1:
-    sprintf(buf, "Unable to run '%s' (fork failed): %s",
+    snprintf(buf, sizeof(buf), "Unable to run '%s' (fork failed): %s",
             command, strerror(errno));
     chpl_warning(buf, 0, 0);
     return -1;
@@ -164,7 +222,7 @@ chpl_run_utility1K(const char *command, char *const argv[], char *outbuf, int ou
           cur += rv;
           numRead += rv;
         } else {
-          sprintf(buf, "Unable to run '%s' (read failed): %s",
+          snprintf(buf, sizeof(buf), "Unable to run '%s' (read failed): %s",
                   command, strerror(errno));
           chpl_warning(buf, 0, 0);
           return -1;
@@ -179,7 +237,7 @@ chpl_run_utility1K(const char *command, char *const argv[], char *outbuf, int ou
           cur += rv;
           numRead += rv;
         } else {
-          sprintf(buf, "Unable to run '%s' (read failed): %s",
+          snprintf(buf, sizeof(buf), "Unable to run '%s' (read failed): %s",
                   command, strerror(errno));
           chpl_warning(buf, 0, 0);
           return -1;
@@ -198,9 +256,10 @@ chpl_run_utility1K(const char *command, char *const argv[], char *outbuf, int ou
         return -1;
       }
     } else {
-      sprintf(buf, "Unable to run '%s' (no bytes read)", command);
+      snprintf(buf, sizeof(buf), "Unable to run '%s' (no bytes read)",
+               command);
       chpl_warning(buf, 0, 0);
-      return -1;
+      return 0;
     }
 
     // NOTE: We don't do a waitpid() here, so the program may keep running.
@@ -245,6 +304,28 @@ chpl_run_cmdstr(const char *commandStr, char *outbuf, int outbuflen) {
 
 
 //
+// Find the named executable in the PATH, if it's there.
+//
+char *chpl_find_executable(const char *prog_name) {
+  const char *cmd_fmt = "which %s";
+  const int cmd_len
+            = strlen(cmd_fmt)     // 'which' command, as printf() format
+              - 2                 //   length of "%s" specifier
+              + strlen(prog_name) //   length of prog_name
+              + 1;                //   length of trailing '\0'
+  char cmd[cmd_len];
+  (void) snprintf(cmd, sizeof(cmd), cmd_fmt, prog_name);
+
+  // hopefully big enough; PATH_MAX is problematic, but what's better?
+  const size_t path_len = PATH_MAX;
+  char *path = chpl_mem_alloc(path_len,
+                              CHPL_RT_MD_COMMAND_BUFFER, -1, 0);
+
+  return (chpl_run_cmdstr(cmd, path, path_len) > 0) ? path : NULL;
+}
+
+
+//
 // Record environment variables set by the launcher itself.  This is
 // called back from the runtime chpl_env_set() function.
 //
@@ -265,9 +346,11 @@ void chpl_launcher_record_env_var(const char* evName, const char *evVal) {
   evList = chpl_mem_realloc(evList, evListSize,
                             CHPL_RT_MD_COMMAND_BUFFER, -1, 0);
   if (evListSizeWas == 0) {
-    sprintf(evList, "%s=%s", evName, evVal);
+    snprintf(evList, (size_t) evListSize, "%s=%s", evName, evVal);
   } else {
-    sprintf(evList + evListSizeWas - 1, " %s=%s", evName, evVal);
+    snprintf(evList + evListSizeWas - 1,
+             (size_t) (evListSize - (evListSizeWas - 1)),
+             " %s=%s", evName, evVal);
   }
 }
 
@@ -315,14 +398,8 @@ void get_debugger_wrapper(int* argc, char*** argv) {
     dbg_term = "xterm";
   }
 
-  // hopefully big enough; PATH_MAX is problematic, but what's better?
-  const size_t term_path_size = PATH_MAX;
-  char *term_path = chpl_mem_alloc(term_path_size,
-                                   CHPL_RT_MD_COMMAND_BUFFER, -1, 0);
-
-  static char cmd[16] = "";
-  snprintf(cmd, sizeof(cmd), "which %s", dbg_term);
-  if (chpl_run_cmdstr(cmd, term_path, term_path_size) <= 0) {
+  char *term_path;
+  if ((term_path = chpl_find_executable(dbg_term)) == NULL) {
     static char err_msg[128] = "";
     snprintf(err_msg, sizeof(err_msg),
              "CHPL_COMM_USE_(G|LL)DB ignored because no %s", dbg_term);
@@ -416,30 +493,46 @@ char** chpl_bundle_exec_args(int argc, char *const argv[],
   return newargv;
 }
 
+
+//
+// Print out the system launcher command (used by --verbose and
+// --dry-run).
+//
+static
+void print_sys_launch_cmd(FILE *f, const char* command, char * const argv[]) {
+  if (evListSize > 0) {
+    fprintf(f, "%s ", evList);
+  }
+  // TODO: remove this sanity check
+  if (command != NULL && strcmp(command, argv[0]) != 0) {
+    chpl_internal_error("command, argv[0]) != 0");
+  }
+  for (char * const *arg = argv; *arg != NULL; arg++) {
+    fprintf(f, "%s%s", (arg == argv) ? "" : " ", *arg);
+  }
+  fprintf(f, "\n");
+  fflush(f);
+}
+
+
 //
 // This function calls execvp(3)
 //
 int chpl_launch_using_exec(const char* command, char * const argv1[], const char* argv0) {
-  if (verbosity > 1) {
-    char * const *arg;
-    if (evListSize > 0) {
-      printf("%s ", evList);
-    }
-    printf("%s ", command);
-    fflush(stdout);
-    for (arg = argv1+1; *arg; arg++) {
-      printf(" %s", *arg);
-      fflush(stdout);
-    }
-    printf("\n");
-    fflush(stdout);
+  if (verbosity > 1 || chpl_doDryRun()) {
+    print_sys_launch_cmd(stdout, command, argv1);
   }
   chpl_launch_sanity_checks(argv0);
+
+  if (chpl_doDryRun()) {
+    chpl_exit_any(0);
+  }
 
   execvp(command, argv1);
   {
     char msg[256];
-    sprintf(msg, "execvp() failed: %s", strerror(errno));
+    snprintf(msg, sizeof(msg), "execvp() failed for command %s: %s", command,
+             strerror(errno));
     chpl_internal_error(msg);
   }
   return -1;
@@ -455,14 +548,14 @@ int chpl_launch_using_fork_exec(const char* command, char * const argv1[], const
   case -1:
   {
     char msg[256];
-    sprintf(msg, "fork() failed: %s", strerror(errno));
+    snprintf(msg, sizeof(msg), "fork() failed: %s", strerror(errno));
     chpl_internal_error(msg);
   }
   default:
     {
       if (waitpid(pid, &status, 0) != pid) {
         char msg[256];
-        sprintf(msg, "waitpid() failed: %s", strerror(errno));
+        snprintf(msg, sizeof(msg), "waitpid() failed: %s", strerror(errno));
         chpl_internal_error(msg);
       }
     }
@@ -471,15 +564,12 @@ int chpl_launch_using_fork_exec(const char* command, char * const argv1[], const
 }
 
 int chpl_launch_using_system(char* command, char* argv0) {
-  if (verbosity > 1) {
-    if (evListSize > 0) {
-      printf("%s ", evList);
-    }
-    printf("%s\n", command);
-    fflush(stdout);
+  if (verbosity > 1 || chpl_doDryRun()) {
+    char * const argv[] = { command, NULL };
+    print_sys_launch_cmd(stdout, NULL, argv);
   }
   chpl_launch_sanity_checks(argv0);
-  return system(command);
+  return chpl_doDryRun() ? 0 : system(command);
 }
 
 // This function returns a string containing a character-
@@ -488,103 +578,70 @@ int chpl_launch_using_system(char* command, char* argv0) {
 
 char* chpl_get_enviro_keys(char sep)
 {
-  int pass;
-  int i;
-  int j;
-  int k = 0;
-  char* ret = NULL;
+  // count the variables in environ, and how many characters in each name
+  int numVars = 0;
+  int numChars = 0;
+  for(int i = 0; environ && environ[i]; i++) {
+    numVars++;
+    int keyLen = strstr(environ[i], "=") - environ[i];
 
-  for( pass = 0; pass < 2; pass++ ) {
-    k = 0;
-    for( i = 0; environ && environ[i]; i++ ) {
-      // We could do this for only some environment
-      // variables if we wanted to; that would amount
-      // to an if statement checking environ[i];
-      // but we find it to be more similar to MPI/SLURM
-      // to forward all environment variables.
-      // Count/store the separator
-      if( k > 0 ) {
-        if( pass == 0 ) k++;
-        else ret[k++] = sep;
-      }
-
-      for( j = 0; environ[i][j] && environ[i][j] != '='; j++ ) {
-        if( pass == 0 ) {
-          // on first pass, just count.
-          k++;
-        } else {
-          // on second pass, add to buffer.
-          ret[k++] = environ[i][j];
-        }
-      }
+    // if the key ends with _modshare, skip it
+    if (keyLen > 8 && strncmp(environ[i] + keyLen - 9, "_modshare", 9) == 0) {
+      continue;
     }
-    if( pass == 0 ) ret = chpl_mem_allocMany(k+1, sizeof(char),
-                                             CHPL_RT_MD_COMMAND_BUFFER,-1,0);
+    numVars++;
+    numChars += keyLen;
   }
+  // allocate space for the keys, the separators, and the null terminator
+  int bufferLength = numChars + numVars + 1;
+  char* buffer = chpl_mem_allocMany(bufferLength, sizeof(char),
+                                 CHPL_RT_MD_COMMAND_BUFFER, -1, 0);
 
-  return ret;
+  // copy the keys into the buffer
+  int bufferOffset = 0;
+  for(int i = 0; environ && environ[i]; i++) {
+
+    int keyLen = strstr(environ[i], "=") - environ[i];
+    // skip keys that end with _modshare
+    if (keyLen > 8 && strncmp(environ[i] + keyLen - 9, "_modshare", 9) == 0) {
+      continue;
+    }
+    strncpy(buffer + bufferOffset, environ[i], keyLen);
+    bufferOffset += keyLen;
+
+    buffer[bufferOffset] = sep;
+    bufferOffset++;
+  }
+  buffer[bufferOffset] = '\0';
+  buffer[bufferLength-1] = '\0';
+
+  return buffer;
 }
 
-static const int charset_env_nargs = 4;
 
-int chpl_get_charset_env_nargs()
-{
-  return charset_env_nargs;
-}
+static const
+argDescTuple_t universalArgs[]
+               = { { CHPL_DRY_RUN_ARG,
+                     "just print system launcher command, don't run it" },
+                   { NULL, NULL },
+                 };
 
-//
-// Populate the argv array and return the number of arguments added.
-// Return the number of arguments populated.
-//
-int chpl_get_charset_env_args(char *argv[])
-{
-  // If any of the relevant character set environment variables
-  // are set, replicate the state of all of them.  This needs to
-  // be done separately from the -E mechanism because Perl
-  // launchers modify the character set environment, losing our
-  // settings.
-  //
-  // Note that if we are setting these variables, and one or more
-  // of them is empty, we must set it with explicitly empty
-  // contents (e.g. LC_ALL= instead of -u LC_ALL) so that the
-  // Chapel launch mechanism will not overwrite it.
-  char *lang = getenv("LANG");
-  char *lc_all = getenv("LC_ALL");
-  char *lc_collate = getenv("LC_COLLATE");
-  if (!lang && !lc_all && !lc_collate)
-    return 0;
-
-  argv[0] = (char *)"env";
-  if (lang == NULL)
-    lang = (char *)"";
-  char *lang_buf = chpl_mem_allocMany(sizeof("LANG=") + strlen(lang),
-                        sizeof(char), CHPL_RT_MD_COMMAND_BUFFER, -1, 0);
-  strcpy(lang_buf, "LANG=");
-  strcat(lang_buf, lang);
-  argv[1] = lang_buf;
-  if (lc_all == NULL)
-    lc_all = (char *)"";
-  char *lc_all_buf = chpl_mem_allocMany(sizeof("LC_ALL=") + strlen(lc_all),
-                        sizeof(char), CHPL_RT_MD_COMMAND_BUFFER, -1, 0);
-  strcpy(lc_all_buf, "LC_ALL=");
-  strcat(lc_all_buf, lc_all);
-  argv[2] = lc_all_buf;
-  if (lc_collate == NULL)
-    lc_collate = (char *)"";
-  char *lc_collate_buf = chpl_mem_allocMany(
-                        sizeof("LC_COLLATE=") + strlen(lc_collate),
-                        sizeof(char), CHPL_RT_MD_COMMAND_BUFFER, -1, 0);
-  strcpy(lc_collate_buf, "LC_COLLATE=");
-  strcat(lc_collate_buf, lc_collate);
-  argv[3] = lc_collate_buf;
-
-  return charset_env_nargs;
-}
 
 int handleNonstandardArg(int* argc, char* argv[], int argNum,
                          int32_t lineno, int32_t filename) {
   int numHandled = chpl_launch_handle_arg(*argc, argv, argNum,
                                           lineno, filename);
+  if (numHandled == 0) {
+    //
+    // The specific launcher didn't handle this arg.  Check to see if
+    // it's one that is universal to all launchers.
+    //
+    if (strcmp(argv[argNum], CHPL_DRY_RUN_ARG) == 0) {
+      dryRunFlag = 1;
+      numHandled = 1;
+    }
+  }
+
   if (numHandled == 0) {
     if (mainHasArgs) {
       chpl_gen_main_arg.argv[chpl_gen_main_arg.argc] = argv[argNum];
@@ -595,20 +652,65 @@ int handleNonstandardArg(int* argc, char* argv[], int argNum,
       chpl_error(message, lineno, filename);
     }
     return 0;
-  } else {
-    int i;
-    for (i=argNum+numHandled; i<*argc; i++) {
-      argv[i-numHandled] = argv[i];
+  }
+
+  //
+  // Remove the handled arg from caller's argv and tell them to
+  // continue parsing where what used to be the next arg now is.
+  //
+  int i;
+  for (i=argNum+numHandled; i<*argc; i++) {
+    argv[i-numHandled] = argv[i];
+  }
+  *argc -= numHandled;
+  return -1;
+}
+
+
+static void printAdditionalHelpEntry(const argDescTuple_t* argTuple,
+                                     size_t argFieldWidth);
+
+void printAdditionalHelp(void) {
+  const argDescTuple_t* argSources[] = { chpl_launch_get_help(),
+                                         universalArgs };
+
+  //
+  // So we can format nicely, first figure out the longest arg we'll
+  // need to print, then do the actual printing.
+  //
+  size_t argLenMax = 0;
+  for (int i = 0; i < sizeof(argSources) / sizeof(argSources[0]); i++) {
+    if (argSources[i] != NULL) {
+      for (const argDescTuple_t* p = argSources[i]; p->arg != NULL; p++) {
+        size_t argLen = strlen(p->arg);
+        if (argLen > argLenMax) {
+          argLenMax = argLen;
+        }
+      }
     }
-    *argc -= numHandled;
-    return -1;  // back the cursor up in order to re-parse this arg
+  }
+
+  fprintf(stdout, "LAUNCHER FLAGS:\n");
+  fprintf(stdout, "===============\n");
+  for (int i = 0; i < sizeof(argSources) / sizeof(argSources[0]); i++) {
+    if (argSources[i] != NULL) {
+      for (const argDescTuple_t* p = argSources[i]; p->arg != NULL; p++) {
+        printAdditionalHelpEntry(p, argLenMax);
+      }
+    }
   }
 }
 
-
-void printAdditionalHelp(void) {
-  chpl_launch_print_help();
+static
+void printAdditionalHelpEntry(const argDescTuple_t* argTuple,
+                              size_t argFieldWidth) {
+  fprintf(stdout,
+          "  %-*s  %s %s\n",
+          (int) argFieldWidth, argTuple->arg,
+          (argTuple->arg[0] == '\0') ? " " : ":",
+          argTuple->desc);
 }
+
 
 // These are defined in the config.c file, which is built
 // on-the-fly in runtime/etc/Makefile.launcher.
@@ -682,12 +784,30 @@ const char* chpl_get_real_binary_name(void) {
   return &chpl_real_binary_name[0];
 }
 
-int chpl_launch_prep(int* c_argc, char* argv[], int32_t* c_execNumLocales) {
+void chpl_launcher_get_job_name(char *baseName, char *jobName, int jobLen) {
+  const char* prefix = getenv("CHPL_LAUNCHER_JOB_PREFIX");
+  const char* name = getenv("CHPL_LAUNCHER_JOB_NAME");
+
+  if (prefix == NULL) {
+    prefix = "CHPL-";
+  }
+  if (name == NULL) {
+    snprintf(jobName, jobLen, "%s%.10s", prefix, baseName);
+  } else {
+    strncpy(jobName, name, jobLen);
+    jobName[jobLen-1] = '\0';
+  }
+}
+
+
+int chpl_launch_prep(int* c_argc, char* argv[], int32_t* c_execNumLocales,
+                     int32_t* c_execNumLocalesPerNode) {
   //
   // This is a user invocation, so parse the arguments to determine
   // the number of locales.
   //
   int32_t execNumLocales;
+  int32_t execNumLocalesPerNode;
   int argc = *c_argc;
 
   // Set up main argument parsing.
@@ -715,6 +835,12 @@ int chpl_launch_prep(int* c_argc, char* argv[], int32_t* c_execNumLocales) {
   //
   chpl_comm_verify_num_locales(execNumLocales);
 
+  execNumLocalesPerNode = getArgNumLocalesPerNode();
+  if (execNumLocalesPerNode > 1) {
+    chpl_comm_verify_supports_colocales(execNumLocalesPerNode);
+  }
+
+
   //
   // Let the comm layer do any last-minute pre-launch activities it
   // needs to.
@@ -722,6 +848,7 @@ int chpl_launch_prep(int* c_argc, char* argv[], int32_t* c_execNumLocales) {
   CHPL_COMM_PRELAUNCH(execNumLocales);
 
   *c_execNumLocales = execNumLocales;
+  *c_execNumLocalesPerNode = execNumLocalesPerNode;
   *c_argc = argc;
 
   return 0;
@@ -730,13 +857,15 @@ int chpl_launch_prep(int* c_argc, char* argv[], int32_t* c_execNumLocales) {
 
 int chpl_launcher_main(int argc, char* argv[]) {
   int32_t execNumLocales;
+  int32_t execNumLocalesPerNode;
 
   //
   // The chpl_launch_prep function calls parseArgs, which modifies argc, so
   // so we need to make sure those changes are visible before calling
   // chpl_launch.
   //
-  if (chpl_launch_prep(&argc, argv, &execNumLocales)) {
+  if (chpl_launch_prep(&argc, argv, &execNumLocales,
+                       &execNumLocalesPerNode)) {
     return -1;
   }
 
@@ -744,7 +873,16 @@ int chpl_launcher_main(int argc, char* argv[]) {
   // Launch the program.
   // This may not return (e.g., if calling chpl_launch_using_exec()).
   //
-  int retval = chpl_launch(argc, argv, execNumLocales);
+  int retval = chpl_launch(argc, argv, execNumLocales, execNumLocalesPerNode);
   chpl_mem_free(chpl_real_binary_name, 0, 0);
   return retval;
+}
+
+void chpl_launcher_no_colocales_error(const char *name) {
+  char msg[100];
+  if (name == NULL) {
+    name = CHPL_LAUNCHER;
+  }
+  snprintf(msg, sizeof(msg), "'%s' launcher does not support co-locales.", name);
+  chpl_error(msg, 0, 0);
 }

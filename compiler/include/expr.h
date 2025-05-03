@@ -1,5 +1,5 @@
 /*
- * Copyright 2020-2022 Hewlett Packard Enterprise Development LP
+ * Copyright 2020-2025 Hewlett Packard Enterprise Development LP
  * Copyright 2004-2019 Cray Inc.
  * Other additional copyright holders may be indicated within.
  *
@@ -23,9 +23,9 @@
 
 #include "baseAST.h"
 #include "driver.h"
-
 #include "primitive.h"
 #include "symbol.h"
+#include "wellknown.h"
 
 #include <ostream>
 
@@ -39,81 +39,7 @@ namespace llvm
 
 class PrimitiveOp;
 
-
-class Expr : public BaseAST {
-public:
-   Expr(AstTag astTag);
-  ~Expr() override = default;
-
-  // Interface for BaseAST
-          bool    inTree()                                        override;
-  virtual bool    isStmt()                                           const;
-          QualifiedType qualType()                                override;
-          void    verify()                                        override;
-
-  void verify(AstTag expectedTag); // ensure tag is as expected, then verify()
-  void verifyParent(const Expr* child); // verify proper child->parentExpr
-
-  // New interface
-  virtual Expr*   copy(SymbolMap* map = NULL, bool internal = false)   = 0;
-  virtual void    replaceChild(Expr* old_ast, Expr* new_ast)           = 0;
-
-  virtual Expr*   getFirstExpr()                                       = 0;
-  virtual Expr*   getNextExpr(Expr* expr);
-
-  virtual bool    isNoInitExpr()                                     const;
-
-  virtual void    prettyPrint(std::ostream* o);
-
-
-  bool            isRef();
-  bool            isWideRef();
-  bool            isRefOrWideRef();
-
-  /* Returns true if the given expression is contained by this one. */
-  bool            contains(const Expr* expr)                         const;
-
-  bool            isModuleDefinition();
-
-  void            insertBefore(Expr* new_ast);
-  void            insertAfter(Expr* new_ast);
-  void            replace(Expr* new_ast);
-
-  // Insert multiple ASTs in the order of the arguments.
-  // Todo: replace with a single varargs version.
-  void            insertAfter(Expr* e1, Expr* e2);
-  void            insertAfter(Expr* e1, Expr* e2, Expr* e3);
-  void            insertAfter(Expr* e1, Expr* e2, Expr* e3, Expr* e4);
-  void            insertAfter(Expr* e1, Expr* e2, Expr* e3, Expr* e4,
-                              Expr* e5);
-  void            insertAfter(Expr* e1, Expr* e2, Expr* e3, Expr* e4,
-                              Expr* e5, Expr* e6);
-
-  void            insertBefore(AList exprs);
-  void            insertAfter(AList exprs);
-
-  void            insertBefore(const char* format, ...);
-  void            insertAfter(const char* format, ...);
-  void            replace(const char* format, ...);
-
-  Expr*           remove();
-
-  bool            isStmtExpr()                                       const;
-  Expr*           getStmtExpr();
-
-  BlockStmt*      getScopeBlock();
-
-  Symbol*         parentSymbol;
-  Expr*           parentExpr;
-
-  AList*          list;           // alist pointer
-  Expr*           prev;           // alist previous pointer
-  Expr*           next;           // alist next     pointer
-
-private:
-  virtual Expr*   copyInner(SymbolMap* map) = 0;
-};
-
+#include "expr-class-def.h"
 
 class DefExpr final : public Expr {
 public:
@@ -301,6 +227,8 @@ class NamedExpr final : public Expr {
 //
 class IfcConstraint final : public Expr {
 public:
+  static IfcConstraint* build(InterfaceSymbol*,
+                              CallExpr* actuals);
   static IfcConstraint* build(const char* name,
                               CallExpr* actuals);
   IfcConstraint(Expr* iifc);
@@ -321,6 +249,14 @@ public:
   InterfaceSymbol* ifcSymbol()  const;
   int              numActuals() const { return consActuals.length; }
 
+  // true for constraints that are satisfied automatically from existing
+  // procedures, such as Hashable. Long-term, these should only use
+  // compiler-generated procedures, and not allow user-supplied ones.
+  bool shouldBeGeneratedOnly = false;
+  // false if this interface should be generated only AND it has a non-generated
+  // witness.
+  bool entirelyGenerated = true;
+
   Expr* interfaceExpr;  // UnresolvedSymExpr -> SymExpr(InterfaceSymbol)
   AList consActuals;    // Exprs -> SymExprs of the constraint's actuals
 };
@@ -330,6 +266,14 @@ inline InterfaceSymbol* IfcConstraint::ifcSymbol() const {
   return toInterfaceSymbol(toSymExpr(interfaceExpr)->symbol());
 }
 
+inline bool Expr::inTree() {
+  return parentSymbol != nullptr;
+}
+
+inline Type* Expr::typeInfo() {
+  QualifiedType qt = this->qualType();
+  return qt.type();
+}
 
 // Determines whether a node is in the AST (vs. has been removed
 // from the AST). Used e.g. by cleanAst().
@@ -447,17 +391,30 @@ bool hasOptimizationFlag(Expr* anchor, Flag flag);
 
 
 #ifdef HAVE_LLVM
-llvm::AllocaInst* createVarLLVM(llvm::Type* type, const char* name);
-llvm::AllocaInst* createVarLLVM(llvm::Type* type);
+llvm::AllocaInst* createVarLLVM(llvm::Type* type, Type* astType,
+                                Symbol* astSymbol, const char* name);
+
+llvm::AllocaInst* createVarLLVM(llvm::Type* type, Type* astType,
+                                Symbol* astSymbol);
+
+llvm::AllocaInst* createVarLLVM(llvm::Type* type, const char* name,
+                                int alignment);
 
 llvm::Value *convertValueToType(llvm::Value *value, llvm::Type *newType,
                                 bool isSigned = false, bool force = false);
+
+// 'alignment' is expected to follow 'AlignmentStatus'
+void setValueAlignment(llvm::Value* value, int alignment);
+
+// sets the alignment requested by 'astType' and 'astSymbol', if any
+void setValueAlignment(llvm::Value* value, Type* astType, Symbol* astSymbol);
+
 #endif
 
 GenRet codegenValue(GenRet r);
 GenRet codegenValuePtr(GenRet r);
 
-GenRet createTempVar(const char* ctype);
+GenRet createTempVar(const char* ctype, int alignment);
 GenRet createTempVar(Type* t);
 GenRet createTempVarWith(GenRet v);
 

@@ -16,13 +16,18 @@ default:
 .. toctree::
    :maxdepth: 1
 
-   Chapel Environment Variables <standard/ChapelEnv>
    Errors <standard/Errors>
-   IO Support <standard/ChapelIO>
-   Math <standard/Math>
    Types <standard/Types>
-   VectorizingIterator <standard/VectorizingIterator>
+   A subset of the IO symbols <standard/IO>
+   A subset of the Math symbols <standard/Math>
 
+
+Algorithms
+----------
+.. toctree::
+   :maxdepth: 1
+
+   Sort <standard/Sort>
 
 Data Structures
 ---------------
@@ -43,7 +48,9 @@ Diagnostics
    :maxdepth: 1
 
    CommDiagnostics <standard/CommDiagnostics>
-   Memory <standard/Memory>
+   Debugger <standard/Debugger>
+   GpuDiagnostics <standard/GpuDiagnostics>
+   MemDiagnostics <standard/MemDiagnostics>
 
 
 Files/IO
@@ -53,6 +60,7 @@ Files/IO
 
    FileSystem <standard/FileSystem>
    IO <standard/IO>
+   JSON <standard/JSON>
    Path <standard/Path>
 
 
@@ -64,6 +72,7 @@ Language Support
 
    Reflection <standard/Reflection>
    Types <standard/Types>
+   MemMove <standard/MemMove>
 
 
 Math/Numerical
@@ -85,9 +94,10 @@ Parallelism/Distributed Computing
 .. toctree::
    :maxdepth: 1
 
-   Barriers <standard/Barriers>
+   Collectives <standard/Collectives>
+   Communication <standard/Communication>
    DynamicIters <standard/DynamicIters>
-   VectorizingIterator <standard/VectorizingIterator>
+   GPU <standard/GPU>
 
 System/Interoperability
 -----------------------
@@ -95,13 +105,10 @@ System/Interoperability
 .. toctree::
    :maxdepth: 1
 
-   CPtr <standard/CPtr>
-   Spawn <standard/Spawn>
+   Allocators <standard/Allocators>
+   CTypes <standard/CTypes>
+   OS <standard/OS>
    Subprocess <standard/Subprocess>
-   Sys <standard/Sys>
-   SysBasic <standard/SysBasic>
-   SysCTypes <standard/SysCTypes>
-   SysError <standard/SysError>
 
 Utilities
 ---------
@@ -109,17 +116,9 @@ Utilities
 .. toctree::
    :maxdepth: 1
 
-   DateTime <standard/DateTime>
+   ChplConfig <standard/ChplConfig>
    Help <standard/Help>
    Regex <standard/Regex>
    Time <standard/Time>
    Version <standard/Version>
-
-
-
-Index
------
-
-* :ref:`Chapel Online Documentation Index <genindex>`
-
-.. COMMENT: clean this up before exposing:: * :chpl:chplref:`chplmodindex`
+   WeakPointer <standard/WeakPointer>

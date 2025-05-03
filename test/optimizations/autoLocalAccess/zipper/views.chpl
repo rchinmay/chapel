@@ -1,26 +1,5 @@
 use common;
 
-var thisCalls: atomic int;
-var localAccessCalls: atomic int;
-// hijack these two methods to provide some output
-inline proc _array.this(i: int) ref {
-  //writeln("Custom this was called");
-  thisCalls.add(1);
-  return this._value.dsiAccess((i:int,));
-}
-
-inline proc _array.this(i: int, j: int) ref {
-  //writeln("Custom this was called");
-  thisCalls.add(1);
-  return this._value.dsiAccess((i:int,j:int));
-}
-
-inline proc _array.localAccess(i: int) ref {
-  //writeln("Custom localAccess was called");
-  localAccessCalls.add(1);
-  return this._value.dsiLocalAccess((i:int,));
-}
-
 writeln();
 writeln("Starting");
 
@@ -37,7 +16,7 @@ writeln("Starting");
   B = 3;
 
  
-  forall (i,idx) in zip(innerD, 1..) {
+  forall (i,idx) in zip(innerD, 1..) with (ref A) {
     A[i] =     // dynamic: no connection btw A.domain and innerD
       C[i] * idx;    // dynamic: we don't recognize arrayview creation, yet
   }
@@ -58,7 +37,7 @@ writeln("Starting");
   B = 3;
 
 
-  forall (i,idx) in zip(A.domain, 1..) {
+  forall (i,idx) in zip(A.domain, 1..) with (ref A) {
     if innerD.contains(i) {
       A[i] =    // static: obvious
         C[i] * idx;   // dynamic: no recognizable connection btw C.domain and A.domain
@@ -81,7 +60,7 @@ writeln("Starting");
 
   B = 3;
 
-  forall (i,idx) in zip(C.domain, 1..) {
+  forall (i,idx) in zip(C.domain, 1..) with (ref A) {
     A[i-offset] =   // no optimization, index should be just `i`
       C[i] * idx;         // static opt: obvious
   }
@@ -103,7 +82,7 @@ writeln("Starting");
 
   ref C = A[1..10, colIdx];
 
-  forall (i,idx) in zip(C.domain, 1..) {
+  forall (i,idx) in zip(C.domain, 1..) with (ref C) {
     C[i] =            // static: obvious
       B[i, colIdx];   // no optimization, index should be just `i`
   }
@@ -111,7 +90,3 @@ writeln("Starting");
   writeln(A);
   writeln();
 }
-
-
-writeln("`this` was called ", thisCalls , " times");
-writeln("`localAccess` was called ", localAccessCalls, " times");

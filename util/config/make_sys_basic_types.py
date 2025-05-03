@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-"""Build SysCTypes.chpl module.
+"""Build ChapelSysCTypes.chpl module.
 
 Determines the size of various C types (e.g. long, size_t, etc) and creates a
 Chapel module with 'extern types' declaration so Chapel code can refer to the
@@ -8,7 +8,7 @@ types.
 
 Specify the output file as a positional argument, e.g.:
 
-    %prog path/to/SysCTypes.chpl
+    %prog path/to/ChapelSysCTypes.chpl
 """
 
 from __future__ import print_function
@@ -28,23 +28,25 @@ import sys
 #  * C macro for maximum value for type
 #  * Name of Chapel type
 #  * Name of C type
+#  * Unstable
 _types = [
-    ('INT_MAX', 'c_int', 'int'),
-    ('UINT_MAX', 'c_uint', 'uint'),
-    ('LONG_MAX', 'c_long', 'long'),
-    ('ULONG_MAX', 'c_ulong', 'unsigned long'),
-    ('LLONG_MAX', 'c_longlong', 'long long'),
-    ('ULLONG_MAX', 'c_ulonglong', 'unsigned long long'),
-    ('CHAR_MAX', 'c_char', 'char'),
-    ('SCHAR_MAX', 'c_schar', 'signed char'),
-    ('UCHAR_MAX', 'c_uchar', 'unsigned char'),
-    ('SHRT_MAX', 'c_short', 'short'),
-    ('USHRT_MAX', 'c_ushort', 'unsigned short'),
-    ('INTPTR_MAX', 'c_intptr', 'intptr_t'),
-    ('UINTPTR_MAX', 'c_uintptr', 'uintptr_t'),
-    ('PTRDIFF_MAX', 'c_ptrdiff', 'ptrdiff_t'),
-    ('SSIZE_MAX', 'ssize_t', 'ssize_t'),
-    ('SIZE_MAX', 'size_t', 'size_t'),
+    ('INT_MAX', 'c_int', 'int', False),
+    ('UINT_MAX', 'c_uint', 'uint', False),
+    ('LONG_MAX', 'c_long', 'long', False),
+    ('ULONG_MAX', 'c_ulong', 'unsigned long', False),
+    ('LLONG_MAX', 'c_longlong', 'long long', False),
+    ('ULLONG_MAX', 'c_ulonglong', 'unsigned long long', False),
+    ('CHAR_MAX', 'c_char', 'char', False),
+    ('SCHAR_MAX', 'c_schar', 'signed char', False),
+    ('UCHAR_MAX', 'c_uchar', 'unsigned char', False),
+    ('SHRT_MAX', 'c_short', 'short', False),
+    ('USHRT_MAX', 'c_ushort', 'unsigned short', False),
+    ('INTPTR_MAX', 'c_intptr', 'intptr_t', False),
+    ('UINTPTR_MAX', 'c_uintptr', 'uintptr_t', False),
+    ('PTRDIFF_MAX', 'c_ptrdiff', 'ptrdiff_t', False),
+    ('SIZE_MAX', 'c_size_t', 'size_t', False),
+    ('SSIZE_MAX', 'c_ssize_t', 'ssize_t', False),
+    ('WCHAR_MAX', 'c_wchar_t', 'wchar_t', True),
 ]
 
 # Map of max values to chapel types.
@@ -63,6 +65,8 @@ _h_file_header = """
 #include "sys_basic.h"
 #include <limits.h>
 #include <stdint.h>
+#include <stddef.h>
+#include <wchar.h>
 #include <math.h>
 
 FIND_INT_SIZES_START
@@ -76,15 +80,15 @@ def main():
 
     # Get the module content first, since it can lead to errors/early exits if
     # something goes wrong.
-    module_content = get_sys_c_types(args.doc)
+    module_content = get_sys_c_types(args.doc,args.minimal)
     with open(args.output_file, 'w') as fp:
         fp.write(module_content)
         fp.write('\n')
     logging.debug('Wrote module to: {0}'.format(args.output_file))
 
 
-def get_sys_c_types(docs=False):
-    """Returns a string with the SysCTypes.chpl module content."""
+def get_sys_c_types(docs=False,minimal=False):
+    """Returns a string with the ChapelSysCTypes.chpl module content."""
 
     # Find the $CHPL_HOME/util/config/ dir.
     util_cfg_dir = os.path.abspath(os.path.dirname(__file__))
@@ -102,7 +106,8 @@ def get_sys_c_types(docs=False):
     compileline_env.pop('CHPL_MAKE_CHPLENV_CACHE', None)
     compileline_proc = subprocess.Popen([compileline_cmd, '--compile'],
         stdout=subprocess.PIPE, env=compileline_env)
-    compileline = compileline_proc.communicate()[0].decode("utf-8").strip();
+    compileline = compileline_proc.communicate()[0].decode("utf-8").strip()
+    compileline += ' ' + os.environ.get('CFLAGS', '')
     logging.debug('Compile line: {0}'.format(compileline))
 
     # Create temp header file with *_MAX macros, then run it through the C
@@ -113,7 +118,7 @@ def get_sys_c_types(docs=False):
         with open(h_file, 'w') as fp:
             fp.write(_h_file_header)
 
-            for max_macro, _, _ in _types:
+            for max_macro, _, _, _ in _types:
                 fp.write('{0}\n'.format(max_macro))
             logging.debug('Wrote {0} max types to {1}'.format(len(_types), h_file))
 
@@ -161,32 +166,40 @@ def get_sys_c_types(docs=False):
     # Iterate through the max value expressions, evaluate each one, and store
     # it in a list. Python deals with arbitrarily large integers, so there is
     # no fear of overflow.
-    replace_pattern = re.compile(r'[UL]', re.IGNORECASE)
+    replace_patterns = [
+        (re.compile(r'[UL]', re.IGNORECASE), ''),
+        (re.compile(r"'\\0'", re.IGNORECASE), '0'),
+    ]
     max_values = []
     for expr in max_exprs:
-        ex = re.sub(replace_pattern, '', expr)
+        ex = expr
+        for pattern, repl in replace_patterns:
+            ex = pattern.sub(repl, ex)
         value = eval(ex)
         logging.debug('{0} -> {1}'.format(expr, value))
         max_values.append(value)
     logging.debug('Evaluated all {0} expressions from '
                   'preprocessor.'.format(len(max_values)))
 
-    # Iterate through the chapel types/max values and print out the SysCTypes
-    # Chapel module code. Each line takes the form "extern type <chpl_type>=
-    # <chpl_value>;" where <chpl_value> is found by looking up the max value
+    # Iterate through the chapel types/max values and print out the
+    # ChapelSysCTypes module code. Each line takes the form
+    #   "extern type <chpl_type>=<chpl_value>;"
+    # where <chpl_value> is found by looking up the max value
     # (from evaluated expression above) in the _max_value_to_chpl_type map.
     sys_c_types = []
     handled_c_ptr = False
     for i, max_value in enumerate(max_values):
-        max_macro, chpl_type, c_type = _types[i]
+        max_macro, chpl_type, c_type, is_unstable = _types[i]
         chpl_value = _max_value_to_chpl_type.get(str(max_value))
         if chpl_value is None:
             logging.error('Unknown numeric limit {0} in '
                           '_max_value_to_chpl_type dict.'.format(max_value))
             sys.exit(1)
 
-        sys_c_types.append('/* The type corresponding to the C {c_type} type'
+        sys_c_types.append('/* The Chapel type corresponding to the C \'{c_type}\' type'
                            ' */'.format(**locals()))
+        if is_unstable:
+            sys_c_types.append('@unstable("\'{c_type}\' is unstable")'.format(**locals()))
         stmt = 'extern type {chpl_type}= '.format(**locals())
         if docs:
             stmt += 'integral'
@@ -198,26 +211,25 @@ def get_sys_c_types(docs=False):
         if chpl_type == 'c_ptr':
             handled_c_ptr = True
 
-    # never emit c_void_ptr since it is a built-in type now
-    #if not handled_c_ptr:
-    #    sys_c_types.append('extern type c_void_ptr; '
-    #                       '// opaque; no ptr arithmetic in Chapel code!')
-
-    # Finally, print out set of asserts for module. They assert that the
-    # sizeof(<extern chpl type>) matches the sizeof(<chpl type>). E.g.
-    #
-    #   assert(sizeof(c_int) == sizeof(int(32)));
-    #
-    sys_c_types.append("""
-{
-  extern proc sizeof(type t): size_t;
-""")
-    for i, max_value in enumerate(max_values):
-        _, chpl_type, _ = _types[i]
-        chpl_value = _max_value_to_chpl_type.get(str(max_value))
-        sys_c_types.append('  assert(sizeof({chpl_type}) == sizeof({chpl_value}))'
-              ';'.format(**locals()))
-    sys_c_types.append('}')
+    if not minimal:
+        # Finally, print out set of asserts for module. They assert that the
+        # sizeof(<extern chpl type>) matches the sizeof(<chpl type>). E.g.
+        #
+        #   assert(sizeof(c_int) == sizeof(int(32)));
+        #
+        # Do not do this when generating minimal modules because '==' is
+        # not defined.
+        sys_c_types.append("""
+    {
+      extern proc sizeof(type t): c_size_t;
+    """)
+        for i, max_value in enumerate(max_values):
+            _, chpl_type, _, _ = _types[i]
+            if chpl_type.startswith('c_'):
+                chpl_value = _max_value_to_chpl_type.get(str(max_value))
+                sys_c_types.append('  assert(sizeof({chpl_type}) == sizeof({chpl_value}))'
+                                   ';'.format(**locals()))
+        sys_c_types.append('}')
 
     return '\n'.join(sys_c_types)
 
@@ -242,7 +254,7 @@ def _parse_args():
             return text
 
     parser = optparse.OptionParser(
-        usage='usage: %prog [--doc] [--verbose] <SysCTypes_filename>',
+        usage='usage: %prog [--doc] [--verbose] <ChapelSysCTypes_filename>',
         description=__doc__,
         formatter=NoWrapHelpFormatter()
     )
@@ -253,7 +265,11 @@ def _parse_args():
     )
     parser.add_option(
         '--doc', action='store_true',
-        help='Build SysCTypes module for chpldoc.'
+        help='Build ChapelSysCTypes module for chpldoc.'
+    )
+    parser.add_option(
+        '--minimal', action='store_true',
+        help='Build ChapelSysCTypes module for minimal modules.'
     )
 
     opts, args = parser.parse_args()

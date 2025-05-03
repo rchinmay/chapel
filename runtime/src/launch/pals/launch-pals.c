@@ -1,16 +1,16 @@
 /*
- * Copyright 2020-2022 Hewlett Packard Enterprise Development LP
+ * Copyright 2020-2025 Hewlett Packard Enterprise Development LP
  * Copyright 2004-2019 Cray Inc.
  * Other additional copyright holders may be indicated within.
- * 
+ *
  * The entirety of this work is licensed under the Apache License,
  * Version 2.0 (the "License"); you may not use this file except
  * in compliance with the License.
- * 
+ *
  * You may obtain a copy of the License at
- * 
+ *
  *     http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -32,11 +32,14 @@
 static const char *ccArg = NULL;
 
 
-int chpl_launch(int argc, char* argv[], int32_t numLocales) {
-  return chpl_launch_using_exec("cray",
-                                chpl_create_pals_cmd(argc, argv, numLocales,
-                                                     ccArg),
-                                argv[0]);
+int chpl_launch(int argc, char* argv[], int32_t numLocales,
+                int32_t numLocalesPerNode) {
+  if (numLocalesPerNode > 1) {
+    chpl_launcher_no_colocales_error(NULL);
+  }
+
+  char **launchCmd = chpl_create_pals_cmd(argc, argv, numLocales, ccArg);
+  return chpl_launch_using_exec(launchCmd[0], launchCmd, argv[0]);
 }
 
 
@@ -70,12 +73,14 @@ int chpl_launch_handle_arg(int argc, char* argv[], int argNum,
 }
 
 
-void chpl_launch_print_help(void) {
-  int width;
-  printf("LAUNCHER FLAGS:\n");
-  printf("===============\n");
-  printf("  %s keyword : %nspecify cpu assignment within a node: "
-         "none (default),\n",
-         CPU_BIND_OPT_STR, &width);
-  printf("%*snuma, socket, core, thread, depth\n", width, "");
+const argDescTuple_t* chpl_launch_get_help(void) {
+  static const
+    argDescTuple_t args[] =
+    { { CPU_BIND_OPT_STR " keyword",
+        "specify cpu assignment within a node:" },
+      { "",
+        "none (default), numa, socket, core, thread, depth" },
+      { NULL, NULL },
+    };
+  return args;
 }

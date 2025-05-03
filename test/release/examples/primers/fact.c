@@ -13,14 +13,14 @@ int fact(int x){
 
 
 
-data* getNewData(){
-    data *d = malloc(sizeof(data));
+data* getNewData(void){
+    data *d = (data*)malloc(sizeof(data));
     d->x = 5;
     return d;
 }
 
 data* fact_d(data *d){
-    data *s = malloc(sizeof(data));
+    data *s = (data*)malloc(sizeof(data));
     
     if(d->x <= 1){
         s->x = 1;
@@ -33,8 +33,8 @@ data* fact_d(data *d){
     return f;
 }
 
-data* getDataStructPtr(){
-    data *d = malloc(sizeof(data));
+data* getDataStructPtr(void){
+    data *d = (data*)malloc(sizeof(data));
     d->x = 10;
     return d;
 }

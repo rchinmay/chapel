@@ -23,9 +23,9 @@ proc testio(fmts: [] string, values: [])
         if noisy then writeln("Testing try ", tryN, " with fmt '", usefmt, "'");
 
         var x = v;
-        var f = opentmp();
+        var f = openTempFile();
         {
-          var ch = f.writer();
+          var ch = f.writer(locking=false);
           if noisy then writeln("Writing ", x:string);
           ch.writef(usefmt:t, x);
           if writextra then ch.write("  \t\n");
@@ -33,7 +33,7 @@ proc testio(fmts: [] string, values: [])
         }
 
         {
-          var ch = f.reader();
+          var ch = f.reader(locking=false);
           var y:x.type;
           var z:x.type;
           if noisy then writeln("Reading element");
@@ -61,70 +61,51 @@ proc testio(fmts: [] string, values: [])
 proc main() {
 
   var smallintformats = 
-         ["%t", "%jt", "%ht", "%n",
-          "%r", "%10r", "%010r", "%-10r", "%+r", "% r",
-          "%n", "%10n", "%010n", "%-10n", "%+n", "%+10n", "%-+10n", "% n", "% 10n", "%- 10n",
-          "%i", "%10i", "%010i", "%-10i", "%+i", "%+10i", "%-+10i", "% i", "% 10i", "%- 10i",
-          "%xi","%10xi", "%010xi", "%-10xi", "%+xi", "%+10xi", "% xi", "% 10xi", "%-+10xi", "%- 10xi",
-          "%@xi","%@10xi", "%0@10xi", "%-@10xi", "%@+xi", "%@+10xi", "%@ xi", "%@ 10xi", "%@-+10xi", "%@- 10xi",
-          "%Xi","%10Xi", "%010Xi", "%-10Xi", "%+Xi", "% Xi",
-          "%@Xi","%@10Xi", "%@010Xi", "%@-10Xi", "%@+Xi", "%@ Xi",
-          "%bi","%10bi", "%010bi", "%-10bi", "%+bi", "% bi",
-          "%@bi","%@10bi", "%@010bi", "%@-10bi", "%@+bi", "%@ bi",
-          "%oi","%10oi", "%010oi", "%-10oi", "%+oi", "% oi",
-          "%@oi","%@10oi", "%@010oi", "%@-10oi", "%@+oi", "%@ oi",
+         ["%?", "%n",
+          "%r", "%10r", "%010r", "%<10r", "%+r", "% r",
+          "%n", "%10n", "%010n", "%<10n", "%+n", "%+10n", "%<+10n", "% n", "% 10n", "%< 10n",
+          "%i", "%10i", "%010i", "%<10i", "%+i", "%+10i", "%<+10i", "% i", "% 10i", "%< 10i",
+          "%xi","%10xi", "%010xi", "%<10xi", "%+xi", "%+10xi", "% xi", "% 10xi", "%<+10xi", "%< 10xi",
+          "%@xi","%@10xi", "%0@10xi", "%<@10xi", "%@+xi", "%@+10xi", "%@ xi", "%@ 10xi", "%@<+10xi", "%@< 10xi",
+          "%Xi","%10Xi", "%010Xi", "%<10Xi", "%+Xi", "% Xi",
+          "%@Xi","%@10Xi", "%@010Xi", "%@<10Xi", "%@+Xi", "%@ Xi",
+          "%bi","%10bi", "%010bi", "%<10bi", "%+bi", "% bi",
+          "%@bi","%@10bi", "%@010bi", "%@<10bi", "%@+bi", "%@ bi",
+          "%oi","%10oi", "%010oi", "%<10oi", "%+oi", "% oi",
+          "%@oi","%@10oi", "%@010oi", "%@<10oi", "%@+oi", "%@ oi",
           "%{###############}",
-          "%{###############.#}",
-          "%|n", "%<n", "%>n",
-          "%|t", "%<t", "%>t" ];
+          "%{###############.#}" ];
  
   var bigintformats = 
-         ["%t", "%jt", "%ht", "%n",
-          "%i", "%10i", "%010i", "%-10i", "%+i", "%+10i", "%-+10i", "% i", "% 10i", "%- 10i",
-          "%xi","%10xi", "%010xi", "%-10xi", "%+xi", "%+10xi", "% xi", "% 10xi", "%-+10xi", "%- 10xi",
-          "%@xi","%@10xi", "%0@10xi", "%-@10xi", "%@+xi", "%@+10xi", "%@ xi", "%@ 10xi", "%@-+10xi", "%@- 10xi",
-          "%Xi","%10Xi", "%010Xi", "%-10Xi", "%+Xi", "% Xi",
-          "%@Xi","%@10Xi", "%@010Xi", "%@-10Xi", "%@+Xi", "%@ Xi",
-          "%bi","%10bi", "%010bi", "%-10bi", "%+bi", "% bi",
-          "%@bi","%@10bi", "%@010bi", "%@-10bi", "%@+bi", "%@ bi",
-          "%oi","%10oi", "%010oi", "%-10oi", "%+oi", "% oi",
-          "%@oi","%@10oi", "%@010oi", "%@-10oi", "%@+oi", "%@ oi",
-          "%{###############.#}",
-          "%|n", "%<n", "%>n",
-          "%|t", "%<t", "%>t" ];
+         ["%?", "%n",
+          "%i", "%10i", "%010i", "%<10i", "%+i", "%+10i", "%<+10i", "% i", "% 10i", "%< 10i",
+          "%xi","%10xi", "%010xi", "%<10xi", "%+xi", "%+10xi", "% xi", "% 10xi", "%<+10xi", "%< 10xi",
+          "%@xi","%@10xi", "%0@10xi", "%<@10xi", "%@+xi", "%@+10xi", "%@ xi", "%@ 10xi", "%@<+10xi", "%@< 10xi",
+          "%Xi","%10Xi", "%010Xi", "%<10Xi", "%+Xi", "% Xi",
+          "%@Xi","%@10Xi", "%@010Xi", "%@<10Xi", "%@+Xi", "%@ Xi",
+          "%bi","%10bi", "%010bi", "%<10bi", "%+bi", "% bi",
+          "%@bi","%@10bi", "%@010bi", "%@<10bi", "%@+bi", "%@ bi",
+          "%oi","%10oi", "%010oi", "%<10oi", "%+oi", "% oi",
+          "%@oi","%@10oi", "%@010oi", "%@<10oi", "%@+oi", "%@ oi",
+          "%{###############.#}"];
   
   testio(smallintformats, [true, false]);
-  testio(smallintformats, [100:uint(8)]);
-  testio(smallintformats, [100:int(8)]);
-  testio(smallintformats, [-100:int(8)]);
-  testio(smallintformats, [1000:uint(16)]);
-  testio(smallintformats, [1000:int(16)]);
-  testio(smallintformats, [-1000:int(16)]);
-  testio(smallintformats, [100000:uint(32)]);
-  testio(smallintformats, [100000:int(32)]);
-  testio(smallintformats, [-100000:int(32)]);
-  testio(bigintformats, [12884901888:uint(64)]);
-  testio(bigintformats, [12884901888:int(64)]);
-  testio(bigintformats, [-12884901888:int(64)]);
-
-  testio(["%|1i", "%|2i", "%|4i", "%|8i"], [100:int(8)]);
-  testio(["%|1i", "%|2i", "%|4i", "%|8i"], [-100:int(8)]);
-  testio(["%|1i", "%|2i", "%|4i", "%|8i"], [100:uint(8)]);
-  testio(["%|1u", "%|2u", "%|4u", "%|8u"], [100:int(8)]);
-  testio(["%|1u", "%|2u", "%|4u", "%|8u"], [100:uint(8)]);
-  testio(["%|2i", "%<2i", "%>2i"], [1000:int(16)]);
-  testio(["%|2i", "%<2i", "%>2i"], [-1000:int(16)]);
-  testio(["%|2u", "%<2u", "%>2u"], [1000:int(16)]);
-  testio(["%|2u", "%<2u", "%>2u"], [1000:uint(16)]);
-  testio(["%|4i", "%<4i", "%>4i"], [100000:int(32)]);
-  testio(["%|4i", "%<4i", "%>4i"], [-100000:int(32)]);
-  testio(["%|4u", "%<4u", "%>4u"], [100000:uint(32)]);
-  testio(["%|8i", "%<8i", "%>8i"], [12884901888:int(64)]);
-  testio(["%|8u", "%<8u", "%>8u"], [12884901888:uint(64)]);
+  testio(smallintformats, [100:uint(8), ]);
+  testio(smallintformats, [100:int(8), ]);
+  testio(smallintformats, [-100:int(8), ]);
+  testio(smallintformats, [1000:uint(16), ]);
+  testio(smallintformats, [1000:int(16), ]);
+  testio(smallintformats, [-1000:int(16), ]);
+  testio(smallintformats, [100000:uint(32), ]);
+  testio(smallintformats, [100000:int(32), ]);
+  testio(smallintformats, [-100000:int(32), ]);
+  testio(bigintformats, [12884901888:uint(64), ]);
+  testio(bigintformats, [12884901888:int(64), ]);
+  testio(bigintformats, [-12884901888:int(64), ]);
 
   var fformats =
-         ["%t", "%n", "%jt", "%ht",
-          "%r", "%10r", "%010r", "%-10r", "%+r", "% r",
+         ["%?", "%n",
+          "%r", "%10r", "%010r", "%<10r", "%+r", "% r",
           "%xr",
           "%Xr",
           "%er",
@@ -134,19 +115,15 @@ proc main() {
           "%Er",
           "%xEr",
           "%XEr",
-          "%dr", "%10dr", "%010dr", "%-10dr", "%+dr", "% dr",
-          "%{######.######}",
-          "%|n", "%<n", "%>n",
-          "%|t", "%<t", "%>t"];
+          "%dr", "%10dr", "%010dr", "%<10dr", "%+dr", "% dr",
+          "%{######.######}"];
 
   testio(fformats, [0.002:real(32), -0.002:real(32)]);
   testio(fformats, [0.002:real(64), -0.002:real(64)]);
-  testio(["%|4r", "%<4r", "%>4r"], [0.002:real(32), -0.002:real(32)]);
-  testio(["%|8r", "%<8r", "%>8r"], [0.002:real(64), -0.002:real(64)]);
 
   var mformats =
-         ["%t", "%n", "%jt", "%ht",
-          "%m", "%10m", "%010m", "%-10m", "%+m", "% m",
+         ["%?", "%n",
+          "%m", "%10m", "%010m", "%<10m", "%+m", "% m",
           "%xm",
           "%Xm",
           "%xem",
@@ -154,62 +131,44 @@ proc main() {
           "%Em",
           "%xEm",
           "%XEm",
-          "%dm", "%10dm", "%010dm", "%-10dm", "%+dm", "% dm",
-          "%{######.######}",
-          "%|n", "%<n", "%>n",
-          "%|t", "%<t", "%>t"];
+          "%dm", "%10dm", "%010dm", "%<10dm", "%+dm", "% dm",
+          "%{######.######}"];
   testio(mformats, [0.002:imag(32), -0.002:imag(32)]);
   testio(mformats, [0.002:imag(64), -0.002:imag(64)]);
-  testio(["%|4m", "%<4m", "%>4m"], [0.002:imag(32), -0.002:imag(32)]);
-  testio(["%|8m", "%<8m", "%>8m"], [0.002:imag(64), -0.002:imag(64)]);
 
   var eformats =
-         ["%t", "%jt", "%ht",
+         ["%?",
           "%xer",
           "%Xer",
           "%Er",
           "%xEr",
           "%XEr",
-          "%r", "%10r", "%010r", "%-10r", "%+r", "% r",
-          "%|n", "%<n", "%>n",
-          "%|t", "%<t", "%>t"];
+          "%r", "%10r", "%010r", "%<10r", "%+r", "% r"];
   testio(eformats, [57.24e23:real(32), -57.24e23:real(32)]);
   testio(eformats, [57.24e23:real(64), -57.24e23:real(64)]);
 
   var zformats = 
-         ["%t", "%n", "%jt", "%ht",
-          "%z", "%10z", "%010z", "%-10z", "%+z", "% z",
-          "%|n", "%<n", "%>n",
-          "%|t", "%<t", "%>t"];
+         ["%?", "%n",
+          "%z", "%10z", "%010z", "%<10z", "%+z", "% z"];
  
   testio(zformats, [997.89+200.124i, -997.89-200.124i,
                     0.0+1.0i, 1.0+0.0i, 0.0-1.0i, -1.0+0.0i]);
-  testio(zformats, [1.0:imag(32)]);
-  testio(zformats, [1.0:imag(64)]);
-
-  // These ones are shorter so that the don't lose data when cast down to
-  // 4-byte float (vs 8-byte double)
-  testio(["%|8z", "%<8z", "%>8z"], [997.75 + 200.125i, -997.75 - 200.125i]);
-  testio(["%|16z", "%<16z", "%>16z"], [997.89+200.124i, -997.89-200.124i]);
+  testio(zformats, [1.0:imag(32), ]);
+  testio(zformats, [1.0:imag(64), ]);
 
 
-  testio(["%c"], [33, 42]);
-  testio(["%c"], ["x", "a"]);
+  testio(["%c", ], [33, 42]);
+  testio(["%c", ], ["x", "a"]);
 
-  testio(["%s", "%10s", "%-10s"], ["a", "test"]);
+  testio(["%s", "%10s", "%<10s"], ["a", "test"]);
 
-  testio(["%'S", "%'S", "%10'S", "%-10'S",
-          "%\"S", "%10\"S", "%-10\"S",
-          "%|0S", "%|1S", "%|2S", "%|4S", "%|8S", "%|vS"],
+  testio(["%'S", "%'S", "%10'S", "%<10'S",
+          "%\"S", "%10\"S", "%<10\"S", "%>10'S", "%^10'S"],
          ["", "a", "test"]);
 
   // test that these ones handle space in strings correctly
-  testio(["%'S", "%10'S", "%-10'S",
-          "%\"S", "%10\"S", "%-10\"S"],
+  testio(["%'S", "%10'S", "%<10'S",
+          "%\"S", "%10\"S", "%<10\"S"],
          ["", "a", "test", " ' ", " \" "]);
 
-
-  testio(["%|4s"], ["test"]);
-
 }
-

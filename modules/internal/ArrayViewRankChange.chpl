@@ -1,5 +1,5 @@
 /*
- * Copyright 2020-2022 Hewlett Packard Enterprise Development LP
+ * Copyright 2020-2025 Hewlett Packard Enterprise Development LP
  * Copyright 2004-2019 Cray Inc.
  * Other additional copyright holders may be indicated within.
  *
@@ -72,10 +72,10 @@ module ArrayViewRankChange {
         return downDistInst;
     }
 
-    override proc dsiNewRectangularDom(param rank, type idxType, param stridable, inds){
+    override proc dsiNewRectangularDom(param rank, type idxType, param strides, inds){
       var newdom = new unmanaged ArrayViewRankChangeDom(rank=rank,
                                               idxType=idxType,
-                                              stridable=stridable,
+                                              strides=strides,
                                               collapsedDim=collapsedDim,
                                               idx=idx,
                                               distPid=this.pid,
@@ -93,7 +93,7 @@ module ArrayViewRankChange {
 
     // Don't want to privatize a DefaultRectangular, so pass the query on to
     // the wrapped array
-    override proc dsiSupportsPrivatization() param
+    override proc dsiSupportsPrivatization() param do
       return downDistInst.dsiSupportsPrivatization();
 
     proc dsiGetPrivatizeData() {
@@ -115,19 +115,22 @@ module ArrayViewRankChange {
     }
 
     proc dsiEqualDMaps(that: ArrayViewRankChangeDist(?)) {
-      return (this.collapsedDim == that.collapsedDim && 
+      return (this.collapsedDim == that.collapsedDim &&
               this.idx == that.idx &&
               this.downDist.dsiEqualDMaps(that.downDist));
+    }
+
+    proc dsiEqualDMaps(that) {
+      return false;
     }
   }
 
   private proc downDomType(param rank : int,
                            type idxType,
-                           param stridable : bool,
+                           param strides: strideKind,
                            dist) type {
-      var ranges: rank*range(idxType, BoundedRangeType.bounded, stridable);
-      var a = dist.downDist.dsiNewRectangularDom(rank=rank, idxType,
-                                                 stridable=stridable, ranges);
+      var ranges: rank*range(idxType, boundKind.both, strides);
+      var a = dist.downDist.dsiNewRectangularDom(rank,idxType,strides,ranges);
       return a.type;
   }
 
@@ -138,9 +141,9 @@ module ArrayViewRankChange {
   // for rectangular domains (because they're the only ones with
   // rank>1), so this is a subclass of BaseRectangularDom.
   //
- class ArrayViewRankChangeDom: BaseRectangularDom {
+ class ArrayViewRankChangeDom: BaseRectangularDom(?) {
     // the lower-dimensional index set that we represent upwards
-    var upDomInst: unmanaged DefaultRectangularDom(rank, idxType, stridable)?;
+    var upDomInst: unmanaged DefaultRectangularDom(rank, idxType, strides)?;
     forwarding upDom except these, chpl__serialize, chpl__deserialize;
 
     // the collapsed dimensions and indices in those dimensions
@@ -165,17 +168,17 @@ module ArrayViewRankChange {
     // BHARSH INIT TODO: use 'downrank' instead of 'collapsedDim.size'
     //
     var downDomPid:int;
-    var downDomInst: downDomType(collapsedDim.size, idxType, stridable, distInst)?;
+    var downDomInst: downDomType(collapsedDim.size, idxType, strides, distInst)?;
 
     proc downrank param {
       return collapsedDim.size;
     }
 
-    inline proc upDom {
+    inline proc upDom: upDomInst!.type {
       return upDomInst!;
     }
 
-    inline proc downDom {
+    inline proc downDom: downDomInst!.type {
       if _isPrivatized(downDomInst!) then
         return chpl_getPrivatizedCopy(downDomInst!.type, downDomPid);
       else
@@ -206,11 +209,9 @@ module ArrayViewRankChange {
       // TODO: BHARSH 2019-05-13:
       // Would rather use '_getDistribution' and passing args to "new _domain",
       // see similar comment in ArrayViewReindex for more information.
-      var ranges : downrank*range(idxType, BoundedRangeType.bounded, stridable);
-      var downDomClass = dist.downDist.dsiNewRectangularDom(rank=downrank,
-                                                           idxType,
-                                                           stridable=stridable,
-                                                           ranges);
+      var ranges : downrank*range(idxType, boundKind.both, strides);
+      var downDomClass = dist.downDist.dsiNewRectangularDom(downrank, idxType,
+                                                            strides, ranges);
       pragma "no auto destroy"
       var downDomLoc = new _domain(downDomClass);
       downDomLoc = chpl_rankChangeConvertDom(inds, inds.size, collapsedDim, idx);
@@ -236,7 +237,7 @@ module ArrayViewRankChange {
     iter these(param tag: iterKind) where tag == iterKind.standalone
       && !localeModelHasSublocales
       && chpl__isDROrDRView(downDom)
-      && __primitive("method call resolves", upDom, "these", tag)
+      && __primitive("resolves", upDom.these(tag))
     {
       forall i in upDom do
         yield i;
@@ -245,7 +246,7 @@ module ArrayViewRankChange {
     iter these(param tag: iterKind) where tag == iterKind.standalone
       && !localeModelHasSublocales
       && !chpl__isDROrDRView(downDom)
-      && __primitive("method call resolves", downDom, "these", tag)
+      && __primitive("resolves", downDom.these(tag))
     {
       forall i in downDom do
         yield downIdxToUpIdx(i);
@@ -322,13 +323,13 @@ module ArrayViewRankChange {
       for d in 0..downrank-1 do
         if !collapsedDim(d) {
           if first {
-            f <~> "{";
+            f.write("{");
             first = false;
           } else
-            f <~> ", ";
-          f <~> downDom.dsiDim(d);
+            f.write(", ");
+          f.write(downDom.dsiDim(d));
         }
-      f <~> "}";
+      f.write("}");
     }
 
     override proc dsiMyDist() {
@@ -352,12 +353,12 @@ module ArrayViewRankChange {
       return downDom.dsiTargetLocales();
     }
 
-    proc dsiHasSingleLocalSubdomain() param
+    proc dsiHasSingleLocalSubdomain() param do
       return downDom.dsiHasSingleLocalSubdomain();
 
     proc dsiLocalSubdomain(loc: locale) {
       const dims = downDom.dsiLocalSubdomain(loc).dims();
-      const empty : domain(rank, idxType, chpl__anyStridable(dims));
+      const empty : domain(rank, idxType, chpl_strideUnion(dims));
 
       // If the rank-changed dimension's index is not a member of the range
       // in the same dimension of 'dims', then this locale does not have a
@@ -389,9 +390,24 @@ module ArrayViewRankChange {
         _delete_dom(downDomInst!, _isPrivatized(downDomInst!));
     }
 
+    // These would be forwarded to 'upDom' automatically,
+    // except the "last resort" overloads BaseDom take precedence
+    // over forwarding. So, define these explicitly.
+    proc parSafe param do return upDom.parSafe;
+    override proc dsiLow do return upDom.dsiLow;
+    override proc dsiHigh do return upDom.dsiHigh;
+    override proc dsiStride do return upDom.dsiStride;
+    override proc dsiAlignment do return upDom.dsiAlignment;
+    override proc dsiFirst do return upDom.dsiFirst;
+    override proc dsiLast do return upDom.dsiLast;
+    override proc dsiAlignedLow do return upDom.dsiAlignedLow;
+    override proc dsiAlignedHigh do return upDom.dsiAlignedHigh;
+    override proc dsiIndexOrder(i) do return upDom.dsiIndexOrder(i);
+    override proc dsiCreateIndexBuffer(size) do return upDom.dsiCreateIndexBuffer(size);
+
     // Don't want to privatize a DefaultRectangular, so pass the query on to
     // the wrapped array
-    override proc dsiSupportsPrivatization() param
+    override proc dsiSupportsPrivatization() param do
       return downDomInst!.dsiSupportsPrivatization();
 
     proc dsiGetPrivatizeData() {
@@ -401,7 +417,7 @@ module ArrayViewRankChange {
     proc dsiPrivatize(privatizeData) {
       return new unmanaged ArrayViewRankChangeDom(rank = this.rank,
                                         idxType = this.idxType,
-                                        stridable = this.stridable,
+                                        strides = this.strides,
                                         upDomInst = privatizeData(0),
                                         collapsedDim = privatizeData(1),
                                         idx = privatizeData(2),
@@ -455,7 +471,7 @@ module ArrayViewRankChange {
   // interface.
   //
   pragma "aliasing array"
-  class ArrayViewRankChangeArr: AbsBaseArr {
+  class ArrayViewRankChangeArr: AbsBaseArr(?) {
     // the representation of the slicing domain.  For a rank change
     // like A[lo..hi, 3] this is the lower-dimensional domain {lo..hi}.
     // It is represented as an ArrayViewRankChangeDom.
@@ -498,7 +514,7 @@ module ArrayViewRankChange {
       this.idx             = idx;
       this.indexCache      = buildIndexCacheHelper(_ArrInstance, dom, collapsedDim, idx);
       this.ownsArrInstance = ownsArrInstance;
-      this.complete();
+      init this;
       __primitive("set aliasing array on type", this.type, !ownsArrInstance);
     }
 
@@ -516,15 +532,15 @@ module ArrayViewRankChange {
 
     // these could be fields, but indirecting works just as well and
     // makes the class less generic.
-    proc idxType type return dom.idxType;
-    proc rank param return dom.rank;
+    proc idxType type do return dom.idxType;
+    proc rank param do return dom.rank;
 
     // The following seems like it ought to work, but it causes an
     // error in the compiler for non-devel mode...  presumably due to
     // a direct query of eltType in the compiler(?).  As a TODO we
     // might want to hunt this down in the future...
     //
-    //  proc eltType type return arr.eltType;
+    //  proc eltType type do return arr.eltType;
 
 
     //
@@ -561,7 +577,7 @@ module ArrayViewRankChange {
     // For now, work around them by using an if-expr
     iter these(param tag: iterKind) ref
       where tag == iterKind.standalone && !localeModelHasSublocales &&
-           __primitive("method call resolves", privDom, "these", tag) {
+           __primitive("resolves", privDom.these(tag)) {
       forall i in privDom {
         yield if shouldUseIndexCache()
                 then indexCache.getDataElem(indexCache.getDataIndex(i))
@@ -659,14 +675,14 @@ module ArrayViewRankChange {
       }
     }
 
-    inline proc dsiLocalAccess(i) ref
+    inline proc dsiLocalAccess(i) ref do
       return arr.dsiLocalAccess(chpl_rankChangeConvertIdx(i, collapsedDim, idx));
 
     inline proc dsiLocalAccess(i)
-      where shouldReturnRvalueByValue(eltType)
+      where shouldReturnRvalueByValue(eltType) do
       return arr.dsiLocalAccess(chpl_rankChangeConvertIdx(i, collapsedDim, idx));
 
-    inline proc dsiLocalAccess(i) const ref
+    inline proc dsiLocalAccess(i) const ref do
       return arr.dsiLocalAccess(chpl_rankChangeConvertIdx(i, collapsedDim, idx));
 
     inline proc dsiBoundsCheck(i) {
@@ -679,7 +695,7 @@ module ArrayViewRankChange {
     // locality-oriented queries
     //
 
-    proc dsiHasSingleLocalSubdomain() param
+    proc dsiHasSingleLocalSubdomain() param do
       return privDom.dsiHasSingleLocalSubdomain();
 
     proc dsiLocalSubdomain(loc: locale) {
@@ -692,7 +708,7 @@ module ArrayViewRankChange {
 
     // Don't want to privatize a DefaultRectangular, so pass the query on to
     // the wrapped array
-    override proc dsiSupportsPrivatization() param
+    override proc dsiSupportsPrivatization() param do
       return _ArrInstance.dsiSupportsPrivatization();
 
     proc dsiGetPrivatizeData() {
@@ -741,7 +757,7 @@ module ArrayViewRankChange {
     // routines relating to the underlying domains and arrays
     //
 
-    inline proc privDom {
+    inline proc privDom: dom.type {
       if _isPrivatized(dom) {
         return chpl_getPrivatizedCopy(dom.type, _DomPid);
       } else {
@@ -802,7 +818,7 @@ module ArrayViewRankChange {
     // part.
     //
 
-    override proc doiCanBulkTransferRankChange() param
+    override proc doiCanBulkTransferRankChange() param do
       return arr.doiCanBulkTransferRankChange();
 
     proc doiBulkTransferFromKnown(destDom, srcClass, srcDom) : bool
@@ -889,7 +905,7 @@ module ArrayViewRankChange {
         ranges(d) = dims(j);
         j += 1;
       } else {
-        ranges(d) = idx(d)..idx(d);
+        ranges(d) = ranges(d).type.createWithSingleElement(idx(d));
       }
     }
     return {(...ranges)};

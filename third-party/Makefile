@@ -3,7 +3,7 @@ export CHPL_MAKE_HOME=$(shell pwd)/..
 endif
 include $(CHPL_MAKE_HOME)/make/Makefile.base
 
-ifdef CHPL_DEVELOPER
+ifneq (, $(call isTrue, $(CHPL_DEVELOPER)))
 DEBUG=1
 export DEBUG
 WARNINGS=1
@@ -16,7 +16,7 @@ endif
 default: all
 
 all: test-venv chpldoc-venv \
-     gasnet gmp hwloc jemalloc libfabric libunwind qthread llvm
+     gasnet gmp hwloc jemalloc mimalloc libfabric libunwind qthread llvm
 
 clean: FORCE
 	cd chpl-venv && $(MAKE) clean
@@ -24,12 +24,12 @@ clean: FORCE
 	cd gmp && $(MAKE) clean
 	cd hwloc && $(MAKE) clean
 	cd jemalloc && $(MAKE) clean
+	cd mimalloc && $(MAKE) clean
 	cd libfabric && $(MAKE) clean
 	cd libunwind && $(MAKE) clean
 	cd llvm && $(MAKE) clean
 	cd qthread && $(MAKE) clean
 	cd re2 && $(MAKE) clean
-	cd fltk && $(MAKE) clean
 
 cleanall: FORCE
 	cd chpl-venv && $(MAKE) cleanall
@@ -37,12 +37,12 @@ cleanall: FORCE
 	cd gmp && $(MAKE) cleanall
 	cd hwloc && $(MAKE) cleanall
 	cd jemalloc && $(MAKE) cleanall
+	cd mimalloc && $(MAKE) cleanall
 	cd libfabric && $(MAKE) cleanall
 	cd libunwind && $(MAKE) cleanall
 	cd llvm && $(MAKE) cleanall
 	cd qthread && $(MAKE) cleanall
 	cd re2 && $(MAKE) cleanall
-	cd fltk && $(MAKE) cleanall
 
 clobber: FORCE
 	cd chpl-venv && $(MAKE) clobber
@@ -50,12 +50,12 @@ clobber: FORCE
 	cd gmp && $(MAKE) clobber
 	cd hwloc && $(MAKE) clobber
 	cd jemalloc && $(MAKE) clobber
+	cd mimalloc && $(MAKE) clobber
 	cd libfabric && $(MAKE) clobber
 	cd libunwind && $(MAKE) clobber
 	cd llvm && $(MAKE) clobber
 	cd qthread && $(MAKE) clobber
 	cd re2 && $(MAKE) clobber
-	cd fltk && $(MAKE) clobber
 
 depend:
 
@@ -74,6 +74,7 @@ GASNET_DEPEND         := $(call find_3p_depend, $(GASNET_DIR))
 GMP_DEPEND            := $(call find_3p_depend, $(GMP_DIR))
 HWLOC_DEPEND          := $(call find_3p_depend, $(HWLOC_DIR))
 JEMALLOC_DEPEND       := $(call find_3p_depend, $(JEMALLOC_DIR))
+MIMALLOC_DEPEND       := $(call find_3p_depend, $(MIMALLOC_DIR))
 LIBFABRIC_DEPEND      := $(call find_3p_depend, $(LIBFABRIC_DIR))
 LIBUNWIND_DEPEND      := $(call find_3p_depend, $(LIBUNWIND_DIR))
 LLVM_DEPEND           := $(call find_3p_depend, $(LLVM_DIR))
@@ -88,7 +89,21 @@ chpldoc-venv: FORCE
 	cd chpl-venv && $(MAKE) chpldoc-venv
 
 c2chapel-venv: FORCE
-	cd chpl-venv && $(MAKE) c2chapel-venv
+	@if [ -z "$$CHPL_DONT_BUILD_C2CHAPEL_VENV" ]; then \
+	cd chpl-venv && $(MAKE) c2chapel-venv; \
+	fi
+
+chapel-py-venv: FORCE
+	cd chpl-venv && $(MAKE) chapel-py-venv
+
+cls-test-venv: FORCE
+	cd chpl-venv && $(MAKE) cls-test-venv
+
+chplcheck-venv: FORCE
+	cd chpl-venv && $(MAKE) chplcheck-venv
+
+chpl-language-server-venv: FORCE
+	cd chpl-venv && $(MAKE) chpl-language-server-venv
 
 # See gasnet/Makefile for explanation of the post-install step
 gasnet: $(GASNET_INSTALL_DIR)
@@ -121,6 +136,11 @@ $(JEMALLOC_INSTALL_DIR): $(JEMALLOC_DEPEND)
 	rm -rf $(JEMALLOC_INSTALL_DIR) && rm -rf $(JEMALLOC_BUILD_DIR)
 	cd jemalloc && $(MAKE)
 
+mimalloc: $(MIMALLOC_INSTALL_DIR)
+$(MIMALLOC_INSTALL_DIR): $(MIMALLOC_DEPEND)
+	rm -rf $(MIMALLOC_INSTALL_DIR) && rm -rf $(MIMALLOC_BUILD_DIR)
+	cd mimalloc && $(MAKE)
+
 libfabric: $(LIBFABRIC_INSTALL_DIR)
 $(LIBFABRIC_INSTALL_DIR): $(LIBFABRIC_DEPEND)
 	rm -rf $(LIBFABRIC_INSTALL_DIR) && rm -rf $(LIBFABRIC_BUILD_DIR)
@@ -131,10 +151,30 @@ $(LIBUNWIND_INSTALL_DIR): $(LIBUNWIND_DEPEND)
 	rm -rf $(LIBUNWIND_INSTALL_DIR) && rm -rf $(LIBUNWIND_BUILD_DIR)
 	cd libunwind && $(MAKE)
 
+ifeq ($(CHPL_MAKE_LLVM), unset)
+# Print the error about needing to set CHPL_LLVM
+llvm: FORCE
+	cd llvm && $(MAKE) unset
+
+else ifeq ($(CHPL_MAKE_LLVM), bundled)
+# build the bundled LLVM
 llvm: $(LLVM_INSTALL_DIR)
 $(LLVM_INSTALL_DIR): $(LLVM_DEPEND)
 	rm -rf $(LLVM_INSTALL_DIR)
-	cd llvm && $(MAKE)
+	cd llvm && $(MAKE) llvm
+
+else ifeq ($(CHPL_MAKE_LLVM_SUPPORT), bundled)
+# build the bundled LLVM support library
+llvm: $(LLVM_SUPPORT_INSTALL_DIR)
+$(LLVM_SUPPORT_INSTALL_DIR): $(LLVM_DEPEND)
+	rm -rf $(LLVM_SUPPORT_INSTALL_DIR)
+	cd llvm && $(MAKE) llvm-support
+
+else
+
+# nothing to do for CHPL_LLVM=system / CHPL_LLVM_SUPPORT=system
+llvm:
+endif
 
 # Qthreads may use hwloc and/or jemalloc. Ensure they are built first.
 ifeq ($(CHPL_MAKE_HWLOC), bundled)

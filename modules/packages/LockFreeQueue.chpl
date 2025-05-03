@@ -1,5 +1,5 @@
 /*
- * Copyright 2020-2022 Hewlett Packard Enterprise Development LP
+ * Copyright 2020-2025 Hewlett Packard Enterprise Development LP
  * Copyright 2004-2019 Cray Inc.
  * Other additional copyright holders may be indicated within.
  *
@@ -18,7 +18,8 @@
  * limitations under the License.
  */
 
-/*
+/* A lock-free queue using the Michael and Scott algorithm.
+
   .. warning::
 
     This module relies on the :mod:`AtomicObjects` package module, which
@@ -26,13 +27,10 @@
 
       - It relies on Chapel ``extern`` code blocks and so requires that
         the Chapel compiler is built with LLVM enabled.
-      - Currently only ``CHPL_TARGET_ARCH=x86_64`` is supported as it uses
-        the x86-64 instruction: CMPXCHG16B_.
-      - The implementation relies on ``GCC`` style inline assembly, and so
-        is restricted to a ``CHPL_TARGET_COMPILER`` value of ``gnu``,
-        ``clang``, or ``llvm``.
-
-    .. _CMPXCHG16B: https://www.felixcloutier.com/x86/cmpxchg8b:cmpxchg16b
+      - The implementation relies on using either ``GCC`` style inline assembly
+        (for x86-64) or a GCC/clang builtin, and so is restricted to a
+        ``CHPL_TARGET_COMPILER`` value of ``gnu``, ``clang``, or ``llvm``.
+      - The implementation does not work with ``CHPL_ATOMICS=locks``.
 
   An implementation of the Michael & Scott [#]_, a lock-free queue. Concurrent safe
   memory reclamation is handled by an internal :record:`EpochManager`. Usage of the
@@ -90,7 +88,7 @@
         n += 1;
         if n % GC_THRESHOLD == 0 then lfq.tryReclaim();
       }
-    } 
+    }
 
   Also provided, is a utility method for draining the stack of all elements,
   called ``drain``. This iterator will implicitly call ``tryReclaim`` at the
@@ -101,9 +99,9 @@
     var lfq = new LockFreeQueue(int);
     forall i in 1..N with (var tok = lfq.getToken()) do lfq.enqueue(i,tok);
     var total = + reduce lfq.drain();
-  
-  .. [#] Michael, Maged M., and Michael L. Scott. 
-      Simple, Fast, and Practical Non-Blocking and Blocking Concurrent Queue Algorithms. 
+
+  .. [#] Michael, Maged M., and Michael L. Scott.
+      Simple, Fast, and Practical Non-Blocking and Blocking Concurrent Queue Algorithms.
       No. TR-600. ROCHESTER UNIV NY DEPT OF COMPUTER SCIENCE, 1995.
 */
 module LockFreeQueue {
@@ -131,14 +129,20 @@ module LockFreeQueue {
     var _tail : AtomicObject(unmanaged Node(objType), hasGlobalSupport=true, hasABASupport=false);
     var _manager = new owned LocalEpochManager();
 
-    proc objTypeOpt type return toNilableIfClassType(objType);
+    proc objTypeOpt type do return toNilableIfClassType(objType);
 
     proc init(type objType) {
       this.objType = objType;
-      this.complete();
+      init this;
       var _node = new unmanaged Node(objType);
       _head.write(_node);
       _tail.write(_node);
+    }
+    proc deinit() {
+      drain();
+      if var head = _head.read() {
+        delete head;
+      }
     }
 
     proc getToken() : owned TokenWrapper {
@@ -148,11 +152,11 @@ module LockFreeQueue {
     proc enqueue(newObj : objType, tok : owned TokenWrapper = getToken()) {
       var n = new unmanaged Node(newObj);
       tok.pin();
-      while (true) {
+      while true {
         var curr_tail = _tail.read()!;
         var next = curr_tail.next.read();
-        if (next == nil) {
-          if (curr_tail.next.compareAndSwap(next, n)) {
+        if next == nil {
+          if curr_tail.next.compareAndSwap(next, n) {
             _tail.compareAndSwap(curr_tail, n);
             break;
           }
@@ -160,20 +164,20 @@ module LockFreeQueue {
         else {
           _tail.compareAndSwap(curr_tail, next);
         }
-        chpl_task_yield();
+        currentTask.yieldExecution();
       }
       tok.unpin();
     }
 
     proc dequeue(tok : owned TokenWrapper = getToken()) : (bool, objTypeOpt) {
       tok.pin();
-      while (true) {
+      while true {
         var curr_head = _head.read()!;
         var curr_tail = _tail.read();
         var next_node = curr_head.next.read();
 
-        if (curr_head == curr_tail) {
-          if (next_node == nil) {
+        if curr_head == curr_tail {
+          if next_node == nil {
             tok.unpin();
             var retval : objTypeOpt;
             return (false, retval);
@@ -182,13 +186,13 @@ module LockFreeQueue {
         }
         else {
           var ret_val = next_node!.val;
-          if (_head.compareAndSwap(curr_head, next_node)) {
+          if _head.compareAndSwap(curr_head, next_node) {
             tok.deferDelete(curr_head);
             tok.unpin();
             return (true, ret_val);
           }
         }
-        chpl_task_yield();
+        currentTask.yieldExecution();
       }
 
       tok.unpin();
@@ -207,7 +211,7 @@ module LockFreeQueue {
     }
 
     iter drain(param tag : iterKind) : objTypeOpt where tag == iterKind.standalone {
-      coforall tid in 1..here.maxTaskPar {
+      coforall 1..here.maxTaskPar {
         var tok = getToken();
         var (hasElt, elt) = dequeue(tok);
         while hasElt {

@@ -1,16 +1,16 @@
 /*
- * Copyright 2020-2022 Hewlett Packard Enterprise Development LP
+ * Copyright 2020-2025 Hewlett Packard Enterprise Development LP
  * Copyright 2004-2019 Cray Inc.
  * Other additional copyright holders may be indicated within.
- * 
+ *
  * The entirety of this work is licensed under the Apache License,
  * Version 2.0 (the "License"); you may not use this file except
  * in compliance with the License.
- * 
+ *
  * You may obtain a copy of the License at
- * 
+ *
  *     http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -88,15 +88,15 @@ module MatrixMarket {
       var HEADER_LINE : string = "%%MatrixMarket matrix coordinate real general\n"; // currently the only supported MM format in this module
 
       var fd:file;
-      var fout:channel(true, iokind.dynamic, true);
+      var fout:fileWriter(locking=true);
 
       var headers_written:bool;
       var last_rowno:int;
 
       proc init(type eltype, const fname:string) {
          this.eltype = eltype;
-         fd = open(fname, iomode.cw);
-         fout = fd.writer(start=0);
+         fd = open(fname, ioMode.cw);
+         fout = fd.writer(region=0.., locking=true);
          headers_written=false;
       }
 
@@ -129,8 +129,9 @@ module MatrixMarket {
         // before we try to update it with a separate channel.
         fout.flush();
 
-         var tfout = fd.writer(start=HEADER_LINE.numBytes);
+         var tfout = fd.writer(region=HEADER_LINE.numBytes.., locking=true);
          tfout.writef("%i %i %i", nrows, ncols, nnz);
+
          tfout.close();
       }
 
@@ -157,7 +158,7 @@ module MatrixMarket {
            }
          }
 
-         last_rowno = i; 
+         last_rowno = i;
          var ret:(int,int);
          if jvec.size < 1 { ret = (-1, 0); } else { ret = (Djvec.size, jvec.size); }
          return ret;
@@ -184,7 +185,7 @@ proc mmwrite(const fname:string, mat:[?Dmat] ?T) where mat.domain.rank == 2 {
      const matvec = [ j in dom ] mat(r,j);
      mw.write_vector(r, matvec);
      n_cols = max(n_cols, DmatHighCol);
-     nnz += DmatHighCol; 
+     nnz += DmatHighCol;
      ncols = r;
    }
 
@@ -198,17 +199,17 @@ proc mmwrite(const fname:string, mat:[?Dmat] ?T) where mat.domain.rank == 2 {
 
 class MMReader {
    var fd:file;
-   var fin:channel(false, iokind.dynamic, true);
+   var fin:fileReader(locking=true);
    var finfo:MMInfo;
 
    proc init(const fname:string) {
-      fd = open(fname, iomode.r, hints=IOHINT_SEQUENTIAL|IOHINT_CACHED);
-      fin = fd.reader(start=0, hints=IOHINT_SEQUENTIAL|IOHINT_CACHED);
+      fd = open(fname, ioMode.r, hints=ioHintSet.sequential|ioHintSet.prefetch);
+      fin = fd.reader(region=0.., hints=ioHintSet.sequential|ioHintSet.prefetch, locking=true);
    }
 
    proc read_header() {
      var header:string;
-     assert(fin.readline(header) == true, "MMReader I/O error!");
+     assert(fin.readLine(header) == true, "MMReader I/O error!");
 
      var headerfields = [ s in header.split(" ") ] s;
      this.finfo = initMMInfo(headerfields);
@@ -217,13 +218,13 @@ class MMReader {
      var pctflag = false;
      while !pctflag {
        var percentfound:string;
-       var offset = fin._offset();
-       fin.readline(percentfound);
+       var offset = fin.offset();
+       fin.readLine(percentfound);
 
        // didn't find a percentage, rewind channel by length of read string...
        if percentfound.find("%") == -1 {
          fin.close();
-         fin = fd.reader(start=offset, hints=IOHINT_SEQUENTIAL|IOHINT_CACHED);
+         fin = fd.reader(region=offset.., hints=ioHintSet.sequential|ioHintSet.prefetch, locking=true);
          pctflag = true;
        }
      }
@@ -243,7 +244,7 @@ class MMReader {
       return (nrows, ncols);
    }
 
-   proc read_sparse_data(toret:[] ?T, ref spDom:domain) {
+   proc read_sparse_data(ref toret:[] ?T, ref spDom:domain) {
       param isSparse = toret.domain.isSparse();
       var done:bool = true;
       var tfmt :string;
@@ -265,7 +266,7 @@ class MMReader {
 
       }
       else {
-        if T == real { 
+        if T == real {
           tfmt = "%r";
         }
         else if T == int {
@@ -286,7 +287,7 @@ class MMReader {
       }
    }
 
-   proc read_dense_data(toret:[] ?T, ref spDom:domain) {
+   proc read_dense_data(ref toret:[] ?T, ref spDom:domain) {
       param isSparse = toret.domain.isSparse();
       var tfmt :string;
 
@@ -388,9 +389,9 @@ class MMReader {
      return toret;
    }
 
-   proc close() { 
-      fin.close(); 
-      fd.close(); 
+   proc close() {
+      fin.close();
+      fd.close();
    }
 
    proc deinit() { this.close(); }

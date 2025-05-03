@@ -1,15 +1,15 @@
-# Copyright 2020-2022 Hewlett Packard Enterprise Development LP
+# Copyright 2020-2025 Hewlett Packard Enterprise Development LP
 # Copyright 2004-2019 Cray Inc.
 # Other additional copyright holders may be indicated within.
-# 
+#
 # The entirety of this work is licensed under the Apache License,
 # Version 2.0 (the "License"); you may not use this file except
 # in compliance with the License.
-# 
+#
 # You may obtain a copy of the License at
-# 
+#
 #     http://www.apache.org/licenses/LICENSE-2.0
-# 
+#
 # Unless required by applicable law or agreed to in writing, software
 # distributed under the License is distributed on an "AS IS" BASIS,
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -20,7 +20,9 @@
 # settings for the build
 #
 DEPEND=1
-ifdef CHPL_DEVELOPER
+CHPL_DEVELOPER ?= 0
+include $(CHPL_MAKE_HOME)/make/Makefile.isTrue
+ifneq (, $(call isTrue, $(CHPL_DEVELOPER)))
 DEBUG=1
 WARNINGS=1
 TAGS=1
@@ -58,6 +60,10 @@ endif
 ifneq ($(MAKE_LAUNCHER),1)
   ifeq ($(CHPL_MAKE_TARGET_MEM),jemalloc)
     LAUNCHER_CFLAGS += -DCHPL_TARGET_MEM_JEMALLOC
+    LAUNCHER_INCLS += -I$(RUNTIME_ROOT)/include/mem/$(CHPL_MAKE_TARGET_MEM)
+  endif
+  ifeq ($(CHPL_MAKE_TARGET_MEM),mimalloc)
+    LAUNCHER_CFLAGS += -DCHPL_TARGET_MEM_MIMALLOC
     LAUNCHER_INCLS += -I$(RUNTIME_ROOT)/include/mem/$(CHPL_MAKE_TARGET_MEM)
   endif
 endif

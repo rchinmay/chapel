@@ -55,6 +55,10 @@ parser.add_option('-m', '--configs', dest='multiConf',
                        'duplicated for local and --no-local both of which will '
                        'be visible by default on the web page.',
                   default='')
+parser.add_option('-f', '--addfile', dest='addfile',
+                  help='comma-separated paths to files that should be copied '
+                       'into the html directory.',
+                  default='')
 
 if annotate:
     parser.add_option('-j', '--annotate', dest='annotation_file',
@@ -538,6 +542,8 @@ class GraphStuff:
                 graphs[currgraph].numseries = int(rest.strip())
             elif key == 'sort':
                 graphs[currgraph].sort = rest.lower() in ('true', 't', '1', 'on', 'y', 'yes')
+            else:
+                sys.stdout.write('WARNING: Invalid graph file key {0} in {1}\n'.format(key, fullFname))
 
         try:
             graphs[currgraph].generateGraphData(self, currgraph)
@@ -910,7 +916,7 @@ class GraphClass:
                             self.datfilenames.append(myDatFile)
                             self.perfkeys.append(perf)
                             self.graphkeys.append(graph)
-                            break;
+                            break
                     # it's possible we still didn't fine the file, but if
                     # that's the case the test wasn't run for any configuration
                     # and we won't generate data for any series which won't
@@ -996,7 +1002,7 @@ def main():
             conf = temp[0]
             multiConf.append(conf)
             if len(temp) > 1 and temp[1] == 'v':
-                defaultMultiConf.append(conf);
+                defaultMultiConf.append(conf)
         if len(defaultMultiConf) == 0:
             defaultMultiConf.append(multiConf[0])
     else:
@@ -1021,10 +1027,7 @@ def main():
     graphInfo = GraphStuff(options.name, options.testdir, perfdir, outdir,
         startdate, enddate, options.g_reduce, options.g_display_bounds,
         alttitle, annotation_file)
-    try:
-        graphInfo.init()
-    except (IOError, OSError):
-        return -1
+    graphInfo.init()
 
     # get the list of .graph files
     lines = list()
@@ -1087,7 +1090,8 @@ def main():
         except (CouldNotReadGraphFile):
             pass  # do not increment numGraphfiles
         except (ValueError, IOError, OSError):
-            return -1
+            print("Error generating graph", graph)
+            raise
 
 
     # Copy the index.html and support css and js files
@@ -1120,17 +1124,23 @@ def main():
             # files were copied over. This is used to see if we should sync the
             # files over to the website.
             sys.stdout.write('Created SUCCESS file\n')
-            #
-            # recursively chmod the html/ directory for access via web servers
-            #  - for directories, chmod u+rwx and go+rx
-            #  - for directories, chmod go+r
-            #
-            for root, dirs, files in os.walk(outdir):
-                os.chmod(root, stat.S_IRWXU | stat.S_IRGRP | stat.S_IXGRP | stat.S_IROTH | stat.S_IXOTH)
-                for momo in dirs:
-                    os.chmod(os.path.join(root, momo), stat.S_IRWXU | stat.S_IRGRP | stat.S_IXGRP | stat.S_IROTH | stat.S_IXOTH)
-                for momo in files:
-                    os.chmod(os.path.join(root, momo), stat.S_IRUSR | stat.S_IWUSR | stat.S_IRGRP | stat.S_IROTH)
+
+        #
+        # recursively chmod the html/ directory for access via web servers
+        #  - for directories, chmod u+rwx and go+rx
+        #  - for directories, chmod go+r
+        #
+        for root, dirs, files in os.walk(outdir):
+            os.chmod(root, stat.S_IRWXU | stat.S_IRGRP | stat.S_IXGRP | stat.S_IROTH | stat.S_IXOTH)
+            for momo in dirs:
+                os.chmod(os.path.join(root, momo), stat.S_IRWXU | stat.S_IRGRP | stat.S_IXGRP | stat.S_IROTH | stat.S_IXOTH)
+            for momo in files:
+                os.chmod(os.path.join(root, momo), stat.S_IRUSR | stat.S_IWUSR | stat.S_IRGRP | stat.S_IROTH)
+
+        if len(options.addfile) > 0:
+            for file in options.addfile.split(','):
+                shutil.copy(file, outdir)
+                sys.stdout.write('Copied %s into %s\n'%(file, outdir))
 
 
     return 0

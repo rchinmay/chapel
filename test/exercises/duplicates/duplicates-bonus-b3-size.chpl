@@ -19,7 +19,7 @@ record HashedPath {
   var path: string;
 }
 
-record HashedPathComparator {
+record HashedPathComparator: relativeComparator {
   proc compare(a: HashedPath, b: HashedPath) {
     if a.size < b.size {
       return -1;
@@ -47,9 +47,9 @@ record HashedPathComparator {
    file stored at that path and save the result in that
    array element.
  */
-proc computeHashes(hashAndPath:[] HashedPath) {
+proc computeHashes(ref hashAndPath:[] HashedPath) {
 
-  var clock: Timer;
+  var clock: stopwatch;
   clock.start();
 
   forall rec in hashAndPath {
@@ -117,7 +117,7 @@ proc handleArguments(args: [] string, ref paths: domain(string)) {
         paths += relativeRealPath(arg);
       }
     } else if isDir(arg) {
-      for path in findfiles(arg, recursive=true) {
+      for path in findFiles(arg, recursive=true) {
         if filter == "" || path.endsWith(filter) {
           paths += relativeRealPath(path);
         }

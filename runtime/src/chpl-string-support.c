@@ -1,16 +1,16 @@
 /*
- * Copyright 2020-2022 Hewlett Packard Enterprise Development LP
+ * Copyright 2020-2025 Hewlett Packard Enterprise Development LP
  * Copyright 2004-2019 Cray Inc.
  * Other additional copyright holders may be indicated within.
- * 
+ *
  * The entirety of this work is licensed under the Apache License,
  * Version 2.0 (the "License"); you may not use this file except
  * in compliance with the License.
- * 
+ *
  * You may obtain a copy of the License at
- * 
+ *
  *     http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -178,7 +178,7 @@ string_index(c_string x, int i, int32_t lineno, int32_t filename) {
   }
   buffer = chpl_mem_allocMany(1, 2, CHPL_RT_MD_STR_COPY_DATA,
                               lineno, filename);
-  sprintf(buffer, "%c", x[i-1]);
+  snprintf(buffer, (size_t) 2, "%c", x[i-1]);
   return buffer;
 }
 
